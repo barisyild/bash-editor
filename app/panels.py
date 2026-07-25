@@ -76,6 +76,7 @@ class FileTree(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._archive: BashArchive | None = None
+        self._items: dict[int, QTreeWidgetItem] = {}
         self._group: str | None = "model"
 
         self.kind_buttons: list[QPushButton] = []
@@ -110,6 +111,22 @@ class FileTree(QWidget):
         layout.addWidget(self.tree, 1)
         layout.addWidget(self.summary)
 
+    def set_replaced(self, index: int, replaced: bool) -> None:
+        """Mark an entry as having a staged replacement.
+
+        Worth showing in the tree rather than only in the menu: the staged set
+        outlives the selection, and a build silently writing a swap the user has
+        forgotten about is the thing to avoid.
+        """
+        item = self._items.get(index)
+        if item is None:
+            return
+        name = item.text(0).lstrip("• ")
+        item.setText(0, f"• {name}" if replaced else name)
+        font = item.font(0)
+        font.setBold(replaced)
+        item.setFont(0, font)
+
     def _set_group(self, group: str | None) -> None:
         self._group = group
         for button, (_, value) in zip(self.kind_buttons, KIND_TABS):
@@ -119,6 +136,7 @@ class FileTree(QWidget):
     def set_archive(self, archive: BashArchive | None) -> None:
         self._archive = archive
         self.tree.clear()
+        self._items.clear()
         if archive is None:
             self.summary.setText("No archive loaded")
             return
@@ -147,6 +165,7 @@ class FileTree(QWidget):
             icon = GROUP_ICON.get(entry.group, "·")
             item = QTreeWidgetItem([f"{icon}  {filename}", _human(entry.size)])
             item.setData(0, Qt.UserRole, entry)
+            self._items[entry.index] = item
             item.setToolTip(
                 0,
                 f"#{entry.index}  offset 0x{entry.offset:X}  "

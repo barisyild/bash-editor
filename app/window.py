@@ -25,6 +25,7 @@ from crashbash.archive import (
     find_dat,
     find_exe,
 )
+from crashbash import build
 from crashbash.formats import anim, gltf, mdl, sfx, tex
 
 from .glview import ModelView
@@ -53,6 +54,10 @@ class MainWindow(QMainWindow):
 
         self.archive: BashArchive | None = None
         self.entry: Entry | None = None
+        # Staged file replacements, by entry index. A build rewrites both index
+        # tables in the EXE, so it has to see every change at once -- which is
+        # why these are held here rather than written as they are made.
+        self.replacements: dict[int, bytes] = {}
         self.model: mdl.Model | None = None
         self.pack: tex.TexturePack | None = None
         self.bank: sfx.SoundBank | None = None
@@ -168,6 +173,30 @@ class MainWindow(QMainWindow):
         extract_all.triggered.connect(self.extract_all)
         file_menu.addAction(extract_all)
 
+        file_menu.addSeparator()
+
+        self.replace_action = QAction("&Replace selected file…", self)
+        self.replace_action.setShortcut("Ctrl+R")
+        self.replace_action.setToolTip(
+            "Stage a file to take this entry's place in the next build"
+        )
+        self.replace_action.triggered.connect(self.replace_entry)
+        self.replace_action.setEnabled(False)
+        file_menu.addAction(self.replace_action)
+
+        self.revert_action = QAction("Re&vert selected file", self)
+        self.revert_action.triggered.connect(self.revert_entry)
+        self.revert_action.setEnabled(False)
+        file_menu.addAction(self.revert_action)
+
+        self.build_action = QAction("&Build disc…", self)
+        self.build_action.setShortcut("Ctrl+B")
+        self.build_action.setToolTip(
+            "Repack CRASHBSH.DAT with the staged replacements and patch the EXE"
+        )
+        self.build_action.triggered.connect(self.build_disc)
+        file_menu.addAction(self.build_action)
+
         view_menu = self.menuBar().addMenu("&View")
         for label, attr in (
             ("Solid", "solid"),
@@ -227,6 +256,11 @@ class MainWindow(QMainWindow):
             return
 
         self.archive = archive
+        # Indices belong to the archive that was open, so staged edits cannot
+        # follow it to another one.
+        self.replacements.clear()
+        self.entry = None
+        self._sync_edit_actions()
         self.settings.setValue("last_exe", str(exe_path))
         self.settings.setValue("last_dir", str(exe_path.parent))
         self.tree.set_archive(archive)
@@ -251,10 +285,16 @@ class MainWindow(QMainWindow):
         self.export_glb_action.setEnabled(False)
         self.export_png_action.setEnabled(False)
         self.export_raw_action.setEnabled(True)
+        self._sync_edit_actions()
 
-        data = self.archive.read(entry)
+        # A staged replacement is what the next build will write, so it is also
+        # what the panels should show -- otherwise a swap cannot be checked
+        # until after the disc is built.
+        staged = entry.index in self.replacements
+        data = self.replacements[entry.index] if staged else self.archive.read(entry)
         header = (
             f"{entry.name}  —  #{entry.index}, {len(data)} bytes, "
+            f"{'STAGED REPLACEMENT, ' if staged else ''}"
             f"kind {entry.kind}, magic 0x{entry.magic:08X}"
         )
 
@@ -336,6 +376,115 @@ class MainWindow(QMainWindow):
         Path(path).write_text(self.model.to_obj(), encoding="utf-8")
         self.settings.setValue("last_export", str(Path(path).parent))
         self.statusBar().showMessage(f"Wrote {path}")
+
+    # -- editing ---------------------------------------------------------
+
+    def replace_entry(self) -> None:
+        """Stage a file from disk to take the selected entry's place.
+
+        Replacements are held in memory rather than written straight away: a
+        build rewrites both index tables in the EXE, so it has to see every
+        change at once.
+        """
+        if self.entry is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Replace {Path(self.entry.name).name}",
+            self.settings.value("last_export", str(Path.home())),
+        )
+        if not path:
+            return
+        payload = Path(path).read_bytes()
+        self.replacements[self.entry.index] = payload
+        self.tree.set_replaced(self.entry.index, True)
+        self._sync_edit_actions()
+        self.statusBar().showMessage(
+            f"Staged {Path(path).name} ({len(payload):,} bytes) for {self.entry.name} — "
+            f"{len(self.replacements)} pending"
+        )
+        self.open_entry(self.entry)
+
+    def revert_entry(self) -> None:
+        if self.entry is None or self.entry.index not in self.replacements:
+            return
+        del self.replacements[self.entry.index]
+        self.tree.set_replaced(self.entry.index, False)
+        self._sync_edit_actions()
+        self.statusBar().showMessage(
+            f"Reverted {self.entry.name} — {len(self.replacements)} pending"
+        )
+        self.open_entry(self.entry)
+
+    def _sync_edit_actions(self) -> None:
+        staged = self.entry is not None and self.entry.index in self.replacements
+        self.replace_action.setEnabled(self.entry is not None)
+        self.revert_action.setEnabled(staged)
+        pending = len(self.replacements)
+        self.build_action.setText(
+            f"&Build disc… ({pending} staged)" if pending else "&Build disc…"
+        )
+
+    def build_disc(self) -> None:
+        """Repack the archive with whatever is staged, then read it back."""
+        if self.archive is None:
+            QMessageBox.information(self, APP_NAME, "Open a game EXE first.")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Build the disc tree into…")
+        if not folder:
+            return
+
+        progress = QProgressDialog("Repacking…", "Cancel", 0, len(self.archive), self)
+        progress.setWindowModality(Qt.WindowModal)
+
+        def tick(done: int, total: int, entry: Entry) -> None:
+            progress.setValue(done)
+            if done % 32 == 0:
+                progress.setLabelText(entry.name)
+            if progress.wasCanceled():
+                raise KeyboardInterrupt
+
+        try:
+            report = build.build(
+                self.archive, folder, replacements=self.replacements, progress=tick
+            )
+        except KeyboardInterrupt:
+            self.statusBar().showMessage("Build cancelled")
+            return
+        finally:
+            progress.close()
+
+        matched, problems = build.verify(
+            self.archive,
+            Path(folder) / self.archive.exe_path.name,
+            replacements=self.replacements,
+        )
+        config = build.write_iso_config(
+            folder, Path(folder).parent / f"{Path(folder).name}.xml", Path(folder).name
+        )
+
+        lines = [
+            f"{report.entries} entries in {report.groups} groups",
+            f"{len(report.replaced)} replaced",
+            f"CRASHBSH.DAT {report.original_dat_size:,} → {report.dat_size:,} bytes",
+            "",
+            f"Verified {matched} of {report.entries} entries byte-identical to what "
+            "went in.",
+        ]
+        if problems:
+            lines += ["", "Problems:"] + [f"  {p}" for p in problems[:6]]
+        lines += [
+            "",
+            f"An mkpsxiso project is beside it at {config.name}; master the tree with",
+            f"    mkpsxiso {config}",
+            "",
+            "Most emulators will also run the folder as it stands.",
+        ]
+        box = QMessageBox.warning if problems else QMessageBox.information
+        box(self, APP_NAME, "\n".join(lines))
+        self.statusBar().showMessage(
+            f"Built {folder} — {matched}/{report.entries} verified"
+        )
 
     def export_glb(self) -> None:
         """Everything about the model in one file: geometry, textures, clips."""

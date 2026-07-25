@@ -247,13 +247,22 @@ def write_iso_config(
     return config
 
 
-def verify(original: BashArchive, built_exe: str | Path) -> tuple[int, list[str]]:
-    """Re-read the built disc and compare every entry with the original.
+def verify(
+    original: BashArchive,
+    built_exe: str | Path,
+    replacements: dict[int, bytes] | None = None,
+) -> tuple[int, list[str]]:
+    """Re-read the built disc and check every entry holds what was meant for it.
+
+    The comparison is against the *intent* -- the replacement where there was
+    one, the original everywhere else -- so a deliberate swap counts as a pass
+    and only a genuine mismatch is reported.
 
     A builder that writes a table it cannot read back is worse than useless, so
-    this goes through the same parser the viewer uses rather than trusting the
+    this goes through the same parser the editor uses rather than trusting the
     numbers that were just written.
     """
+    replacements = replacements or {}
     rebuilt = BashArchive(Path(built_exe), version=original.version)
     problems: list[str] = []
     if len(rebuilt) != len(original):
@@ -266,9 +275,13 @@ def verify(original: BashArchive, built_exe: str | Path) -> tuple[int, list[str]
             if old.name != new.name:
                 problems.append(f"entry {old.index}: name changed")
                 continue
-            source.seek(old.offset)
+            if old.index in replacements:
+                expected = replacements[old.index]
+            else:
+                source.seek(old.offset)
+                expected = source.read(old.size)
             target.seek(new.offset)
-            if source.read(old.size) == target.read(new.size):
+            if target.read(new.size) == expected:
                 matched += 1
             else:
                 problems.append(f"entry {old.index} ({old.name}) differs")

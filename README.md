@@ -128,16 +128,27 @@ with it. Model and animation cannot be imported separately.
 .venv/bin/python -m crashbash.cli png     game/SCUS_945.70 -o out   # needs pillow
 ```
 
-## Building a disc
+## Editing and building a disc
+
+**File → Replace selected file…** (`Ctrl+R`) stages a file from disk in place of the
+selected entry. The panels immediately show the staged content rather than what is on
+the disc, so a swap can be checked before anything is written, and the tree marks the
+entry with a bullet. **Revert selected file** puts it back.
+
+Replacements are held in memory until a build, because a build rewrites both index
+tables in the executable and has to see every change at once.
+
+**File → Build disc…** (`Ctrl+B`) writes the result, or from the command line:
 
 ```bash
 .venv/bin/python -m crashbash.cli build game/SCUS_945.70 -o out/disc
 ```
 
-That writes a complete disc tree: `CRASHBSH.DAT` repacked, `SCUS_945.70` patched to
+Either writes a complete disc tree: `CRASHBSH.DAT` repacked, `SCUS_945.70` patched to
 match, and everything else copied through. It then re-reads its own output with the
-same parser the editor uses and reports how many of the 992 entries came back
-byte-identical, so a build that quietly corrupts the table cannot pass.
+same parser the editor uses and checks every entry against what was meant for it — the
+replacement where there was one, the original everywhere else — so a build that quietly
+corrupts the table cannot pass.
 
 The DAT has no directory of its own — the game finds an entry through a table of 992
 `(sector, size)` pairs compiled into the executable, and loads entries a *group* at a
