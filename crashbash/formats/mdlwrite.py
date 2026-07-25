@@ -83,6 +83,12 @@ class Transplant:
     # Per source texture, the UV shift needed when its pixels were written into
     # a corner of a larger slot in the destination pack.
     uv_shift: dict[int, tuple[int, int]] = field(default_factory=dict)
+    # The attachment block (mesh+0x2C) the installed mesh should carry, raw:
+    # [u16 flags][u16 count][16 bytes x count]. Gameplay reads it live through
+    # the 0x2000 id namespace, and for a character it is the collision volume
+    # -- the crate game's crates stopped colliding when it was zeroed. Supply
+    # the replaced mesh's own block when the stand-in matches its height.
+    attachment: bytes | None = None
 
 
 def _table_bounds(data: bytes, model: Model) -> tuple[int, int, int]:
@@ -405,6 +411,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     uv_index_new = append(uv_index)
     texture_new = append(texture)
     colour_index_new = append(colour_index)
+    attachment_new = append(source.attachment) if source.attachment else 0
     end_new = len(out)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
@@ -423,7 +430,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
         )
     _finish_header(out, header, faces, mesh.format, mesh.unk13, mesh.unk14,
                    geometry_new, strips_new, uv_index_new, texture_new,
-                   colour_index_new, end_new)
+                   colour_index_new, end_new, attachment_new)
     return bytes(out)
 
 
@@ -523,7 +530,8 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
 
 
 def _finish_header(out, header, faces, fmt, unk13, unk14, geometry, strips,
-                   uv_index, texture, colour_index, end) -> None:
+                   uv_index, texture, colour_index, end,
+                   attachment: int = 0) -> None:
     struct.pack_into("<h", out, header + FIELD_FACE_COUNT, faces)
     struct.pack_into("<h", out, header + FIELD_FORMAT, fmt)
     struct.pack_into("<2h", out, header + FIELD_UNK13, unk13, unk14)
@@ -538,9 +546,11 @@ def _finish_header(out, header, faces, fmt, unk13, unk14, geometry, strips,
         at = header + field_offset
         struct.pack_into("<i", out, at, destination - at)
     struct.pack_into("<i", out, header + FIELD_NORMALS, 0)
-    # The attachment block at +0x2C describes the vertices of the mesh that was
-    # here, so it cannot survive one with a different vertex count. The game's
-    # 0x2000 id namespace reads the field live and takes zero to mean "none",
-    # which is what 5213 of the game's own 5990 meshes have, so zero it rather
-    # than leave a pointer to a block that no longer describes anything.
-    struct.pack_into("<i", out, header + FIELD_ATTACHMENT, 0)
+    # The attachment block at +0x2C is read live by gameplay through the 0x2000
+    # id namespace, and for a character it is the collision volume -- the crate
+    # game's crates stopped colliding the first time this was zeroed. When the
+    # caller supplies a block it is pointed at here; otherwise zero, the state
+    # of 5,213 of the game's own 5,990 meshes, since a stale pointer would name
+    # records for a mesh that no longer exists.
+    at = header + FIELD_ATTACHMENT
+    struct.pack_into("<i", out, at, attachment - at if attachment else 0)

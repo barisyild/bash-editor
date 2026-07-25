@@ -957,10 +957,25 @@ The `bnez` guard is exactly the 5213-zero / 777-non-zero split measured in the c
 **confirmed** that the field is a live self-relative pointer; the record contents are
 ?unknown?.
 
-Because the field is read live and its records describe the vertices of the mesh that was
-there, **replacing a mesh must zero it**: a stale pointer left behind names a block that no
-longer describes anything, over a vertex set of a different size. Zero is the state of 5,213
-of the game's own 5,990 meshes, so nothing downstream is surprised by it.
+**The records are gameplay volumes — for a character, its collision body.** Decoded as
+8 × i16, every crate-minigame character carries exactly one record of the shape
+
+```
+[ox, oy, oz,  radius,  -height,  0,  unk,  0x4000|flag]
+```
+
+where field 4 is the mesh's own standing height to the unit in **8 of 8** crate characters
+(Crash −502, Coco −619, Tiny −724, …), field 3 a body radius (119–179 for the characters),
+fields 0–2 a small centre offset, and field 7 carries the 0x4000 bit in 81 % of all records
+corpus-wide. Field 4 matches the mesh height in only 41 % of all 1,634 records measured, so
+the block is a family of purpose-dependent volumes rather than one fixed meaning — but for a
+playable character it is the collision cylinder, and the proof is behavioural: **replacing
+the crate character with a mesh whose `+0x2C` was zeroed made crates stop colliding — the
+character walked straight through them.** Carrying the replaced mesh's own block through
+(valid when the stand-in is scaled to the same height) is the fix.
+
+When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
+5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
 
 ## 8.5 Sub-object array (`model + 0x18`)
 
