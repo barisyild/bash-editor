@@ -211,10 +211,12 @@ def build_blocks(mesh: NewMesh) -> dict:
         raise ValueError("a textured mesh needs one UV pair per corner")
 
     # A negative texture index marks a triangle drawn untextured; the rest name
-    # a slot in the pack. Strips group by that key, so one strip is either
-    # entirely plain or entirely on one texture, which is what the per-strip
-    # untextured flag and the one-texture-per-strip rule both require.
-    keys = np.asarray(mesh.textures, dtype=np.int64) if textured else None
+    # a slot in the pack. Strips need only group by that binary distinction --
+    # the untextured flag is per strip, but the texture itself is not: the run
+    # list advances per triangle and runs cross strip boundaries freely (§6.2),
+    # so one strip may sample several textures. Grouping by slot fragments the
+    # strips for nothing.
+    keys = (np.asarray(mesh.textures, dtype=np.int64) >= 0) if textured else None
     runs = build_strips(mesh.positions, keys)
     strips = bytearray()
     for run in runs:
@@ -440,18 +442,42 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     faces = blocks["faces"]
 
     dest_colour, dest_uv, dest_uv_len = _table_bounds(dest_data, dest)
-    colours = bytearray(dest_data[dest_colour:dest_uv]) + blocks["colours"]
+    colours = bytearray(dest_data[dest_colour:dest_uv])
     uvs = bytearray(dest_data[dest_uv : dest_uv + dest_uv_len]) + blocks["uvs"]
-    colour_base = (dest_uv - dest_colour) // COLOUR_ENTRY_SIZE
     uv_base = dest_uv_len // UV_ENTRY_SIZE
-    if colour_base + faces * 3 > MAX_COLOURS:
+
+    # A colour index names three consecutive table entries, at any alignment,
+    # and the game leans on that to share them -- 5,216 entries carry 5,216
+    # triangles in the menu model. Reusing any existing consecutive triple,
+    # including ones the previous install of this import appended, is what
+    # keeps a many-mesh import inside the 13-bit index. On a round trip the
+    # original entries are all found again, so the table barely grows.
+    triples: dict[bytes, int] = {}
+    for at in range(0, len(colours) - 2 * COLOUR_ENTRY_SIZE, COLOUR_ENTRY_SIZE):
+        triples.setdefault(bytes(colours[at : at + 3 * COLOUR_ENTRY_SIZE]),
+                           at // COLOUR_ENTRY_SIZE)
+    indices: list[int] = []
+    new_colours = blocks["colours"]
+    for f in range(faces):
+        triple = bytes(new_colours[f * 12 : f * 12 + 12])
+        found = triples.get(triple)
+        if found is None:
+            found = len(colours) // COLOUR_ENTRY_SIZE
+            colours += triple
+            start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
+            for at in range(start, len(colours) - 2 * COLOUR_ENTRY_SIZE,
+                            COLOUR_ENTRY_SIZE):
+                triples.setdefault(
+                    bytes(colours[at : at + 3 * COLOUR_ENTRY_SIZE]),
+                    at // COLOUR_ENTRY_SIZE,
+                )
+        indices.append(found)
+    if indices and max(indices) + 3 > MAX_COLOURS:
         raise ValueError(
-            f"{colour_base + faces * 3} colours would exceed the {MAX_COLOURS} a "
+            f"{max(indices) + 3} colours would exceed the {MAX_COLOURS} a "
             "13-bit colour index can address"
         )
-    colour_index = struct.pack(
-        f"<{faces}H", *[(colour_base + f * 3) & 0xFFFF for f in range(faces)]
-    )
+    colour_index = struct.pack(f"<{faces}H", *[i & 0xFFFF for i in indices])
     uv_index = struct.pack(
         f"<{faces}H",
         *[((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
