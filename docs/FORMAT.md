@@ -212,7 +212,7 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | --- | --- | --- | --- | --- |
 | 0x00 | u32 | `stamp` | 0x0C160029 (399/400) or 0x09160026 (1/400, `models/arena/boss_oxide/chaselevel.mdl`). Neither byte pattern occurs anywhere in the EXE and no code site loads model+0x00. | *likely* (it is a stamp; what it encodes is ?unknown?) |
 | 0x04 | i32 | `count_08` | Always 0 (400/400). Repeated as the first i32 at `T(0x08)`. | **confirmed** |
-| 0x08 | i32 ptr | `ptr_pool_alias` | `T(0x08) == T(0x10)` in 400/400; the first 16 bytes there are zero in 400/400. **No EXE site resolves offset 0x08.** Dead in the shipped build. | **confirmed** |
+| 0x08 | i32 ptr | `ptr_pool_alias` | `T(0x08) == T(0x10)` in 400/400; the first 16 bytes there are zero in 400/400. **No EXE site resolves offset 0x08.** Dead as a pointer — but live as a **layout boundary**: across all 373 models with geometry, no mesh block, colour table or UV table lies past `T(0x08)`, every animation blob starts at or after it (223/223 animated models, gap ≥ 172 bytes), and the file ends exactly 4 bytes past the last blob (223/223). Empirically it is a load boundary too: a rebuilt model whose new geometry sat past it crashed the game, and moving the geometry inside it — blobs lifted off first, the field moved to the new end — was the change that made the same content boot. A writer must keep the invariant even though the reader is unidentified. | **confirmed** (invariant) / ?unknown? (reader) |
 | 0x0C | i32 | `subfile_slots` | Range 0..14. `≥ i32@0x40` in 400/400, equal in 328 of the 373 models that have meshes. No EXE site reads it. Reading it as "allocated slots vs used slots" is a guess. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_pool` | The one field through which the game reaches this block. The game does **not** use the plain self-relative form here — see the note below. | **confirmed** |
 | 0x14 | i32 | `count_18` | 0 in 327/400, 1 in 73/400. Repeated at `[T(0x18)]` in 400/400. Also a layout switch: `T(0x2C) == T(0x3C)` **iff** this is 0, 400/400. | **confirmed** |
@@ -526,9 +526,15 @@ Over 81,045 strips it takes exactly **four** values:
 | Bit | Mask | Meaning | Confidence |
 | --- | --- | --- | --- |
 | 0 | 0x01 | **Untextured.** The strip's triangles are built as gouraud-shaded, non-textured primitives (GP0 0x30/0x32) and never sample a texture. Set on 33,127 strips (40.9 %). | **confirmed** (0x80019424, 0x80017F88, 0x80017DF4) |
-| 3 | 0x08 | Set on 24,151 strips (29.8 %). **No reader.** An exhaustive scan of `.text` finds no `andi` with an immediate of 8, 9, 0x0C, 0x0E or 0x0F anywhere in the model/render region 0x80016000–0x8001E000. | ?unknown? |
+| 3 | 0x08 | **The winding of the strip's first triangle.** Equals bit 0 of the first triangle's vertex flag (`w[start+2] & 1`) in **42,267/42,267** strips measured, and bit 0 then alternates along the strip in **42,267/42,267**. Still **no reader** in `.text` (no `andi` with 8, 9, 0x0C, 0x0E or 0x0F in 0x80016000–0x8001E000) — the value is authoring-tool output kept consistent with the vertex flags, and a writer must keep it so. | **confirmed** (meaning) / ?unknown? (reader) |
 
 Bits 1, 2 and 4–7 are never set.
+
+Two measured bounds a writer should respect. No shipped mesh has more than **348 strips**
+(`level_intro.mdl` mesh 1, over 5,989 meshes), and the median strip carries 2.33 triangles —
+emitting one strip per triangle has no precedent anywhere in the corpus. And the flag byte
+must agree with the vertex flags it announces: writing a parity that starts at 1 under a flag
+byte with bit 3 clear makes a mesh contradict itself, which no shipped mesh does.
 
 ---
 
@@ -951,6 +957,11 @@ The `bnez` guard is exactly the 5213-zero / 777-non-zero split measured in the c
 **confirmed** that the field is a live self-relative pointer; the record contents are
 ?unknown?.
 
+Because the field is read live and its records describe the vertices of the mesh that was
+there, **replacing a mesh must zero it**: a stale pointer left behind names a block that no
+longer describes anything, over a vertex set of a different size. Zero is the state of 5,213
+of the game's own 5,990 meshes, so nothing downstream is surprised by it.
+
 ## 8.5 Sub-object array (`model + 0x18`)
 
 `[i32 count]` then `count` self-relative i32 pointers. The resolve and the sub-object's own
@@ -1205,6 +1216,14 @@ that vertex slot in **5,352,530/5,352,530** vertices, and in **1036/1036** clips
 descriptor names a mesh — every vertex of every keyframe, no exceptions. That is
 also why two bits are enough — every animated mesh's flags are ≤ 3; the 158 static vertices
 in the corpus with a flag word above 3 all belong to meshes that carry no animation.
+
+**The corollary for a writer is severe.** The game draws the *animated* pose (§9.6) — it never
+reads the static vertex records back — so at draw time the winding bit comes from these two
+bits, not from the mesh. A writer that emits keyframes with zeroed flags puts every triangle
+on one winding and shreds the model on screen, while every static-data check still passes:
+this exact failure shipped three broken discs during the editor's development, including one
+whose static strip list and vertex pool were byte-identical to the original. Clips must carry
+the driven mesh's own flag words, slot for slot.
 
 The bounds block is genuine, though nothing in the animation path reads it (both call sites
 add 0x14 and move on). Decoding each keyframe and comparing: the stored box is the exact
@@ -1475,7 +1494,7 @@ Every pack in the corpus satisfies `u32@0x00 == 8` and `u32@0x04 == entry.size`.
 | 0x0C | u32 ptr | `ptr_textures` | **Self-relative**: `0x0C + value` == the first texture record, i.e. the end of the palette table, in **400/400**. | **confirmed** |
 | 0x10 | u32 ptr | `ptr_palettes` | **Self-relative**: `0x10 + value == 0x20` in **400/400**. | **confirmed** |
 | 0x14 | u32 | — | Multiple of 4 in 400/400, range 120..228,744, 272 distinct values. It is **not** a pointer (`0x14 + value` is outside the file for 198/400), not the pixel byte total, not the VRAM-unit total, not the pixel+palette total, and it differs between structurally identical packs (22980 / 25096 / 22760 for `uka` data / data2 / data3). | ?unknown? |
-| 0x18 | u32 | — | 0 in 314/400. The 86 non-zero values match no landmark tested. | ?unknown? |
+| 0x18 | u32 | `ptr_animation` | **Absolute** offset of the animation block (§10.4), 0 when the pack has none — 314/400 have none. In the 86 that do, the value equals the end of the palette+texture walk in **86/86**. Note it is absolute, unlike 0x0C and 0x10. | **confirmed** |
 | 0x1C | u32 | — | 0 in 400/400. | **confirmed** (zero) / ?unknown? (purpose) |
 
 The palette table therefore starts at **0x20**, not 0x24.
@@ -1512,8 +1531,72 @@ Records run back to back from `0x0C + u32@0x0C`, each immediately followed by it
 | +0x14 | u8[] | `pixels` | `vram_width * height * 2` bytes. 4bpp packs two pixels per byte, **low nibble first** (leftmost). | **confirmed** |
 
 Walking `palette_count` palettes then `texture_count` records does **not** land exactly on the
-file size: the residual is 8 bytes in 263 packs, 12 in 51, 32 in 12, and occasionally tens of
-kilobytes. Something else lives at the end of a pack — ?unknown?.
+file size. Where `ptr_animation` is set the residual is the animation block below; where it is
+not, the residual is 8 bytes in 263 packs and 12 in 51, still ?unknown?.
+
+**A slot's liveness cannot be proven from the meshes.** "No mesh samples it" is not evidence a
+slot is free: the game also draws textures straight from code, with no geometry involved. The
+case that proved it — `models/mainmenu/models.tex` slots 103–116 and 123–124 are referenced by
+no mesh in the file, and they are the character-select portraits; overwriting them corrupted
+the select screen. The only safe slots to take when replacing a mesh are the ones whose **only
+sampler is the mesh being replaced** (for the menu's mesh 13: slots 30, 31, 33, 34, 35 and
+their palettes), since their one user leaves with it. Replacing pixels and palette values
+inside a slot is safe either way (§10.1's unknowns are about *placement*, which never moves);
+what a slot is *for* is the question the data cannot answer.
+
+## 10.4 Animation block (`u32@0x18`)
+
+Two tables, each announced by a self-relative pointer in the block's own 8-byte header and each
+starting with its record count. Either may be absent. Present in 86 of 400 packs, holding
+**136 flipbooks over 1,137 frames** and **108 scrollers**.
+
+| Offset | Type | Name | Meaning | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | u32 ptr | `ptr_flipbooks` | Self-relative; 0 when there are none. | **confirmed** |
+| +0x04 | u32 ptr | `ptr_scrollers` | Self-relative; 0 when there are none. | **confirmed** |
+
+### Flipbook record (0x14 bytes), after a u32 count
+
+A texture whose pixels are swapped for one of a run of stored frames.
+
+| Offset | Type | Name | Meaning | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | u32 ptr | `ptr_frames` | **Self-relative from the record start**, to an array of `frame_count` self-relative pointers, one per frame. | **confirmed** |
+| +0x04 | i32 | `texture` | Index into the pack's own texture list. In range in **136/136**. | **confirmed** |
+| +0x08 | i32 | `frame_count` | 4..16. | **confirmed** |
+| +0x0C | i32 | `delta` | Frames per tick, 24.8 fixed point. 128 (0.5 → 15 fps) is the commonest of 12 values; the range is 6..152. | *likely* |
+| +0x10 | i32 | `cursor` | Runtime accumulator; **0 in 136/136** as shipped. | *likely* |
+
+Two measurements identify the frame blobs beyond doubt:
+
+* Each frame is **exactly** `vram_width * height * 2` bytes — the named texture's own pixel
+  length — in **136/136** flipbooks. A frame is a drop-in replacement: same size, same bit
+  depth, same palette.
+* **Frame 0 is byte-identical to the texture's own pixels in 136/136.** The texture as stored
+  is the first frame of its own animation.
+
+### Scroller record (0x10 bytes), after a u32 count
+
+A texture that slides under its own UVs, so a surface appears to flow without the model moving.
+
+| Offset | Type | Name | Meaning | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | i32 | `texture` | Index into the pack's texture list. In range in **108/108**. | **confirmed** |
+| +0x04 | i32 | `delta` | Texels per tick, 24.8 fixed point. 21 distinct values, −2048..+256, mostly multiples of 4. | *likely* |
+| +0x08 | i32 | `cursor` | Runtime accumulator; **0 in 108/108**. | *likely* |
+| +0x0C | i32 | — | **0 in 108/108**. | **confirmed** (zero) / ?unknown? (purpose) |
+
+**Which axis a scroller moves along is ?unknown?.** No record in the game sets more than one
+component, and the model's UV table is untouched, so the data cannot say. The images argue for
+the horizontal one: measuring how smoothly each texture's opposite edges join, a scrolling
+texture's left and right edges are ~3× more continuous than its top and bottom (median seam
+0.35 against 1.00, normalised by the mean step inside the image on that axis), and ~3× more
+continuous than an average texture's horizontal seam (1.19). That is also the axis a PS1
+texture window wraps most naturally. Treat it as *likely*, not settled.
+
+**Mesh-swap animation is a separate thing and is not declared here.** 119 groups of meshes in
+the game share identical geometry while each uses one distinct texture (`mdl.find_texture_flipbooks`);
+those are driven by gameplay code writing a display id, not by any table in the data.
 
 ---
 

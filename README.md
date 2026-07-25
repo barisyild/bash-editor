@@ -4,9 +4,13 @@ An editor for Crash Bash's `CRASHBSH.DAT`, cross-platform (macOS / Windows / Lin
 in pure Python — PySide6 + OpenGL, no platform-specific code.
 
 **Where it stands.** Reading is done and verified: every model, texture, sound bank
-and animation clip in the game parses, renders and exports. Writing back into the
-archive is the goal and is **not implemented yet** — [Towards editing](#towards-editing)
-sets out what each kind of edit still needs.
+and animation clip in the game parses, renders and exports. Writing works: entries
+can be replaced and the disc rebuilt or patched in place, meshes can be transplanted
+between models or built from scratch, animation clips rewritten, and texture pixels
+and palettes replaced inside their slots. The proof is a whole foreign character —
+Spyro, from a COLLADA file — re-striped, re-textured into orphaned pack slots, given
+newly authored clips, and running in the game's menu. [Towards editing](#towards-editing)
+lists what still cannot be written.
 
 The container format and the build/MD5 table come from
 [CTR-tools](https://github.com/CTR-tools/CTR-tools) (dcxdemo). The 3D format was
@@ -40,6 +44,7 @@ Measured against the NTSC-U release (992 entries):
 | Models | 5990/5990 meshes reconstruct exactly the triangle count the file states |
 | Colours | gouraud, three per triangle, semi-transparency flags decoded |
 | Textures | 15160 textures from 400 packs, 4- and 8-bit, with transparency |
+| Texture animation | 136 flipbooks over 1137 frames, and 108 scrolling textures |
 | Animation | 1037 clips over 49167 frames, in 225 of 400 models |
 | Sound | 160/160 VAB banks, 2581 samples decoded to PCM, 57 sequences |
 
@@ -69,6 +74,23 @@ texture as it sits in the pack — and it separates the surfaces that are genuin
 textured from the ones that are flat-coloured, which on a character is most of the
 body. Those colours also carry the model's shading, so with them off the viewport
 lights the geometry itself instead.
+
+### Texture animation
+
+A texture pack can carry its own animation, and 86 of the game's 400 do. Two kinds: a
+**flipbook** swaps a texture's pixels for one of a run of stored frames — the sparking
+explosion, the electric arc, the plasma that flows across a cutscene backdrop — and a
+**scroller** slides a texture under its own UVs so a surface appears to move while the
+model stays put.
+
+The texture list marks them, `▶ 12` for a twelve-frame flipbook and `⇄` for a scroller,
+and selecting a flipbook gives you a play button and a frame slider. In the model
+viewport they play by themselves on a 30 Hz clock, independent of the model's own
+animation as they are in game; **Animate textures** under the viewport turns that off.
+
+What identifies the frames beyond argument: each is exactly as long as the texture's own
+pixel data, in all 136 flipbooks — and frame 0 is byte-identical to that data. The texture
+as stored *is* the first frame of its own animation.
 
 ### Animation
 
@@ -138,17 +160,18 @@ entry with a bullet. **Revert selected file** puts it back.
 Replacements are held in memory until a build, because a build rewrites both index
 tables in the executable and has to see every change at once.
 
-**File → Build disc…** (`Ctrl+B`) writes the result, or from the command line:
+**File → Build disc…** (`Ctrl+B`) writes a playable `.bin`/`.cue`, or from the command
+line:
 
 ```bash
-.venv/bin/python -m crashbash.cli build game/SCUS_945.70 -o out/disc
+.venv/bin/python -m crashbash.cli build game/SCUS_945.70 -o out/disc -i out/crashbash.bin
 ```
 
-Either writes a complete disc tree: `CRASHBSH.DAT` repacked, `SCUS_945.70` patched to
-match, and everything else copied through. It then re-reads its own output with the
+Either first writes a complete disc tree: `CRASHBSH.DAT` repacked, `SCUS_945.70` patched
+to match, and everything else copied through. It then re-reads its own output with the
 same parser the editor uses and checks every entry against what was meant for it — the
 replacement where there was one, the original everywhere else — so a build that quietly
-corrupts the table cannot pass.
+corrupts the table cannot pass. Only then does it write the image.
 
 The DAT has no directory of its own — the game finds an entry through a table of 992
 `(sector, size)` pairs compiled into the executable, and loads entries a *group* at a
@@ -161,23 +184,46 @@ reserves a spare sector for 12 entries and leaves padding inside 8 groups, which
 a group's span disagree with the byte count the loader reads with; packing tight makes
 the two identical and saves 24 KB.
 
-Mastering the tree into a disc image is a separate step, because a tree is already
-useful — most emulators run one straight from a folder. The build writes an
-[mkpsxiso](https://github.com/Lameguy64/mkpsxiso) project beside it:
+### The disc image
+
+A folder is not a disc: no PS1 emulator boots one, they all want an image. So the
+image is written here rather than handed to an external mastering tool —
+`crashbash/iso.py` is a self-contained CD-XA writer, Mode 2 Form 1 sectors with real
+EDC and both Reed-Solomon parity passes. Those are not taken on trust: run against the
+sectors of a pressed Crash Bash disc they reproduce its own EDC, P parity, Q parity and
+addresses bit for bit.
+
+There are two ways to get an image, and the difference matters:
+
+**Patching your own disc image** — the default the editor offers, and the better one.
+It copies your `.bin` and rewrites only the sectors of the two files that changed,
+keeping each sector's existing subheader and address. Everything else on the disc is
+untouched, byte for byte. A 73 MB archive swap takes about two seconds.
 
 ```bash
-mkpsxiso out/disc.xml
+.venv/bin/python -m crashbash.cli build game/SCUS_945.70 -o out/disc \
+    -i out/crashbash.bin --original "Crash Bash.bin"
 ```
 
-`BASHY.` is a raw 2352-byte-sector stream and is marked as such so it is copied
-sector-for-sector rather than padded as data. No licence sector is written — that data
-is Sony's and is not in this repository — so the image runs in emulators but not on
-hardware unless you pass the original disc's licence to mkpsxiso with `-l`.
+**Mastering the extracted folder** — needs nothing but the folder, and loses two
+things it cannot recover, both reported as warnings rather than passed over. The
+licence area is Sony's and is not in this repository, so the image runs in emulators
+but not on a console. And `SPYRO3/SPEECH.STR` is a Mode 2 **Form 2** stream: on the
+disc it is 2324 bytes per sector across some thirty interleaved XA channels, but an
+extracted copy keeps only the first 2048 bytes of each and no channel numbers at all,
+so the demo's speech cannot be rebuilt from it.
+
+This is also why `BASHY.` is written as ordinary data. Its length divides exactly by
+2352, which reads like a raw sector stream — the disc says otherwise, and so does the
+file: 31 MB of zeroes with no sync pattern anywhere. It is padding that pushes the real
+data to the outside of the disc. The check is for the sync pattern, not the size.
 
 ## Towards editing
 
-What is still missing, and why. [docs/FORMAT.md](docs/FORMAT.md) §14 lists every open
-question.
+[docs/IMPORTING.md](docs/IMPORTING.md) is the record of the whole import pipeline —
+custom geometry, custom textures, custom animation — as proven by putting Spyro into
+the menu, with the failure that taught each rule. What is still missing, and why:
+[docs/FORMAT.md](docs/FORMAT.md) §14 lists every open question.
 
 **Geometry.** Writable in principle today — the strip list, the vertex pool, the
 per-triangle UV/texture/colour arrays and the shared tables are all confirmed, so a
@@ -186,10 +232,11 @@ of the vertex pool: changing a triangle count means re-striping the mesh, not pa
 a field.
 
 **Textures.** Reading is solid, writing is not. How a pack is placed in VRAM is still
-unknown: pack header `0x14`/`0x18` and texture record `+0x04..+0x07`, `+0x0E`, `+0x10`
-are unidentified, so a repacked pack could decode correctly here and still land wrong
-on the console. Replacing the pixels of an existing texture is safe; adding one or
-changing its size is not.
+unknown: pack header `0x14` and texture record `+0x04..+0x07`, `+0x0E`, `+0x10` are
+unidentified, so a repacked pack could decode correctly here and still land wrong on
+the console. Replacing the pixels of an existing texture is safe; adding one or changing
+its size is not. Flipbook frames are as safe as the texture itself, being the same
+size by construction.
 
 **Animation.** The clip format is fully decoded, including the shared position pool and
 the blend weights, so clips can be rewritten. What the per-frame auxiliary block holds
@@ -233,6 +280,7 @@ crashbash/            format library, no GUI dependency
   formats/sfx.py      sound banks: VAB header, SPU-ADPCM decoder, WAV output
   formats/gltf.py     glTF 2.0 export: geometry, textures, morph animation
   build.py            repack the DAT, patch the EXE tables, write a disc tree
+  iso.py              CD-XA writer: master a folder, or patch an existing image
   cli.py              headless commands
 app/                  PySide6 GUI
   glview.py           OpenGL 3.3 core viewport, orbit camera, textured, animated
