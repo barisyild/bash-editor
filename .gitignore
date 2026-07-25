@@ -1,0 +1,9 @@
+# Game data: copyrighted, 148 MB, and supplied by the user at run time.
+game/
+
+.venv/
+__pycache__/
+*.pyc
+out/
+.DS_Store
+.claude/settings.local.json

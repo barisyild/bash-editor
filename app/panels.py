@@ -1,0 +1,787 @@
+"""Side panels and the non-3D editors: file tree, textures, audio, hex."""
+
+from __future__ import annotations
+
+import functools
+import traceback
+
+import numpy as np
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from crashbash.archive import BashArchive, Entry
+from crashbash.formats import anim, sfx, tex
+
+
+def guarded(fn):
+    """Print a traceback instead of letting Qt swallow one.
+
+    An exception raised inside a slot never reaches the caller: Qt logs it at
+    best and the event loop carries on, so a playback timer that throws simply
+    stops advancing and the viewport keeps showing the frame it last drew.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception:
+            traceback.print_exc()
+
+    return wrapper
+
+GROUP_ICON = {
+    "model": "◆",
+    "texture": "▩",
+    "audio": "♪",
+    "image": "▣",
+    "map": "▤",
+    "code": "⚙",
+    "binary": "·",
+}
+
+
+# The archive interleaves each model with its textures, so browsing by name
+# alone makes it easy to open a .tex expecting the 3D view.
+KIND_TABS = [
+    ("Models", "model"),
+    ("Textures", "texture"),
+    ("Audio", "audio"),
+    ("All", None),
+]
+
+
+class FileTree(QWidget):
+    """Archive contents as a folder tree, filtered by kind and by name."""
+
+    entry_selected = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._archive: BashArchive | None = None
+        self._group: str | None = "model"
+
+        self.kind_buttons: list[QPushButton] = []
+        kind_row = QHBoxLayout()
+        kind_row.setSpacing(2)
+        for label, group in KIND_TABS:
+            button = QPushButton(label, checkable=True, checked=group == self._group)
+            button.setToolTip(
+                "Only 3D models open in the viewport; textures and sounds have "
+                "their own panels."
+            )
+            button.clicked.connect(lambda _=False, g=group: self._set_group(g))
+            self.kind_buttons.append(button)
+            kind_row.addWidget(button)
+
+        self.filter_box = QLineEdit(placeholderText="Filter by name or extension…")
+        self.filter_box.textChanged.connect(self._apply_filter)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Name", "Size"])
+        self.tree.setColumnWidth(0, 260)
+        self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tree.currentItemChanged.connect(self._on_current_changed)
+
+        self.summary = QLabel("No archive loaded")
+        self.summary.setWordWrap(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addLayout(kind_row)
+        layout.addWidget(self.filter_box)
+        layout.addWidget(self.tree, 1)
+        layout.addWidget(self.summary)
+
+    def _set_group(self, group: str | None) -> None:
+        self._group = group
+        for button, (_, value) in zip(self.kind_buttons, KIND_TABS):
+            button.setChecked(value == group)
+        self._apply_filter(self.filter_box.text())
+
+    def set_archive(self, archive: BashArchive | None) -> None:
+        self._archive = archive
+        self.tree.clear()
+        if archive is None:
+            self.summary.setText("No archive loaded")
+            return
+
+        folders: dict[str, QTreeWidgetItem] = {}
+
+        def folder_for(path: str) -> QTreeWidgetItem | None:
+            if not path:
+                return None
+            if path in folders:
+                return folders[path]
+            parent_path, _, name = path.rpartition("/")
+            parent = folder_for(parent_path)
+            item = QTreeWidgetItem([name, ""])
+            item.setData(0, Qt.UserRole, None)
+            if parent is None:
+                self.tree.addTopLevelItem(item)
+            else:
+                parent.addChild(item)
+            folders[path] = item
+            return item
+
+        for entry in archive:
+            directory, _, filename = entry.name.rpartition("/")
+            parent = folder_for(directory)
+            icon = GROUP_ICON.get(entry.group, "·")
+            item = QTreeWidgetItem([f"{icon}  {filename}", _human(entry.size)])
+            item.setData(0, Qt.UserRole, entry)
+            item.setToolTip(
+                0,
+                f"#{entry.index}  offset 0x{entry.offset:X}  "
+                f"magic 0x{entry.magic:08X}  kind {entry.kind}",
+            )
+            if parent is None:
+                self.tree.addTopLevelItem(item)
+            else:
+                parent.addChild(item)
+
+        counts: dict[str, int] = {}
+        for entry in archive:
+            counts[entry.group] = counts.get(entry.group, 0) + 1
+        breakdown = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+        self.summary.setText(
+            f"{archive.version.name} — {len(archive)} files\n{breakdown}"
+        )
+        self.tree.expandToDepth(0)
+        self._apply_filter(self.filter_box.text())
+
+    def _apply_filter(self, text: str) -> None:
+        needle = text.strip().lower()
+
+        def visit(item: QTreeWidgetItem) -> bool:
+            entry = item.data(0, Qt.UserRole)
+            if entry is None:
+                match = False  # a folder is shown only for the sake of its children
+            else:
+                match = (not needle or needle in entry.name.lower()) and (
+                    self._group is None or entry.group == self._group
+                )
+            child_match = False
+            for i in range(item.childCount()):
+                child_match |= visit(item.child(i))
+            visible = match or child_match
+            item.setHidden(not visible)
+            if needle and child_match:
+                item.setExpanded(True)
+            return visible
+
+        for i in range(self.tree.topLevelItemCount()):
+            visit(self.tree.topLevelItem(i))
+
+    def _on_current_changed(self, current: QTreeWidgetItem | None, _previous) -> None:
+        if current is None:
+            return
+        entry = current.data(0, Qt.UserRole)
+        if isinstance(entry, Entry):
+            self.entry_selected.emit(entry)
+
+
+class MeshPanel(QWidget):
+    """Per-mesh checkboxes plus the parse report for the selected model."""
+
+    visibility_changed = Signal(int, bool)
+    all_visibility_changed = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.list = QListWidget()
+        self.list.itemChanged.connect(self._on_item_changed)
+
+        self.show_all = QPushButton("Show all")
+        self.hide_all = QPushButton("Hide all")
+        self.show_all.clicked.connect(lambda: self.all_visibility_changed.emit(True))
+        self.hide_all.clicked.connect(lambda: self.all_visibility_changed.emit(False))
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.show_all)
+        buttons.addWidget(self.hide_all)
+
+        self.report = QPlainTextEdit(readOnly=True)
+        self.report.setMaximumHeight(150)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(QLabel("Meshes"))
+        layout.addWidget(self.list, 1)
+        layout.addLayout(buttons)
+        layout.addWidget(QLabel("Parse report"))
+        layout.addWidget(self.report)
+
+        self._loading = False
+
+    def set_model(self, model, title: str) -> None:
+        self._loading = True
+        self.list.clear()
+        lines = [title]
+        if model is None or not model.meshes:
+            self.report.setPlainText("\n".join(lines + ["No meshes parsed."]))
+            self._loading = False
+            return
+
+        matched = 0
+        for mesh in model.meshes:
+            flag = "✓" if mesh.faces_match_header else "!"
+            item = QListWidgetItem(
+                f"{flag} mesh {mesh.index:02d} — {mesh.vertex_count} verts, "
+                f"{mesh.face_count} tris, {len(mesh.strips)} strips"
+            )
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, mesh.index)
+            self.list.addItem(item)
+            matched += mesh.faces_match_header
+
+        total_v = sum(m.vertex_count for m in model.meshes)
+        total_f = sum(m.face_count for m in model.meshes)
+        lines.append(
+            f"{len(model.meshes)} meshes, {total_v} vertices, {total_f} triangles"
+        )
+        lines.append(
+            f"{matched}/{len(model.meshes)} meshes match the triangle count in "
+            "their header"
+        )
+        for warning in model.warnings:
+            lines.append(f"model: {warning}")
+        for mesh in model.meshes:
+            for warning in mesh.warnings:
+                lines.append(f"mesh {mesh.index}: {warning}")
+        self.report.setPlainText("\n".join(lines))
+        self._loading = False
+
+    def _on_item_changed(self, item: QListWidgetItem) -> None:
+        if self._loading:
+            return
+        self.visibility_changed.emit(
+            item.data(Qt.UserRole), item.checkState() == Qt.Checked
+        )
+
+    def set_all_checked(self, checked: bool) -> None:
+        self._loading = True
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self._loading = False
+
+
+# Frames per second for playback. The stored timeline is already baked one
+# record per tick, so this only sets how fast ticks are consumed; what the
+# console's tick actually was has not been established here, and 30 is the rate
+# the poses read plausibly at rather than a measured fact.
+PLAYBACK_FPS = 30.0
+
+
+class AnimationPanel(QWidget):
+    """Clip list, transport and scrubber for a model's vertex animation.
+
+    Row 0 is always the static pose, so a model with no clips still has a
+    meaningful, selectable state and the user can always get back to the
+    geometry as the file stores it.
+    """
+
+    animation_changed = Signal(object)  # anim.Animation | None
+    frame_changed = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._animations: list[anim.Animation] = []
+        self._playing = False
+
+        self.list = QListWidget()
+        self.list.currentRowChanged.connect(self._on_row_changed)
+
+        self.play_button = QPushButton("▶  Play")
+        self.play_button.clicked.connect(self._toggle_play)
+        self.slider = QSlider(Qt.Horizontal, minimum=0, maximum=0)
+        self.slider.valueChanged.connect(self._on_slider)
+        self.frame_label = QLabel("—", alignment=Qt.AlignRight | Qt.AlignVCenter)
+        self.info = QLabel("No model loaded")
+        self.info.setWordWrap(True)
+
+        # The slider gets its own row: this panel shares a narrow side column
+        # with the mesh list, and beside a button it collapses to just the grip.
+        transport = QHBoxLayout()
+        transport.addWidget(self.play_button)
+        transport.addStretch(1)
+        transport.addWidget(self.frame_label)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(QLabel("Animations"))
+        layout.addWidget(self.list, 1)
+        layout.addLayout(transport)
+        layout.addWidget(self.slider)
+        layout.addWidget(self.info)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(round(1000.0 / PLAYBACK_FPS))
+        self._timer.timeout.connect(self._tick)
+
+        self._loading = False
+        self._set_enabled(False)
+
+    # -- contents --------------------------------------------------------
+
+    def set_animations(self, animations: list[anim.Animation]) -> None:
+        """Show the clips of a newly opened model, stopping whatever was playing."""
+        self.stop()
+        self._animations = animations
+        self._loading = True
+        self.list.clear()
+        self.list.addItem(QListWidgetItem("—  static pose"))
+        for clip in animations:
+            item = QListWidgetItem(f"{_clip_name(clip)}  —  {clip.frame_count} frames")
+            item.setToolTip(self._describe(clip))
+            if clip.mesh_index is None or not clip.frame_count:
+                # The descriptor never named a mesh, so there is nothing to
+                # pose. One clip in the archive is like this.
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+            self.list.addItem(item)
+        self.list.setCurrentRow(0)
+        self._loading = False
+
+        if animations:
+            self.info.setText(f"{len(animations)} clips")
+        else:
+            self.info.setText("This model has no animations.")
+        self._sync_transport(None)
+        # No animation_changed here. The panel lands on the static pose, and so
+        # does the viewport, because loading a model resets it -- emitting would
+        # only buy a redundant rebuild of the model being replaced, which costs
+        # 28 ms on the heaviest one in the archive.
+
+    def _describe(self, clip: anim.Animation) -> str:
+        lines = [
+            f"clip {clip.index}, hash {clip.name_hash}",
+            f"{clip.frame_count} frames, {clip.vertex_count} vertices",
+            f"mesh {clip.mesh_index}" if clip.mesh_index is not None else "no mesh",
+            "shared vertex pool" if clip.pool_is_shared else "own vertex pool",
+        ]
+        if len(clip.name_candidates) > 1:
+            lines.append("name is ambiguous: " + ", ".join(clip.name_candidates))
+        elif not clip.name_candidates:
+            lines.append("no guessed name reproduces this hash")
+        lines += clip.warnings
+        return "\n".join(lines)
+
+    def current(self) -> anim.Animation | None:
+        row = self.list.currentRow()
+        if 1 <= row <= len(self._animations):
+            return self._animations[row - 1]
+        return None
+
+    # -- transport -------------------------------------------------------
+
+    def _set_enabled(self, enabled: bool) -> None:
+        self.play_button.setEnabled(enabled)
+        self.slider.setEnabled(enabled)
+
+    def _sync_transport(self, clip: anim.Animation | None) -> None:
+        self._loading = True
+        last = max(0, (clip.frame_count - 1) if clip else 0)
+        self.slider.setMaximum(last)
+        self.slider.setValue(0)
+        self._loading = False
+        self._set_enabled(clip is not None and clip.frame_count > 1)
+        self.frame_label.setText(f"0 / {last}" if clip else "—")
+
+    @guarded
+    def _on_row_changed(self, _row: int) -> None:
+        if self._loading:
+            return
+        self.stop()
+        clip = self.current()
+        self._sync_transport(clip)
+        if clip is not None:
+            self.info.setText(self._describe(clip).replace("\n", " · "))
+        elif self._animations:
+            self.info.setText(f"{len(self._animations)} clips")
+        self.animation_changed.emit(clip)
+
+    @guarded
+    def _on_slider(self, value: int) -> None:
+        if self._loading:
+            return
+        self.frame_label.setText(f"{value} / {self.slider.maximum()}")
+        self.frame_changed.emit(value)
+
+    @guarded
+    def _toggle_play(self) -> None:
+        self.stop() if self._playing else self.play()
+
+    def play(self) -> None:
+        if self.current() is None:
+            return
+        self._playing = True
+        self.play_button.setText("❚❚  Pause")
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._playing = False
+        self._timer.stop()
+        self.play_button.setText("▶  Play")
+
+    @guarded
+    def _tick(self) -> None:
+        span = self.slider.maximum() + 1
+        if span < 2:
+            self.stop()
+            return
+        # Wrapping unconditionally: whether a clip was authored to loop is
+        # visible in the data but the runtime loops either kind, and a preview
+        # that stops on the last frame is harder to inspect.
+        self.slider.setValue((self.slider.value() + 1) % span)
+
+
+def _clip_name(clip: anim.Animation) -> str:
+    """List label: the guessed name when there is one, the hash otherwise.
+
+    Both ambiguous candidates are shown rather than one picked, because the
+    hash is a plain weighted sum and genuinely does not distinguish them.
+    """
+    if clip.name:
+        return clip.name
+    if clip.name_candidates:
+        return " / ".join(clip.name_candidates)
+    return f"clip {clip.index}  (hash {clip.name_hash})"
+
+
+def rgba_to_pixmap(image: np.ndarray) -> QPixmap:
+    """Composite RGBA onto a checkerboard so transparency is visible."""
+    h, w, _ = image.shape
+    board = np.empty((h, w, 3), dtype=np.float32)
+    ys, xs = np.mgrid[0:h, 0:w]
+    checker = ((xs // 8 + ys // 8) % 2).astype(np.float32)
+    board[:] = (0.18 + checker * 0.06)[..., None] * 255.0
+
+    alpha = image[..., 3:4].astype(np.float32) / 255.0
+    blended = image[..., :3].astype(np.float32) * alpha + board * (1.0 - alpha)
+    rgb = np.ascontiguousarray(blended.astype(np.uint8))
+    qimage = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+    return QPixmap.fromImage(qimage.copy())
+
+
+class TextureView(QWidget):
+    """Texture pack browser: thumbnail list on the left, zoomable preview right."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pack: tex.TexturePack | None = None
+        self._zoom = 3
+
+        self.list = QListWidget()
+        self.list.setMaximumWidth(230)
+        self.list.currentRowChanged.connect(self._show)
+
+        self.canvas = QLabel(alignment=Qt.AlignCenter)
+        self.canvas.setMinimumSize(200, 200)
+        scroll = QScrollArea()
+        scroll.setWidget(self.canvas)
+        scroll.setWidgetResizable(True)
+
+        self.zoom_slider = QSlider(Qt.Horizontal, minimum=1, maximum=12, value=3)
+        self.zoom_slider.valueChanged.connect(self._on_zoom)
+        self.info = QLabel("—")
+
+        right = QVBoxLayout()
+        right.addWidget(scroll, 1)
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(QLabel("Zoom"))
+        zoom_row.addWidget(self.zoom_slider, 1)
+        right.addLayout(zoom_row)
+        right.addWidget(self.info)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(self.list)
+        layout.addLayout(right, 1)
+
+    def set_pack(self, pack: tex.TexturePack | None) -> None:
+        self._pack = pack
+        self.list.clear()
+        self.canvas.clear()
+        if pack is None:
+            self.info.setText("—")
+            return
+        for texture in pack.textures:
+            suffix = "" if texture.palette_ok else "  (palette?)"
+            self.list.addItem(f"{texture.index:03d}  {texture.width}×{texture.height}"
+                              f"  {texture.bit_depth}bpp{suffix}")
+        note = f"{len(pack.textures)} textures, {len(pack.palettes)} palettes"
+        if pack.warnings:
+            note += f" — {pack.warnings[0]}"
+        self.info.setText(note)
+        if pack.textures:
+            self.list.setCurrentRow(0)
+
+    def current_texture(self) -> tex.Texture | None:
+        if self._pack is None:
+            return None
+        row = self.list.currentRow()
+        if 0 <= row < len(self._pack.textures):
+            return self._pack.textures[row]
+        return None
+
+    def _on_zoom(self, value: int) -> None:
+        self._zoom = value
+        self._show(self.list.currentRow())
+
+    def _show(self, row: int) -> None:
+        if self._pack is None or not (0 <= row < len(self._pack.textures)):
+            return
+        texture = self._pack.textures[row]
+        pixmap = rgba_to_pixmap(texture.to_rgba(self._pack.palettes))
+        scaled = pixmap.scaled(
+            QSize(pixmap.width() * self._zoom, pixmap.height() * self._zoom),
+            Qt.KeepAspectRatio,
+            Qt.FastTransformation,
+        )
+        self.canvas.setPixmap(scaled)
+        self.canvas.resize(scaled.size())
+        self.info.setText(
+            f"#{texture.index}  {texture.width}×{texture.height}  "
+            f"{texture.bit_depth}bpp  palette {texture.palette_index}  "
+            f"flags 0x{texture.flags:X}  ({len(self._pack.palettes)} palettes in pack)"
+        )
+
+
+class AudioView(QWidget):
+    """SFX bank browser: pick a sample, hear it, or export the lot as WAV."""
+
+    export_requested = Signal()
+    export_wav_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._bank: sfx.SoundBank | None = None
+        self._sink = None
+        self._buffer = None
+
+        self.list = QListWidget()
+        self.list.setMaximumWidth(260)
+        self.list.currentRowChanged.connect(self._describe)
+        self.list.itemActivated.connect(lambda _: self.play())
+
+        self.text = QPlainTextEdit(readOnly=True)
+        self.play_button = QPushButton("▶  Play")
+        self.play_button.clicked.connect(self.play)
+        self.stop_button = QPushButton("■  Stop")
+        self.stop_button.clicked.connect(self.stop)
+        self.wav_button = QPushButton("Export all as WAV…")
+        self.wav_button.clicked.connect(self.export_wav_requested)
+        self.raw_button = QPushButton("Export VB / VH / SEQ…")
+        self.raw_button.clicked.connect(self.export_requested)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.play_button)
+        buttons.addWidget(self.stop_button)
+        buttons.addStretch(1)
+        buttons.addWidget(self.wav_button)
+        buttons.addWidget(self.raw_button)
+
+        right = QVBoxLayout()
+        right.addWidget(self.text, 1)
+        right.addLayout(buttons)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(self.list)
+        layout.addLayout(right, 1)
+
+    # -- contents --------------------------------------------------------
+
+    def set_bank(self, bank: sfx.SoundBank | None, name: str) -> None:
+        self.stop()
+        self._bank = bank
+        self.list.clear()
+        if bank is None:
+            self.text.setPlainText("Not a sound bank.")
+            for button in (self.play_button, self.wav_button, self.raw_button):
+                button.setEnabled(False)
+            return
+
+        for sample in bank.samples:
+            self.list.addItem(
+                f"{sample.index:03d}   {sample.duration:5.2f}s   {sample.rate:5d} Hz"
+            )
+
+        lines = [
+            name,
+            "",
+            f"VB (ADPCM samples): {_human(len(bank.vb))}",
+            f"VH (VAB header):    {_human(len(bank.vh))}",
+            f"Programs:           {len(bank.programs)}",
+            f"Samples:            {len(bank.samples)}",
+            f"Sequences:          {len(bank.sequences)}",
+        ]
+        for i, seq in enumerate(bank.sequences):
+            lines.append(f"  seq {i}: {_human(len(seq))}")
+        if bank.warnings:
+            lines += ["", "Warnings:"] + [f"  {w}" for w in bank.warnings]
+        if bank.sequences:
+            lines += [
+                "",
+                "The sequences are PS1 SEQp music. Playing them needs a sequencer "
+                "driving this bank, which this editor does not have -- export them "
+                "for a tool that does.",
+            ]
+        self.text.setPlainText("\n".join(lines))
+
+        self.raw_button.setEnabled(bool(bank.vb or bank.vh or bank.sequences))
+        self.wav_button.setEnabled(bool(bank.samples))
+        self.play_button.setEnabled(bool(bank.samples))
+        if bank.samples:
+            self.list.setCurrentRow(0)
+
+    def _current(self) -> sfx.Sample | None:
+        if self._bank is None:
+            return None
+        row = self.list.currentRow()
+        if 0 <= row < len(self._bank.samples):
+            return self._bank.samples[row]
+        return None
+
+    def _describe(self, _row: int) -> None:
+        sample = self._current()
+        if sample is None or self._bank is None:
+            return
+        tones = [
+            (program.index, slot, tone)
+            for program in self._bank.programs
+            for slot, tone in enumerate(program.tones)
+            if tone.vag == sample.index
+        ]
+        lines = [
+            f"Sample {sample.index}",
+            "",
+            f"ADPCM:    {_human(len(sample.data))}  ({len(sample.data) // 16} blocks)",
+            f"Decoded:  {sample.frame_count} frames, {sample.duration:.3f} s",
+            f"Rate:     {sample.rate} Hz",
+            "",
+            f"Used by {len(tones)} tone(s):",
+        ]
+        for program_index, slot, tone in tones[:12]:
+            lines.append(
+                f"  program {program_index:3d} tone {slot:2d} — centre note "
+                f"{tone.centre_note}, vol {tone.volume}, pan {tone.pan}, "
+                f"notes {tone.min_note}..{tone.max_note}"
+            )
+        self.text.setPlainText("\n".join(lines))
+
+    # -- playback --------------------------------------------------------
+
+    def play(self) -> None:
+        sample = self._current()
+        if sample is None:
+            return
+        try:
+            from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+            from PySide6.QtMultimedia import QAudioFormat, QAudioSink
+        except ImportError:
+            self.text.setPlainText(
+                "Playback needs QtMultimedia:\n\n    pip install PySide6-Addons\n\n"
+                "Exporting to WAV works without it."
+            )
+            return
+
+        self.stop()
+        fmt = QAudioFormat()
+        fmt.setSampleRate(sample.rate)
+        fmt.setChannelCount(1)
+        fmt.setSampleFormat(QAudioFormat.Int16)
+
+        # Both objects have to outlive this call: the sink pulls from the buffer
+        # on its own thread, and a garbage-collected buffer plays silence.
+        self._buffer = QBuffer(self)
+        self._buffer.setData(QByteArray(sample.decode()))
+        self._buffer.open(QIODevice.ReadOnly)
+        self._sink = QAudioSink(fmt, self)
+        self._sink.start(self._buffer)
+
+    def stop(self) -> None:
+        if self._sink is not None:
+            self._sink.stop()
+            self._sink = None
+        if self._buffer is not None:
+            self._buffer.close()
+            self._buffer = None
+
+
+class HexView(QWidget):
+    """Fallback preview for entries with no dedicated viewer."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.text = QPlainTextEdit(readOnly=True)
+        font = self.text.font()
+        font.setFamily("Menlo")
+        self.text.setFont(font)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(self.text)
+
+    def set_data(self, data: bytes, header: str, limit: int = 4096) -> None:
+        lines = [header, ""]
+        view = data[:limit]
+        for offset in range(0, len(view), 16):
+            chunk = view[offset : offset + 16]
+            hexed = " ".join(f"{b:02x}" for b in chunk).ljust(47)
+            ascii_ = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+            lines.append(f"{offset:08X}  {hexed}  {ascii_}")
+        if len(data) > limit:
+            lines.append(f"... {_human(len(data) - limit)} more")
+        self.text.setPlainText("\n".join(lines))
+
+
+class ViewOptions(QWidget):
+    """Render toggles for the 3D viewport."""
+
+    changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.solid = QCheckBox("Solid", checked=True)
+        self.wireframe = QCheckBox("Wireframe")
+        self.points = QCheckBox("Points")
+        self.textures = QCheckBox("Textures", checked=True)
+        self.game_colors = QCheckBox("Model colours", checked=True)
+        self.game_colors.setToolTip(
+            "Per-triangle colours from the file; off tints each mesh separately"
+        )
+        self.reset = QPushButton("Reset view (F)")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 6, 2)
+        for widget in (self.solid, self.wireframe, self.points, self.textures, self.game_colors):
+            widget.toggled.connect(self.changed)
+            layout.addWidget(widget)
+        layout.addStretch(1)
+        layout.addWidget(self.reset)
+
+
+def _human(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.2f} MB"
