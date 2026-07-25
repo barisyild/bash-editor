@@ -60,8 +60,15 @@ texture pack in the archive and only `.mdl` entries open in the viewport.
 | `0` | Fit the model, keeping the angle |
 | `F` | Reset view |
 
-Toggles for solid / wireframe / points / textures / colours sit under the viewport,
-and individual meshes can be hidden from the **Model** panel.
+Toggles for solid / wireframe / points / textures / vertex colours sit under the
+viewport, and individual meshes can be hidden from the **Model** panel.
+
+**Vertex colours** is worth knowing about. The file stores three colours per triangle
+and they multiply into the texture, so switching them off is the only way to see a
+texture as it sits in the pack — and it separates the surfaces that are genuinely
+textured from the ones that are flat-coloured, which on a character is most of the
+body. Those colours also carry the model's shading, so with them off the viewport
+lights the geometry itself instead.
 
 ### Animation
 

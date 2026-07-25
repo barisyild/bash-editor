@@ -764,15 +764,24 @@ class ViewOptions(QWidget):
         self.wireframe = QCheckBox("Wireframe")
         self.points = QCheckBox("Points")
         self.textures = QCheckBox("Textures", checked=True)
-        self.game_colors = QCheckBox("Model colours", checked=True)
-        self.game_colors.setToolTip(
-            "Per-triangle colours from the file; off tints each mesh separately"
+        self.vertex_colours = QCheckBox("Vertex colours", checked=True)
+        self.vertex_colours.setToolTip(
+            "The three colours the file stores per triangle. They multiply into "
+            "the texture, so switching them off is the only way to see a texture "
+            "as it sits in the pack. They also carry the shading, so the viewport "
+            "lights the model itself once they are off."
         )
         self.reset = QPushButton("Reset view (F)")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 2)
-        for widget in (self.solid, self.wireframe, self.points, self.textures, self.game_colors):
+        for widget in (
+            self.solid,
+            self.wireframe,
+            self.points,
+            self.textures,
+            self.vertex_colours,
+        ):
             widget.toggled.connect(self.changed)
             layout.addWidget(widget)
         layout.addStretch(1)

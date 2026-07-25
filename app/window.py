@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
         self.view3d.show_solid = options.solid.isChecked()
         self.view3d.show_wireframe = options.wireframe.isChecked()
         self.view3d.show_points = options.points.isChecked()
-        self.view3d.set_colour_source(options.game_colors.isChecked())
+        self.view3d.set_vertex_colours(options.vertex_colours.isChecked())
         self.view3d.set_textured(options.textures.isChecked())
         self.view3d.update()
 

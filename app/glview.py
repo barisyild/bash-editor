@@ -251,9 +251,9 @@ class ModelView(QOpenGLWidget):
         self.show_wireframe = False
         self.show_solid = True
         self.show_points = False
-        # The models carry their own per-triangle colours; a flat hue per mesh
-        # is the alternative when you want to read the mesh split instead.
-        self.use_game_colors = True
+        # The file's own per-vertex colours. Switching them off leaves the
+        # neutral 0.5 the PS1 blend ignores, which is what shows a texture raw.
+        self.show_vertex_colours = True
         self.show_textures = True
 
     # -- model ----------------------------------------------------------
@@ -361,14 +361,18 @@ class ModelView(QOpenGLWidget):
             self._pose_pending.append((draw.line_first, draw.line_count))
 
     def set_textured(self, enabled: bool) -> None:
-        if enabled != self.show_textures:
-            self.show_textures = enabled
-            self.update()
-
-    def set_colour_source(self, use_game_colors: bool) -> None:
-        if use_game_colors == self.use_game_colors:
+        """Costs a rebuild: the swatch texel is folded into the vertex buffer."""
+        if enabled == self.show_textures:
             return
-        self.use_game_colors = use_game_colors
+        self.show_textures = enabled
+        self._rebuild()
+        self.update()
+
+    def set_vertex_colours(self, enabled: bool) -> None:
+        """Colours live in the vertex buffer, so this costs a rebuild too."""
+        if enabled == self.show_vertex_colours:
+            return
+        self.show_vertex_colours = enabled
         self._rebuild()
         self.update()
 
@@ -391,7 +395,7 @@ class ModelView(QOpenGLWidget):
             draw.visible = visible
         self.update()
 
-    def _shade(self, mesh, triangles, hue) -> tuple[np.ndarray, np.ndarray]:
+    def _shade(self, mesh, triangles) -> tuple[np.ndarray, np.ndarray]:
         """Per-vertex colours and atlas UVs for one mesh's triangles.
 
         Three cases, in the order the game decides them:
@@ -404,36 +408,49 @@ class ModelView(QOpenGLWidget):
           single texel, with the palette chosen per triangle. There is no atlas
           entry for that combination, so the texel is resolved here and folded
           into the vertex colours, again against the neutral texel.
+
+        With `show_vertex_colours` off, every colour becomes the neutral 0.5 that
+        the PS1 blend leaves alone, so a textured triangle shows its raw texels
+        and an untextured one shows plain grey. That is the only way to see a
+        texture as it sits in the pack: the vertex colour multiplies into it
+        whatever else is switched on.
+
+        The swatch texel is a texture sample like any other, even though it is
+        resolved here rather than in the shader, so `show_textures` governs it
+        too -- otherwise the flat-coloured triangles, which are most of a
+        character, keep their palette colour with both switches off.
         """
         model = self._model
         count = len(triangles)
         colours = np.empty((count * 3, 3), dtype=np.float32)
         uvs = np.empty((count * 3, 2), dtype=np.float32)
         neutral = self._atlas.neutral_uv()
+        # 0.5 is the blend's identity: the shader doubles it back to 1.0.
+        NEUTRAL_COLOUR = 0.5
 
         swatch = None
         if self._pack is not None:
             swatch = next((t for t in self._pack.textures if t.is_swatch), None)
         swatch_cells = swatch.indices() if swatch is not None else None
 
-        plain = not (self.use_game_colors and model is not None and model.colours)
+        tinted = self.show_vertex_colours and model is not None and model.colours
 
         for row, (*_, face) in enumerate(triangles):
             span = slice(row * 3, row * 3 + 3)
-            if plain:
-                colours[span] = hue
-                uvs[span] = neutral
-                continue
 
-            triple = model.face_colours(mesh, face)
-            base = (
-                np.array(triple, dtype=np.float32) / 255.0
-                if triple
-                else np.full((3, 3), 0.75, dtype=np.float32)
-            )
-            sampling = model.face_sampling(mesh, face)
+            if tinted:
+                triple = model.face_colours(mesh, face)
+                base = (
+                    np.array(triple, dtype=np.float32) / 255.0
+                    if triple
+                    else np.full((3, 3), 0.75, dtype=np.float32)
+                )
+            else:
+                base = np.full((3, 3), NEUTRAL_COLOUR, dtype=np.float32)
+
+            sampling = model.face_sampling(mesh, face) if model else None
             kind, index = sampling if sampling else ("none", 0)
-            texel_uvs = model.face_uvs(mesh, face)
+            texel_uvs = model.face_uvs(mesh, face) if model else None
 
             if kind == "texture" and texel_uvs is not None:
                 for k, (u, v) in enumerate(texel_uvs):
@@ -444,6 +461,7 @@ class ModelView(QOpenGLWidget):
             uvs[span] = neutral
             if (
                 kind == "swatch"
+                and self.show_textures
                 and swatch_cells is not None
                 and texel_uvs is not None
                 and index < len(self._pack.palettes)
@@ -490,10 +508,12 @@ class ModelView(QOpenGLWidget):
             corners = positions[idx]  # (n, 3, 3)
             normals = _face_normals(corners)
 
+            # Wireframe keeps a per-mesh hue so the mesh split stays readable
+            # even when the surface itself is drawn from the file's colours.
             hue = np.array(
                 MESH_PALETTE[mesh.index % len(MESH_PALETTE)], dtype=np.float32
             )
-            color_rows, uv_rows = self._shade(mesh, triangles_indexed, hue)
+            color_rows, uv_rows = self._shade(mesh, triangles_indexed)
 
             flat = corners.reshape(-1, 3)
             normal_rows = np.repeat(normals, 3, axis=0)
@@ -731,15 +751,14 @@ class ModelView(QOpenGLWidget):
 
         GL.glBindVertexArray(self._vao)
         if self.show_solid:
-            # The models' own colours already carry baked per-vertex shading --
-            # they range from near black to over 1.0 on the same limb. Lighting
-            # them again crushes the dark side to black, so the viewport only
-            # lights the neutral per-mesh tint.
+            # The file's colours already carry baked per-vertex shading -- they
+            # range from near black to over 1.0 on the same limb -- so lighting
+            # them again crushes the dark side to black. With them switched off
+            # nothing carries that shading any more, and the surface needs the
+            # viewport's own light to read as anything but a flat silhouette.
+            self._program.setUniformValue1f("unlit", 0.0)
             self._program.setUniformValue1f(
-                "unlit", 0.0 if self.use_game_colors else 0.0
-            )
-            self._program.setUniformValue1f(
-                "shade", 0.0 if self.use_game_colors else 1.0
+                "shade", 0.0 if self.show_vertex_colours else 1.0
             )
             self._program.setUniformValue1f(
                 "use_texture", 1.0 if self.show_textures else 0.0
