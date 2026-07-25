@@ -50,6 +50,18 @@ the archive and `crashbash/iso.py` writes or patches the disc image.
 - **Detail smaller than a triangle cannot be baked.** Vertex-colour baking
   loses anything that lives inside a triangle's UV area — that is exactly how
   the eyes went missing. Faces need real texture.
+- **When the atlas does not tile, pack UV islands.** Spyro's atlas happened to
+  cut into whole 64x64 tiles; Pepsiman's did not — 165 of 562 triangles
+  straddled tile boundaries. The general route: weld UV corners, flood the
+  triangles into islands, and shelf-pack every island (a quarter turn allowed)
+  at one uniform scale into the free slots, binary-searching the largest scale
+  that fits — 34 islands went in at 0.31x. A triangle never leaves its island,
+  so nothing straddles anything, and each slot quantises to its own 16
+  colours. Give islands a one-texel replicated border, or nearest sampling
+  bleeds the neighbour in. Known limit: islands are cut by bounding box, not
+  by triangle mask, so background pixels inside the box downscale into the
+  island — Pepsiman's white gloves came out dusky over the atlas's black
+  ground.
 
 ## 3. Geometry
 

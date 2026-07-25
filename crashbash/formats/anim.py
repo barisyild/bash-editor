@@ -83,7 +83,7 @@ def name_hash(name: str) -> int:
 # The words that matched nothing have been dropped rather than left as decoration.
 _CANDIDATE_NAMES = (
     "ATTACK", "BARGE", "BOUNCE", "BREATHE", "DIE", "FALL", "FLY", "HIT", "HOP",
-    "JUMP", "LAUGH", "LOSE", "LOSE_BREATHE", "OPEN", "PUSH", "RUN", "SINK",
+    "JUMP", "LAUGH", "LOSE", "LOSE_BREATHE", "OPEN", "PICKUP", "PUSH", "RUN", "SINK",
     "SLEEP", "SLIDE", "START", "STOP", "SWIM", "SWING", "TAUNT", "TURN", "WALK",
     "WIN", "WIN_BREATHE",
 )

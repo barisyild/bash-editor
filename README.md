@@ -130,12 +130,22 @@ library reads them all back.
 In Blender the morph targets arrive as shape keys with the clips driving them, so a
 character can be retargeted with the tools that already exist there.
 
-Two things do not survive, both knowingly. The PS1 blend is `texel * colour / 128`,
+The trip back exists too: **File → Import model from glTF…** (`Ctrl+Shift+G`) rebuilds
+the entry's meshes, clips and repainted textures from a `.glb` and stages the result
+like any other replacement — previewable in the viewport, written by the ordinary
+disc build. Everything is matched by the names the export wrote, so edit freely but
+keep the names; a mesh you delete keeps its game geometry, a clip you delete freezes
+at rest. One rule matters in Blender: **set the scene to 30 fps before importing the
+export** — Blender resamples animation onto its scene's frame grid, and at its
+default 24 fps the clips come back audibly off-beat and measurably off-pose. At
+30 fps the full round trip — export, Blender save, import — reproduces every pose
+exactly, verified against Blender 5.2.
+
+One thing still does not survive, knowingly. The PS1 blend is `texel * colour / 128`,
 so a colour above 128 brightens the texel; glTF has no such headroom, so `COLOR_0`
-carries the doubled colour clamped to 1. And glTF has no triangle strips, so
-re-importing means re-striping the mesh — which changes the vertex order, and since
-a clip indexes vertices by their position in the pool, the clips have to be rewritten
-with it. Model and animation cannot be imported separately.
+carries the doubled colour clamped to 1, and colours above 128 come back dimmed to it.
+Re-striping on import also reorders the vertex pool, which is why the importer always
+rewrites the clips with the mesh — the two cannot be imported separately, and are not.
 
 ## Command line
 
