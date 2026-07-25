@@ -153,7 +153,12 @@ class BashArchive:
     73 MB DAT never has to be unpacked to browse it.
     """
 
-    def __init__(self, exe_path: str | os.PathLike, dat_path: str | os.PathLike | None = None):
+    def __init__(
+        self,
+        exe_path: str | os.PathLike,
+        dat_path: str | os.PathLike | None = None,
+        version: GameVersion | None = None,
+    ):
         self.exe_path = Path(exe_path)
         if dat_path is None:
             dat_path = find_dat(self.exe_path.parent)
@@ -165,7 +170,10 @@ class BashArchive:
         self.dat_path = Path(dat_path)
 
         self.md5 = md5_of(self.exe_path)
-        version = VERSIONS.get(self.md5)
+        # Patching an entry changes the EXE, and with it the MD5 that names the
+        # build. Pass the version the file started life as to read one back.
+        if version is None:
+            version = VERSIONS.get(self.md5)
         if version is None:
             raise UnknownGameVersion(self.md5)
         self.version = version

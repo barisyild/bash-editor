@@ -16,6 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import build
 from .archive import BashArchive, Entry, UnknownGameVersion, find_exe
 from .formats import anim, gltf, mdl, sfx, tex
 
@@ -134,6 +135,30 @@ def _sibling_pack(archive: BashArchive, entry: Entry):
     return None
 
 
+def cmd_build(archive: BashArchive, args) -> int:
+    """Rebuild the disc tree: repacked DAT, patched EXE, everything else copied."""
+    out = Path(args.output)
+    report = build.build(archive, out)
+    print(f"Wrote a disc tree to {out}")
+    print(f"  {report.entries} entries in {report.groups} groups")
+    print(
+        f"  CRASHBSH.DAT {report.original_dat_size:,} -> {report.dat_size:,} bytes "
+        f"({report.saved:,} saved by packing tight)"
+    )
+    for warning in report.warnings:
+        print(f"  warning: {warning}")
+
+    matched, problems = build.verify(archive, out / archive.exe_path.name)
+    print(f"  verified {matched}/{report.entries} entries byte-identical")
+    for problem in problems[:5]:
+        print(f"  PROBLEM: {problem}")
+
+    config = build.write_iso_config(out, out.parent / f"{out.name}.xml", out.name)
+    print(f"  mkpsxiso project written to {config}")
+    print(f"  master it with: mkpsxiso {config}")
+    return 1 if problems else 0
+
+
 def cmd_png(archive: BashArchive, args) -> int:
     try:
         from PIL import Image  # noqa: PLC0415
@@ -201,6 +226,7 @@ COMMANDS = {
     "extract": cmd_extract,
     "obj": cmd_obj,
     "glb": cmd_glb,
+    "build": cmd_build,
     "png": cmd_png,
     "audio": cmd_audio,
     "wav": cmd_wav,

@@ -128,16 +128,45 @@ with it. Model and animation cannot be imported separately.
 .venv/bin/python -m crashbash.cli png     game/SCUS_945.70 -o out   # needs pillow
 ```
 
+## Building a disc
+
+```bash
+.venv/bin/python -m crashbash.cli build game/SCUS_945.70 -o out/disc
+```
+
+That writes a complete disc tree: `CRASHBSH.DAT` repacked, `SCUS_945.70` patched to
+match, and everything else copied through. It then re-reads its own output with the
+same parser the editor uses and reports how many of the 992 entries came back
+byte-identical, so a build that quietly corrupts the table cannot pass.
+
+The DAT has no directory of its own — the game finds an entry through a table of 992
+`(sector, size)` pairs compiled into the executable, and loads entries a *group* at a
+time through a second table of 130 records. Writing one entry means rewriting both
+tables, and they have to agree exactly. Entries keep their index and groups keep their
+membership, so anything referring to either by number still works.
+
+The output is packed tighter than the disc's own layout, on purpose. The original
+reserves a spare sector for 12 entries and leaves padding inside 8 groups, which makes
+a group's span disagree with the byte count the loader reads with; packing tight makes
+the two identical and saves 24 KB.
+
+Mastering the tree into a disc image is a separate step, because a tree is already
+useful — most emulators run one straight from a folder. The build writes an
+[mkpsxiso](https://github.com/Lameguy64/mkpsxiso) project beside it:
+
+```bash
+mkpsxiso out/disc.xml
+```
+
+`BASHY.` is a raw 2352-byte-sector stream and is marked as such so it is copied
+sector-for-sector rather than padded as data. No licence sector is written — that data
+is Sony's and is not in this repository — so the image runs in emulators but not on
+hardware unless you pass the original disc's licence to mkpsxiso with `-l`.
+
 ## Towards editing
 
-Each kind of edit is blocked on something different, and the honest state differs a
-lot between them. [docs/FORMAT.md](docs/FORMAT.md) §14 lists every open question.
-
-**Repacking the archive.** The file table lives in the EXE, not the DAT, so writing an
-entry means rewriting `SCUS_945.70` as well: the 992 `(sector, size)` pairs at
-`0x3E910`, and the 130-record group table at `0x80050010` that the loader actually
-reads. Both are understood. This is the piece to build first, because nothing else can
-ship without it.
+What is still missing, and why. [docs/FORMAT.md](docs/FORMAT.md) §14 lists every open
+question.
 
 **Geometry.** Writable in principle today — the strip list, the vertex pool, the
 per-triangle UV/texture/colour arrays and the shared tables are all confirmed, so a
@@ -192,6 +221,7 @@ crashbash/            format library, no GUI dependency
   formats/tex.py      texture packs: BGR555 palettes, 4/8-bit images
   formats/sfx.py      sound banks: VAB header, SPU-ADPCM decoder, WAV output
   formats/gltf.py     glTF 2.0 export: geometry, textures, morph animation
+  build.py            repack the DAT, patch the EXE tables, write a disc tree
   cli.py              headless commands
 app/                  PySide6 GUI
   glview.py           OpenGL 3.3 core viewport, orbit camera, textured, animated
