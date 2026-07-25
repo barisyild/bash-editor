@@ -283,6 +283,16 @@ class Animation:
         limit = self.pool().shape[0] - 1
         return np.clip(slots, 0, limit) if limit >= 0 else slots
 
+    def keyframe_pose(self, keyframe: int) -> np.ndarray:
+        """(V, 3) float32 positions of one keyframe, addressed by its offset.
+
+        A frame blends two of these; anything that wants the poses themselves --
+        a glTF morph target, say -- wants this rather than a frame index, since
+        the keyframes are shared between frames and outnumbered by them roughly
+        four to one.
+        """
+        return self.pool()[self._slots(keyframe)].astype(np.float32) * GTE_SCALE_SMALL
+
     def pose_raw(self, frame_index: int) -> np.ndarray:
         """(V, 3) int32 positions in model units, bit-exact with the game.
 

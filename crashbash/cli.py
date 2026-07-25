@@ -4,6 +4,7 @@
     python -m crashbash.cli info   game/SCUS_945.70
     python -m crashbash.cli extract game/SCUS_945.70 -o out
     python -m crashbash.cli obj    game/SCUS_945.70 -o out --filter chars/
+    python -m crashbash.cli glb    game/SCUS_945.70 -o out --filter chars/
     python -m crashbash.cli png    game/SCUS_945.70 -o out --filter interface
     python -m crashbash.cli audio  game/SCUS_945.70 -o out
     python -m crashbash.cli wav    game/SCUS_945.70 -o out --filter arena
@@ -16,7 +17,7 @@ import sys
 from pathlib import Path
 
 from .archive import BashArchive, Entry, UnknownGameVersion, find_exe
-from .formats import mdl, sfx, tex
+from .formats import anim, gltf, mdl, sfx, tex
 
 
 def _open(path: str) -> BashArchive:
@@ -102,6 +103,37 @@ def cmd_obj(archive: BashArchive, args) -> int:
     return 0
 
 
+def cmd_glb(archive: BashArchive, args) -> int:
+    """Export models to glTF 2.0, carrying textures and animation with them."""
+    out = Path(args.output)
+    written = clips = 0
+    for entry in _selected(archive, args.filter, "model"):
+        data = archive.read(entry)
+        model = mdl.read_model(data)
+        if not model.meshes:
+            continue
+        pack = _sibling_pack(archive, entry)
+        animations = anim.read_animations(data, model)
+        destination = out / Path(entry.name).with_suffix(".glb")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(
+            gltf.export_glb(model, pack, animations, name=destination.stem)
+        )
+        written += 1
+        clips += len(animations)
+    print(f"Wrote {written} glTF files to {out}, carrying {clips} animation clips")
+    return 0
+
+
+def _sibling_pack(archive: BashArchive, entry: Entry):
+    """A model's textures live in the .tex file of the same name."""
+    wanted = entry.name.rsplit(".", 1)[0] + ".tex"
+    for candidate in archive:
+        if candidate.name == wanted:
+            return tex.read_pack(archive.read(candidate))
+    return None
+
+
 def cmd_png(archive: BashArchive, args) -> int:
     try:
         from PIL import Image  # noqa: PLC0415
@@ -168,6 +200,7 @@ COMMANDS = {
     "list": cmd_list,
     "extract": cmd_extract,
     "obj": cmd_obj,
+    "glb": cmd_glb,
     "png": cmd_png,
     "audio": cmd_audio,
     "wav": cmd_wav,

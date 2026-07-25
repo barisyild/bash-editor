@@ -83,6 +83,38 @@ and plays it. Whole banks export as WAV. The music sequences are PS1 `SEQp` data
 would need a sequencer driving the bank to play, which this editor does not have —
 export those for a tool that does.
 
+## glTF export
+
+**File → Export model as glTF…** (`Ctrl+G`) writes one `.glb` holding the geometry,
+the textures and every animation clip. It is the route out to a modelling tool, and
+the mapping is exact rather than approximate:
+
+| In the file | In glTF |
+| --- | --- |
+| keyframe | morph target (POSITION deltas) |
+| frame record: keyframe A, keyframe B, 12-bit weight | one sample of a `weights` channel, two entries set |
+| `A + (B − A) · w` | what a morph target already means |
+| per-triangle gouraud colour | `COLOR_0` |
+| per-triangle texture | one primitive per texture, one material each |
+
+Rebuilding every pose as a weighted sum of keyframe poses — what a glTF renderer
+does with that weights channel — reproduces the decoder's own output to within
+0.0039 model units, and that figure is exactly 1/256: one step of the fixed point
+the positions are stored in. The gap is the game's rounding, not a mismatch.
+
+All 373 models with geometry export, carrying 1037 clips, and an independent glTF
+library reads them all back.
+
+In Blender the morph targets arrive as shape keys with the clips driving them, so a
+character can be retargeted with the tools that already exist there.
+
+Two things do not survive, both knowingly. The PS1 blend is `texel * colour / 128`,
+so a colour above 128 brightens the texel; glTF has no such headroom, so `COLOR_0`
+carries the doubled colour clamped to 1. And glTF has no triangle strips, so
+re-importing means re-striping the mesh — which changes the vertex order, and since
+a clip indexes vertices by their position in the pool, the clips have to be rewritten
+with it. Model and animation cannot be imported separately.
+
 ## Command line
 
 ```bash
@@ -90,6 +122,7 @@ export those for a tool that does.
 .venv/bin/python -m crashbash.cli list    game/SCUS_945.70 -f chars/
 .venv/bin/python -m crashbash.cli extract game/SCUS_945.70 -o out
 .venv/bin/python -m crashbash.cli obj     game/SCUS_945.70 -o out -f chars/
+.venv/bin/python -m crashbash.cli glb     game/SCUS_945.70 -o out -f chars/
 .venv/bin/python -m crashbash.cli audio   game/SCUS_945.70 -o out   # VB/VH/SEQ
 .venv/bin/python -m crashbash.cli wav     game/SCUS_945.70 -o out   # decoded WAV
 .venv/bin/python -m crashbash.cli png     game/SCUS_945.70 -o out   # needs pillow
@@ -158,6 +191,7 @@ crashbash/            format library, no GUI dependency
   formats/anim.py     animation clips: keyframes, blending, posed vertices
   formats/tex.py      texture packs: BGR555 palettes, 4/8-bit images
   formats/sfx.py      sound banks: VAB header, SPU-ADPCM decoder, WAV output
+  formats/gltf.py     glTF 2.0 export: geometry, textures, morph animation
   cli.py              headless commands
 app/                  PySide6 GUI
   glview.py           OpenGL 3.3 core viewport, orbit camera, textured, animated

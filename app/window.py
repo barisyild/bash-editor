@@ -25,7 +25,7 @@ from crashbash.archive import (
     find_dat,
     find_exe,
 )
-from crashbash.formats import anim, mdl, sfx, tex
+from crashbash.formats import anim, gltf, mdl, sfx, tex
 
 from .glview import ModelView
 from .panels import (
@@ -145,6 +145,15 @@ class MainWindow(QMainWindow):
         self.export_obj_action.setEnabled(False)
         file_menu.addAction(self.export_obj_action)
 
+        self.export_glb_action = QAction("Export model as &glTF…", self)
+        self.export_glb_action.setShortcut("Ctrl+G")
+        self.export_glb_action.setToolTip(
+            "Geometry, textures and animation in one .glb, ready for Blender"
+        )
+        self.export_glb_action.triggered.connect(self.export_glb)
+        self.export_glb_action.setEnabled(False)
+        file_menu.addAction(self.export_glb_action)
+
         self.export_png_action = QAction("Export textures as &PNG…", self)
         self.export_png_action.triggered.connect(self.export_textures)
         self.export_png_action.setEnabled(False)
@@ -239,6 +248,7 @@ class MainWindow(QMainWindow):
         self.animations = []
         self.anim_panel.set_animations([])
         self.export_obj_action.setEnabled(False)
+        self.export_glb_action.setEnabled(False)
         self.export_png_action.setEnabled(False)
         self.export_raw_action.setEnabled(True)
 
@@ -256,6 +266,7 @@ class MainWindow(QMainWindow):
             self.anim_panel.set_animations(self.animations)
             self.pages.setCurrentIndex(0)
             self.export_obj_action.setEnabled(bool(self.model.meshes))
+            self.export_glb_action.setEnabled(bool(self.model.meshes))
         elif entry.group == "texture":
             self.mesh_panel.set_model(None, header)
             self.pack = tex.read_pack(data)
@@ -325,6 +336,27 @@ class MainWindow(QMainWindow):
         Path(path).write_text(self.model.to_obj(), encoding="utf-8")
         self.settings.setValue("last_export", str(Path(path).parent))
         self.statusBar().showMessage(f"Wrote {path}")
+
+    def export_glb(self) -> None:
+        """Everything about the model in one file: geometry, textures, clips."""
+        if self.model is None or self.entry is None:
+            return
+        default = Path(self.settings.value("last_export", str(Path.home())))
+        stem = Path(self.entry.name).stem
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export glTF", str(default / f"{stem}.glb"), "glTF binary (*.glb)"
+        )
+        if not path:
+            return
+        pack = self._sibling_texture_pack(self.entry)
+        Path(path).write_bytes(
+            gltf.export_glb(self.model, pack, self.animations, name=stem)
+        )
+        self.settings.setValue("last_export", str(Path(path).parent))
+        self.statusBar().showMessage(
+            f"Wrote {path} — {len(self.model.meshes)} meshes, "
+            f"{len(self.animations)} clips"
+        )
 
     def export_textures(self) -> None:
         if self.pack is None or self.entry is None:
