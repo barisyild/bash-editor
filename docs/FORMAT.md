@@ -975,6 +975,12 @@ stop colliding — the character walked straight through them — and carrying t
 mesh's own block through the same swap, everything else identical, brought the collision
 back in play. **confirmed** for characters; tested on the NTSC-U crate minigame.
 
+The reading extends to the characters' second meshes. A crate character's mesh 1 is its
+**spin body** — no clip drives it; the game swaps the display to it and rotates the entity in
+code — and its record widens the radius from Crash's standing 128 to **307** with `unk` rising
+from 64 to 1360: the spin attack's larger interaction volume. Replacing a character therefore
+means replacing both meshes, each under the original's own block.
+
 When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
 5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
 
