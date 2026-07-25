@@ -955,7 +955,7 @@ The field is live and is the target of the **0x2000** id namespace:
 
 The `bnez` guard is exactly the 5213-zero / 777-non-zero split measured in the corpus.
 **confirmed** that the field is a live self-relative pointer; the record contents are
-?unknown?.
+decoded below for playable characters and remain ?unknown? for the rest of the family.
 
 **The records are gameplay volumes — for a character, its collision body.** Decoded as
 8 × i16, every crate-minigame character carries exactly one record of the shape
@@ -969,10 +969,11 @@ where field 4 is the mesh's own standing height to the unit in **8 of 8** crate 
 fields 0–2 a small centre offset, and field 7 carries the 0x4000 bit in 81 % of all records
 corpus-wide. Field 4 matches the mesh height in only 41 % of all 1,634 records measured, so
 the block is a family of purpose-dependent volumes rather than one fixed meaning — but for a
-playable character it is the collision cylinder, and the proof is behavioural: **replacing
-the crate character with a mesh whose `+0x2C` was zeroed made crates stop colliding — the
-character walked straight through them.** Carrying the replaced mesh's own block through
-(valid when the stand-in is scaled to the same height) is the fix.
+playable character it is the collision cylinder, and the proof is behavioural **in both
+directions**: replacing the crate character with a mesh whose `+0x2C` was zeroed made crates
+stop colliding — the character walked straight through them — and carrying the replaced
+mesh's own block through the same swap, everything else identical, brought the collision
+back in play. **confirmed** for characters; tested on the NTSC-U crate minigame.
 
 When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
 5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
