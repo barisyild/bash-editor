@@ -18,6 +18,14 @@ re-derived here against the game's own executable; several readings that made ea
 exports come out scrambled are corrected, and the whole format is written up in
 [docs/FORMAT.md](docs/FORMAT.md).
 
+**This project is vibecoded.** All of it — the readers and writers, the format
+specification, the disc tooling, the GUI — was written by Claude (Claude Code) in
+conversation, with a human directing, testing every build in the game, and reporting
+what actually happened on screen. The method wasn't guesswork, though: format claims
+were measured against all 992 files or the executable's own code before being written
+down, and the in-game tests caught what no offline check could — which is how the
+collision volumes and the spin-mesh swap were found.
+
 ![Bash Editor](docs/screenshot.png)
 
 ## Running
