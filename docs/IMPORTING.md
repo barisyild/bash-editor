@@ -85,8 +85,13 @@ crashed while one honouring it booted.
 2. `install_mesh` / `transplant_mesh` — new blocks land inside the span;
    colour and UV tables are appended as verbatim copy + new entries so every
    other mesh's indices keep meaning what they meant; `model+0x08` moves to
-   the new end; the mesh's `+0x2C` attachment pointer is zeroed, because its
-   records describe the vertices of the mesh that left (§8.4).
+   the new end; the mesh's `+0x2C` attachment block needs care (§8.4): for a
+   character it is the **collision volume** — a standing cylinder of the
+   character's radius and height, read live by gameplay — and zeroing it let
+   the crate game's character walk straight through the crates, which is how
+   its meaning was found. Pass the replaced mesh's own block through the
+   transplant when the stand-in is scaled to the same height; zero only when
+   no valid volume exists.
 3. `write_clips` — the blobs go back on, after the boundary.
 
 ## 5. Animation
