@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
         self.view3d.show_points = options.points.isChecked()
         self.view3d.set_vertex_colours(options.vertex_colours.isChecked())
         self.view3d.set_textured(options.textures.isChecked())
+        self.view3d.set_texture_animation(options.texture_animation.isChecked())
         self.view3d.update()
 
     # -- export ---------------------------------------------------------

@@ -507,10 +507,13 @@ class TextureView(QWidget):
         super().__init__(parent)
         self._pack: tex.TexturePack | None = None
         self._zoom = 3
+        self._frame = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance)
 
         self.list = QListWidget()
         self.list.setMaximumWidth(230)
-        self.list.currentRowChanged.connect(self._show)
+        self.list.currentRowChanged.connect(self._on_row)
 
         self.canvas = QLabel(alignment=Qt.AlignCenter)
         self.canvas.setMinimumSize(200, 200)
@@ -522,12 +525,27 @@ class TextureView(QWidget):
         self.zoom_slider.valueChanged.connect(self._on_zoom)
         self.info = QLabel("—")
 
+        self.play_button = QPushButton("Play")
+        self.play_button.setCheckable(True)
+        self.play_button.toggled.connect(self._on_play)
+        self.frame_slider = QSlider(Qt.Horizontal, minimum=0, maximum=0)
+        self.frame_slider.valueChanged.connect(self._on_frame)
+        self.anim_label = QLabel("—")
+        self.anim_row = QWidget()
+        anim_layout = QHBoxLayout(self.anim_row)
+        anim_layout.setContentsMargins(0, 0, 0, 0)
+        anim_layout.addWidget(self.play_button)
+        anim_layout.addWidget(self.frame_slider, 1)
+        anim_layout.addWidget(self.anim_label)
+        self.anim_row.hide()
+
         right = QVBoxLayout()
         right.addWidget(scroll, 1)
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("Zoom"))
         zoom_row.addWidget(self.zoom_slider, 1)
         right.addLayout(zoom_row)
+        right.addWidget(self.anim_row)
         right.addWidget(self.info)
 
         layout = QHBoxLayout(self)
@@ -537,16 +555,28 @@ class TextureView(QWidget):
 
     def set_pack(self, pack: tex.TexturePack | None) -> None:
         self._pack = pack
+        self.play_button.setChecked(False)
         self.list.clear()
         self.canvas.clear()
         if pack is None:
             self.info.setText("—")
             return
+        animated = pack.animated()
+        scrolling = {s.texture: s for s in pack.scrollers}
         for texture in pack.textures:
-            suffix = "" if texture.palette_ok else "  (palette?)"
+            marks = ""
+            if texture.index in animated:
+                marks += f"  ▶ {len(animated[texture.index].frames)}"
+            if texture.index in scrolling:
+                marks += "  ⇄"
+            if not texture.palette_ok:
+                marks += "  (palette?)"
             self.list.addItem(f"{texture.index:03d}  {texture.width}×{texture.height}"
-                              f"  {texture.bit_depth}bpp{suffix}")
+                              f"  {texture.bit_depth}bpp{marks}")
         note = f"{len(pack.textures)} textures, {len(pack.palettes)} palettes"
+        if pack.flipbooks or pack.scrollers:
+            note += (f", {len(pack.flipbooks)} animated, "
+                     f"{len(pack.scrollers)} scrolling")
         if pack.warnings:
             note += f" — {pack.warnings[0]}"
         self.info.setText(note)
@@ -565,10 +595,54 @@ class TextureView(QWidget):
         self._zoom = value
         self._show(self.list.currentRow())
 
+    def _flipbook(self, row: int) -> tex.Flipbook | None:
+        if self._pack is None:
+            return None
+        return self._pack.animated().get(row)
+
+    def _on_row(self, row: int) -> None:
+        """A texture with frames of its own gets a transport, the rest do not."""
+        book = self._flipbook(row)
+        self._frame = 0
+        self.anim_row.setVisible(book is not None)
+        if book is None:
+            self.play_button.setChecked(False)
+        else:
+            self.frame_slider.blockSignals(True)
+            self.frame_slider.setMaximum(max(len(book.frames) - 1, 0))
+            self.frame_slider.setValue(0)
+            self.frame_slider.blockSignals(False)
+            self.anim_label.setText(f"{len(book.frames)} frames, {book.fps:.1f} fps")
+            if self.play_button.isChecked():
+                self._timer.start(max(int(1000 / max(book.fps, 0.1)), 16))
+        self._show(row)
+
+    def _on_play(self, playing: bool) -> None:
+        book = self._flipbook(self.list.currentRow())
+        self.play_button.setText("Pause" if playing else "Play")
+        if playing and book is not None:
+            self._timer.start(max(int(1000 / max(book.fps, 0.1)), 16))
+        else:
+            self._timer.stop()
+
+    def _advance(self) -> None:
+        book = self._flipbook(self.list.currentRow())
+        if book is None or not book.frames:
+            self._timer.stop()
+            return
+        self.frame_slider.setValue((self._frame + 1) % len(book.frames))
+
+    def _on_frame(self, value: int) -> None:
+        self._frame = value
+        self._show(self.list.currentRow())
+
     def _show(self, row: int) -> None:
         if self._pack is None or not (0 <= row < len(self._pack.textures)):
             return
         texture = self._pack.textures[row]
+        book = self._flipbook(row)
+        if book is not None:
+            texture = self._pack.frame(book, self._frame)
         pixmap = rgba_to_pixmap(texture.to_rgba(self._pack.palettes))
         scaled = pixmap.scaled(
             QSize(pixmap.width() * self._zoom, pixmap.height() * self._zoom),
@@ -577,11 +651,17 @@ class TextureView(QWidget):
         )
         self.canvas.setPixmap(scaled)
         self.canvas.resize(scaled.size())
-        self.info.setText(
+        note = (
             f"#{texture.index}  {texture.width}×{texture.height}  "
             f"{texture.bit_depth}bpp  palette {texture.palette_index}  "
             f"flags 0x{texture.flags:X}  ({len(self._pack.palettes)} palettes in pack)"
         )
+        if book is not None:
+            note += f"  —  frame {self._frame + 1}/{len(book.frames)}"
+        for scroller in self._pack.scrollers:
+            if scroller.texture == row:
+                note += f"  —  scrolls {scroller.texels_per_second:+.1f} texels/s"
+        self.info.setText(note)
 
 
 class AudioView(QWidget):
@@ -790,6 +870,11 @@ class ViewOptions(QWidget):
             "as it sits in the pack. They also carry the shading, so the viewport "
             "lights the model itself once they are off."
         )
+        self.texture_animation = QCheckBox("Animate textures", checked=True)
+        self.texture_animation.setToolTip(
+            "Play the flipbooks the texture pack carries. They run on their own "
+            "clock, independently of the model's animation, as they do in game."
+        )
         self.reset = QPushButton("Reset view (F)")
 
         layout = QHBoxLayout(self)
@@ -800,6 +885,7 @@ class ViewOptions(QWidget):
             self.points,
             self.textures,
             self.vertex_colours,
+            self.texture_animation,
         ):
             widget.toggled.connect(self.changed)
             layout.addWidget(widget)

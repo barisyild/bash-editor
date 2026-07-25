@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QSurfaceFormat, QVector3D
 from PySide6.QtOpenGL import QOpenGLShader, QOpenGLShaderProgram
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
@@ -15,6 +15,7 @@ from OpenGL import GL
 
 from crashbash.formats.anim import Animation
 from crashbash.formats.mdl import Mesh, Model
+from crashbash.formats.tex import TICKS_PER_SECOND
 
 from .atlas import Atlas, build as build_atlas
 
@@ -238,6 +239,14 @@ class ModelView(QOpenGLWidget):
         self._atlas: Atlas = build_atlas(None)
         self._atlas_texture = 0
         self._atlas_dirty = True
+        # Texture animation runs on its own clock: a flipbook keeps going while
+        # the model is paused, because on the console the two are unrelated.
+        self._texture_tick = 0.0
+        self._texture_patches_pending = False
+        self.show_texture_animation = True
+        self._texture_timer = QTimer(self)
+        self._texture_timer.setInterval(round(1000.0 / TICKS_PER_SECOND))
+        self._texture_timer.timeout.connect(self._advance_textures)
 
         self._center = np.zeros(3, dtype=np.float32)
         self._radius = 1.0
@@ -267,9 +276,38 @@ class ModelView(QOpenGLWidget):
         self._frame = 0
         self._atlas = build_atlas(pack)
         self._atlas_dirty = True
+        self._texture_tick = 0.0
+        self._texture_patches_pending = False
+        self._sync_texture_timer()
         self._rebuild()
         self.reset_view()
         self.update()
+
+    def has_texture_animation(self) -> bool:
+        return bool(self._pack is not None and self._pack.flipbooks)
+
+    def set_texture_tick(self, tick: float) -> None:
+        """Advance the flipbooks to `tick`, in game ticks at 30 Hz."""
+        if not self.has_texture_animation() or tick == self._texture_tick:
+            return
+        self._texture_tick = tick
+        self._texture_patches_pending = True
+        self.update()
+
+    def set_texture_animation(self, enabled: bool) -> None:
+        self.show_texture_animation = enabled
+        self._sync_texture_timer()
+        if not enabled:
+            self.set_texture_tick(0.0)
+
+    def _sync_texture_timer(self) -> None:
+        if self.show_texture_animation and self.has_texture_animation():
+            self._texture_timer.start()
+        else:
+            self._texture_timer.stop()
+
+    def _advance_textures(self) -> None:
+        self.set_texture_tick(self._texture_tick + 1.0)
 
     def mesh_visibility(self) -> list[bool]:
         return [d.visible for d in self._draws]
@@ -716,6 +754,24 @@ class ModelView(QOpenGLWidget):
             GL.glTexParameteri(GL.GL_TEXTURE_2D, name, value)
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         self._atlas_dirty = False
+        self._texture_patches_pending = self.has_texture_animation()
+
+    def _upload_texture_patches(self) -> None:
+        """Re-upload just the rectangles the flipbooks own."""
+        patches = self._atlas.flipbook_patches(self._pack, self._texture_tick)
+        if patches:
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._atlas_texture)
+            GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
+            for (x, y, w, h), image in patches:
+                if image.shape[0] != h or image.shape[1] != w:
+                    continue
+                GL.glTexSubImage2D(
+                    GL.GL_TEXTURE_2D, 0, x, y, w, h,
+                    GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                    np.ascontiguousarray(image).tobytes(),
+                )
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+        self._texture_patches_pending = False
 
     def paintGL(self) -> None:
         _drain_gl_errors()
@@ -724,6 +780,8 @@ class ModelView(QOpenGLWidget):
             return
         if self._atlas_dirty:
             self._upload_atlas()
+        if self._texture_patches_pending:
+            self._upload_texture_patches()
         if self._dirty:
             self._upload()
         elif self._pose_pending:

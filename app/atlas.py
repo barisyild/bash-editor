@@ -37,6 +37,31 @@ class Atlas:
         w, h = self.size
         return ((x + 0.5) / w, (y + 0.5) / h)
 
+    def flipbook_patches(
+        self, pack: tex.TexturePack | None, tick: float
+    ) -> list[tuple[tuple[int, int, int, int], np.ndarray]]:
+        """Where each animated texture sits, and how it looks at this tick.
+
+        Every frame is the same size as the texture it replaces, so a flipbook
+        never disturbs the packing -- the viewport re-uploads the rectangle in
+        place rather than rebuilding the atlas.
+        """
+        if pack is None:
+            return []
+        patches = []
+        for book in pack.flipbooks:
+            if not (0 <= book.texture < len(self.rects)) or not book.frames:
+                continue
+            rect = self.rects[book.texture]
+            texture = pack.frame(book, book.frame_at(tick))
+            if texture.is_swatch:
+                continue
+            try:
+                patches.append((rect, texture.to_rgba(pack.palettes)))
+            except (ValueError, IndexError):
+                continue
+        return patches
+
 
 def build(pack: tex.TexturePack | None) -> Atlas:
     """Shelf-pack every texture into a square-ish RGBA atlas.

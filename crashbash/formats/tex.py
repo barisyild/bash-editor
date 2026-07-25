@@ -6,17 +6,39 @@ entry), so a 4-bit texture is four pixels wide per unit and an 8-bit one is two.
 
 Colours are PS1 BGR555. Following the hardware, a zero entry means "transparent"
 rather than "black", which is why the decoder emits RGBA.
+
+After the textures some packs carry an animation block, holding the two ways a
+surface moves without the model moving: a flipbook swaps a texture's pixels for
+one of a run of stored frames, and a scroller slides a texture under its own UVs.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import struct
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from ..binreader import Reader
 
 HEADER_SIZE = 0x24
+
+# Header fields. The first two are self-relative in the usual way of this format
+# -- `target = field_offset + value` -- but the animation block's is a plain
+# offset from the start of the file. Measured across all 400 packs: the first two
+# hold for every one of them, and the third lands exactly on the end of the
+# palette and texture walk in all 86 packs that have a block.
+PTR_TEXTURES = 0x0C
+PTR_PALETTES = 0x10
+PTR_ANIMATION = 0x18
+
+FLIPBOOK_RECORD = 0x14
+SCROLLER_RECORD = 0x10
+
+# Both cursors advance by their record's delta once per tick, in 24.8 fixed
+# point, and the game runs at 30 Hz.
+FIXED_ONE = 256
+TICKS_PER_SECOND = 30
 
 
 def convert16(color: int) -> tuple[int, int, int, int]:
@@ -126,15 +148,74 @@ class Texture:
 
 
 @dataclass
+class Flipbook:
+    """A texture whose pixels are swapped for one of a run of stored frames.
+
+    The frames are each exactly as long as the texture's own pixel data, so
+    playing one is a straight substitution: the size, the bit depth and the
+    palette all stay as they are. That equality holds for all 136 flipbooks in
+    the game, which is what identifies these blobs as frames rather than
+    anything else stored after the textures.
+    """
+
+    texture: int
+    delta: int  # frames per tick, 24.8 fixed point
+    frames: list[bytes] = field(default_factory=list)
+
+    @property
+    def fps(self) -> float:
+        return self.delta / FIXED_ONE * TICKS_PER_SECOND
+
+    def frame_at(self, tick: float) -> int:
+        if not self.frames:
+            return 0
+        return int(tick * self.delta / FIXED_ONE) % len(self.frames)
+
+
+@dataclass
+class Scroller:
+    """A texture that slides under its own UVs, so the surface appears to flow.
+
+    `delta` is texels per tick in 24.8 fixed point. Which axis it moves along is
+    not settled: the model's UVs are untouched and no record in the game sets
+    more than one component, so the data alone cannot say. Measuring the images
+    argues for the horizontal one -- a scrolling texture's left and right edges
+    join up about three times as smoothly as its top and bottom, and more than
+    twice as smoothly as an average texture's -- which is also the axis a PS1
+    texture window wraps most naturally.
+    """
+
+    texture: int
+    delta: int
+
+    @property
+    def texels_per_second(self) -> float:
+        return self.delta / FIXED_ONE * TICKS_PER_SECOND
+
+
+@dataclass
 class TexturePack:
     magic: int = 0
     size: int = 0
     palettes: list[np.ndarray] = field(default_factory=list)
     textures: list[Texture] = field(default_factory=list)
+    flipbooks: list[Flipbook] = field(default_factory=list)
+    scrollers: list[Scroller] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def image(self, index: int) -> np.ndarray:
         return self.textures[index].to_rgba(self.palettes)
+
+    def animated(self) -> dict[int, Flipbook]:
+        """Flipbooks by the texture index they drive."""
+        return {book.texture: book for book in self.flipbooks}
+
+    def frame(self, book: Flipbook, index: int) -> Texture:
+        """The flipbook's texture as it looks on one of its frames."""
+        base = self.textures[book.texture]
+        if not book.frames:
+            return base
+        return replace(base, data=book.frames[index % len(book.frames)])
 
 
 def read_pack(data: bytes | Reader) -> TexturePack:
@@ -199,4 +280,72 @@ def read_pack(data: bytes | Reader) -> TexturePack:
             pack.warnings.append(f"texture {i}: palette {tex.palette_index} out of range")
         pack.textures.append(tex)
 
+    _read_animation(reader.data, pack)
     return pack
+
+
+def _read_animation(data: bytes, pack: TexturePack) -> None:
+    """Read the block the pack header points at, when it has one.
+
+    The block is two tables, each a self-relative pointer in the header followed
+    by a count and then its records. Either may be absent, and 314 of the game's
+    400 packs have no block at all.
+    """
+    if len(data) < PTR_ANIMATION + 4:
+        return
+    base = struct.unpack_from("<I", data, PTR_ANIMATION)[0]
+    if not base or base >= len(data):
+        return
+    block = data[base:]
+
+    try:
+        flip_ptr, scroll_ptr = struct.unpack_from("<2I", block, 0)
+        if flip_ptr:
+            pack.flipbooks = _read_flipbooks(block, flip_ptr, pack)
+        if scroll_ptr:
+            pack.scrollers = _read_scrollers(block, 4 + scroll_ptr, pack)
+    except struct.error:
+        pack.warnings.append("animation block is truncated")
+
+
+def _read_flipbooks(block: bytes, at: int, pack: TexturePack) -> list[Flipbook]:
+    count = struct.unpack_from("<I", block, at)[0]
+    books: list[Flipbook] = []
+    for i in range(count):
+        record = at + 4 + i * FLIPBOOK_RECORD
+        # The fifth field is the runtime cursor, stored zeroed in every record.
+        frames_ptr, index, frames, delta, _cursor = struct.unpack_from(
+            "<I4i", block, record
+        )
+        if not 0 <= index < len(pack.textures):
+            pack.warnings.append(f"flipbook {i}: texture {index} out of range")
+            continue
+        texture = pack.textures[index]
+        length = texture.vram_width * texture.height * 2
+        table = record + frames_ptr
+        book = Flipbook(texture=index, delta=delta)
+        for frame in range(frames):
+            slot = table + frame * 4
+            start = slot + struct.unpack_from("<i", block, slot)[0]
+            if start + length > len(block):
+                pack.warnings.append(f"flipbook {i}: frame {frame} runs past the block")
+                break
+            book.frames.append(block[start : start + length])
+        books.append(book)
+    return books
+
+
+def _read_scrollers(block: bytes, at: int, pack: TexturePack) -> list[Scroller]:
+    count = struct.unpack_from("<I", block, at)[0]
+    scrollers: list[Scroller] = []
+    for i in range(count):
+        # The two trailing fields are the runtime cursor and a spare, and both
+        # are zero in all 108 records the game ships.
+        index, delta, _cursor, _spare = struct.unpack_from(
+            "<4i", block, at + 4 + i * SCROLLER_RECORD
+        )
+        if not 0 <= index < len(pack.textures):
+            pack.warnings.append(f"scroller {i}: texture {index} out of range")
+            continue
+        scrollers.append(Scroller(texture=index, delta=delta))
+    return scrollers
