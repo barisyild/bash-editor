@@ -26,7 +26,7 @@ from crashbash.archive import (
     find_exe,
 )
 from crashbash import build, iso
-from crashbash.formats import anim, gltf, mdl, sfx, tex
+from crashbash.formats import anim, gltf, gltfimport, mdl, sfx, tex
 
 from .glview import ModelView
 from .panels import (
@@ -159,6 +159,18 @@ class MainWindow(QMainWindow):
         self.export_glb_action.setEnabled(False)
         file_menu.addAction(self.export_glb_action)
 
+        self.import_glb_action = QAction("&Import model from glTF…", self)
+        self.import_glb_action.setShortcut("Ctrl+Shift+G")
+        self.import_glb_action.setToolTip(
+            "The return trip: rebuild this entry's meshes, clips and repainted "
+            "textures from a .glb that was exported here and edited elsewhere. "
+            "In Blender, set the scene to 30 fps before importing the export, "
+            "or the clips come back resampled onto the wrong tick grid."
+        )
+        self.import_glb_action.triggered.connect(self.import_glb)
+        self.import_glb_action.setEnabled(False)
+        file_menu.addAction(self.import_glb_action)
+
         self.export_png_action = QAction("Export textures as &PNG…", self)
         self.export_png_action.triggered.connect(self.export_textures)
         self.export_png_action.setEnabled(False)
@@ -283,6 +295,7 @@ class MainWindow(QMainWindow):
         self.anim_panel.set_animations([])
         self.export_obj_action.setEnabled(False)
         self.export_glb_action.setEnabled(False)
+        self.import_glb_action.setEnabled(False)
         self.export_png_action.setEnabled(False)
         self.export_raw_action.setEnabled(True)
         self._sync_edit_actions()
@@ -307,6 +320,7 @@ class MainWindow(QMainWindow):
             self.pages.setCurrentIndex(0)
             self.export_obj_action.setEnabled(bool(self.model.meshes))
             self.export_glb_action.setEnabled(bool(self.model.meshes))
+            self.import_glb_action.setEnabled(bool(self.model.meshes))
         elif entry.group == "texture":
             self.mesh_panel.set_model(None, header)
             self.pack = tex.read_pack(data)
@@ -325,15 +339,23 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(header)
 
-    def _sibling_texture_pack(self, entry: Entry) -> tex.TexturePack | None:
-        """A model's textures live in the .tex file of the same name."""
+    def _sibling_texture_entry(self, entry: Entry) -> Entry | None:
         if self.archive is None:
             return None
         wanted = entry.name.rsplit(".", 1)[0] + ".tex"
-        for candidate in self.archive:
-            if candidate.name == wanted:
-                return tex.read_pack(self.archive.read(candidate))
-        return None
+        return next((c for c in self.archive if c.name == wanted), None)
+
+    def _effective_bytes(self, entry: Entry) -> bytes:
+        """What the entry holds right now: the staged replacement, else the disc."""
+        staged = self.replacements.get(entry.index)
+        return staged if staged is not None else self.archive.read(entry)
+
+    def _sibling_texture_pack(self, entry: Entry) -> tex.TexturePack | None:
+        """A model's textures live in the .tex file of the same name."""
+        sibling = self._sibling_texture_entry(entry)
+        if sibling is None:
+            return None
+        return tex.read_pack(self._effective_bytes(sibling))
 
     @guarded
     def _set_animation(self, animation: anim.Animation | None) -> None:
@@ -405,6 +427,78 @@ class MainWindow(QMainWindow):
             f"{len(self.replacements)} pending"
         )
         self.open_entry(self.entry)
+
+    def import_glb(self) -> None:
+        """Rebuild the selected model from a .glb and stage the result."""
+        if self.entry is None or self.model is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Import {Path(self.entry.name).name} from glTF",
+            self.settings.value("last_export", str(Path.home())),
+            "glTF binary (*.glb)",
+        )
+        if not path:
+            return
+        self.settings.setValue("last_export", str(Path(path).parent))
+        self._import_glb_path(Path(path))
+
+    def _import_glb_path(self, path: Path) -> None:
+        entry = self.entry
+        sibling = self._sibling_texture_entry(entry)
+        try:
+            report = gltfimport.import_glb(
+                path,
+                self._effective_bytes(entry),
+                self._effective_bytes(sibling) if sibling else None,
+            )
+        except (ValueError, KeyError, OSError) as exc:
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                f"Nothing was staged.\n\n{exc}\n\n"
+                "The file must come from this editor's own glTF export — mesh "
+                "names carry the index the importer matches on. To edit one "
+                "mesh of a many-mesh model, delete the others in the modelling "
+                "tool before exporting; only the meshes present are rebuilt.",
+            )
+            return
+
+        self.replacements[entry.index] = report.model
+        self.tree.set_replaced(entry.index, True)
+        lines = [
+            f"Meshes rebuilt: {', '.join(map(str, report.meshes_rebuilt))}",
+            f"Clips rebuilt from the file: {len(report.clips_rebuilt)}"
+            + (f" ({', '.join(report.clips_rebuilt)})" if report.clips_rebuilt else ""),
+        ]
+        if report.clips_static:
+            lines.append(
+                f"Clips with no animation in the file, frozen at rest: "
+                f"{', '.join(report.clips_static)}"
+            )
+        if report.clips_copied:
+            lines.append(f"Clips of untouched meshes, kept exactly: "
+                         f"{len(report.clips_copied)}")
+        if report.pack is not None and sibling is not None:
+            self.replacements[sibling.index] = report.pack
+            self.tree.set_replaced(sibling.index, True)
+            lines.append(
+                f"Repainted textures written into their slots: "
+                f"{', '.join(map(str, report.textures_written))}"
+            )
+            if report.palettes_shared:
+                lines.append(
+                    "Slots matched to an existing shared palette rather than "
+                    f"repainting it: {', '.join(map(str, report.palettes_shared))}"
+                )
+        elif report.textures_unchanged:
+            lines.append("Textures unchanged; the pack is not touched.")
+        lines.append("")
+        lines.append("Staged, not written: preview it here, then File → Build disc…")
+
+        self._sync_edit_actions()
+        self.open_entry(entry)
+        QMessageBox.information(self, APP_NAME, "\n".join(lines))
 
     def revert_entry(self) -> None:
         if self.entry is None or self.entry.index not in self.replacements:

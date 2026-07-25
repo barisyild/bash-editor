@@ -116,6 +116,15 @@ crashed while one honouring it booted.
   results, pose in Blender instead and read the shape keys back with
   `gltfread.py`, which matches vertices by rest position so re-ordering tools
   cannot break it.
+- **Set the Blender scene to 30 fps before importing the export.** Blender
+  resamples animation onto its scene's frame grid and its default is 24 fps: a
+  clip taken in at 24 and saved comes back with poses up to 43 raw units off,
+  and changing the fps after the import re-times the keys and makes it worse.
+  With the scene at 30 fps from the start, a full session — our export,
+  Blender import, Blender save, our import — reproduces every pose to
+  **0.00 raw units**, with mesh, material and clip names all surviving. That
+  session is the editor's own round trip (File → Export model as glTF…, edit,
+  File → Import model from glTF…), verified against Blender 5.2.
 
 ## 6. Disc and verification
 
