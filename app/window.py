@@ -25,7 +25,7 @@ from crashbash.archive import (
     find_dat,
     find_exe,
 )
-from crashbash import build
+from crashbash import build, iso
 from crashbash.formats import anim, gltf, mdl, sfx, tex
 
 from .glview import ModelView
@@ -426,14 +426,46 @@ class MainWindow(QMainWindow):
         )
 
     def build_disc(self) -> None:
-        """Repack the archive with whatever is staged, then read it back."""
+        """Repack the archive with whatever is staged, read it back, write a disc."""
         if self.archive is None:
             QMessageBox.information(self, APP_NAME, "Open a game EXE first.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Build the disc tree into…")
-        if not folder:
+        default = Path(self.settings.value("last_build", str(Path.home())))
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Build a disc image as…", str(default / "crashbash.bin"),
+            "PS1 disc image (*.bin)"
+        )
+        if not chosen:
             return
+        image = Path(chosen)
+        self.settings.setValue("last_build", str(image.parent))
 
+        # Patching the original keeps what an extracted folder cannot hold: the
+        # licence area, and the Spyro demo's interleaved XA speech.
+        original = None
+        answer = QMessageBox.question(
+            self,
+            APP_NAME,
+            "Patch your original disc image?\n\n"
+            "The disc holds things an extracted folder does not — the licence "
+            "area that lets it boot on a console, and the demo's interleaved XA "
+            "speech. Patching your own .bin keeps them; mastering the folder "
+            "loses them.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Cancel:
+            return
+        if answer == QMessageBox.Yes:
+            picked, _ = QFileDialog.getOpenFileName(
+                self, "Original Crash Bash disc image", str(image.parent),
+                "PS1 disc image (*.bin *.img *.iso)"
+            )
+            if not picked:
+                return
+            original = Path(picked)
+
+        tree = image.with_suffix(".tree")
         progress = QProgressDialog("Repacking…", "Cancel", 0, len(self.archive), self)
         progress.setWindowModality(Qt.WindowModal)
 
@@ -446,7 +478,7 @@ class MainWindow(QMainWindow):
 
         try:
             report = build.build(
-                self.archive, folder, replacements=self.replacements, progress=tick
+                self.archive, tree, replacements=self.replacements, progress=tick
             )
         except KeyboardInterrupt:
             self.statusBar().showMessage("Build cancelled")
@@ -456,11 +488,8 @@ class MainWindow(QMainWindow):
 
         matched, problems = build.verify(
             self.archive,
-            Path(folder) / self.archive.exe_path.name,
+            tree / self.archive.exe_path.name,
             replacements=self.replacements,
-        )
-        config = build.write_iso_config(
-            folder, Path(folder).parent / f"{Path(folder).name}.xml", Path(folder).name
         )
 
         lines = [
@@ -473,18 +502,58 @@ class MainWindow(QMainWindow):
         ]
         if problems:
             lines += ["", "Problems:"] + [f"  {p}" for p in problems[:6]]
-        lines += [
-            "",
-            f"An mkpsxiso project is beside it at {config.name}; master the tree with",
-            f"    mkpsxiso {config}",
-            "",
-            "Most emulators will also run the folder as it stands.",
-        ]
+        else:
+            lines += [""] + self._write_image(image, tree, original)
+
         box = QMessageBox.warning if problems else QMessageBox.information
         box(self, APP_NAME, "\n".join(lines))
         self.statusBar().showMessage(
-            f"Built {folder} — {matched}/{report.entries} verified"
+            f"Built {image.name} — {matched}/{report.entries} verified"
         )
+
+    def _write_image(self, image: Path, tree: Path, original: Path | None) -> list[str]:
+        """Write the .bin, either by patching an original or mastering the tree."""
+        progress = QProgressDialog("Writing sectors…", "Cancel", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+
+        def tick(done: int, total: int) -> None:
+            progress.setValue(int(done * 100 / max(total, 1)))
+            if progress.wasCanceled():
+                raise KeyboardInterrupt
+
+        try:
+            if original is not None:
+                dat = self.archive.dat_path
+                result = iso.patch_image(
+                    original,
+                    image,
+                    {
+                        f"{dat.parent.name}/{dat.name}":
+                            (tree / dat.parent.name / dat.name).read_bytes(),
+                        self.archive.exe_path.name:
+                            (tree / self.archive.exe_path.name).read_bytes(),
+                    },
+                    progress=tick,
+                )
+                lines = [
+                    f"Patched {original.name} into {image.name}, "
+                    f"{result['sectors']:,} sectors rewritten and nothing else touched."
+                ]
+            else:
+                result = iso.build_iso(tree, image, progress=tick)
+                lines = [
+                    f"Mastered {image.name}: {result['sectors']:,} sectors, "
+                    f"{result['bytes'] / 2**20:.1f} MiB."
+                ]
+                lines += [f"  {w}" for w in result["warnings"]]
+        except KeyboardInterrupt:
+            return ["Image writing cancelled; the disc tree is still there."]
+        except (OSError, ValueError) as exc:
+            return [f"The disc tree is built, but the image failed: {exc}"]
+        finally:
+            progress.close()
+
+        return lines + [f"Its cue sheet is beside it at {result['cue'].name}."]
 
     def export_glb(self) -> None:
         """Everything about the model in one file: geometry, textures, clips."""

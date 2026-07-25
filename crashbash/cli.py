@@ -8,6 +8,7 @@
     python -m crashbash.cli png    game/SCUS_945.70 -o out --filter interface
     python -m crashbash.cli audio  game/SCUS_945.70 -o out
     python -m crashbash.cli wav    game/SCUS_945.70 -o out --filter arena
+    python -m crashbash.cli build  game/SCUS_945.70 -o out/disc -i out/crashbash.bin
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import build
+from . import build, iso
 from .archive import BashArchive, Entry, UnknownGameVersion, find_exe
 from .formats import anim, gltf, mdl, sfx, tex
 
@@ -152,11 +153,50 @@ def cmd_build(archive: BashArchive, args) -> int:
     print(f"  verified {matched}/{report.entries} entries byte-identical")
     for problem in problems[:5]:
         print(f"  PROBLEM: {problem}")
+    if problems:
+        return 1
 
-    config = build.write_iso_config(out, out.parent / f"{out.name}.xml", out.name)
-    print(f"  mkpsxiso project written to {config}")
-    print(f"  master it with: mkpsxiso {config}")
-    return 1 if problems else 0
+    if args.image:
+        _write_image(archive, out, Path(args.image), args.original)
+    return 0
+
+
+def _write_image(
+    archive: BashArchive, tree: Path, image: Path, original: str | None
+) -> None:
+    """Turn the built tree into a .bin/.cue, patching an original when given."""
+    def progress(done: int, total: int) -> None:
+        print(f"\r  {done:,}/{total:,} sectors ", end="", flush=True)
+
+    def done(message: str) -> None:
+        print(f"\r{' ' * 40}\r  {message}")
+
+    if original:
+        result = iso.patch_image(
+            original,
+            image,
+            {
+                f"{archive.dat_path.parent.name}/{archive.dat_path.name}":
+                    (tree / archive.dat_path.parent.name / archive.dat_path.name).read_bytes(),
+                archive.exe_path.name: (tree / archive.exe_path.name).read_bytes(),
+            },
+            progress=progress,
+        )
+        done(f"patched {image} from {Path(original).name}")
+        for name, info in result["files"].items():
+            print(
+                f"    {name}: {info['sectors']} sectors at LBA {info['lba']}, "
+                f"{info['padding']:,} bytes of padding"
+            )
+    else:
+        result = iso.build_iso(tree, image, progress=progress)
+        done(
+            f"mastered {image}: {result['sectors']:,} sectors, "
+            f"{result['bytes'] / 2**20:.1f} MiB, {result['files']} files"
+        )
+        for warning in result["warnings"]:
+            print(f"    warning: {warning}")
+    print(f"  cue sheet at {result['cue']}")
 
 
 def cmd_png(archive: BashArchive, args) -> int:
@@ -246,6 +286,16 @@ def main(argv: list[str] | None = None) -> int:
         "--group",
         choices=["model", "texture", "audio", "image", "map", "code", "binary"],
         help="only entries of this kind",
+    )
+    parser.add_argument(
+        "-i",
+        "--image",
+        help="build: also write a .bin/.cue disc image here",
+    )
+    parser.add_argument(
+        "--original",
+        help="build: an original disc image to patch instead of mastering the "
+        "tree, which keeps the licence area and the XA streams a folder loses",
     )
     args = parser.parse_args(argv)
 
