@@ -8,3 +8,7 @@ out/
 .DS_Store
 .claude/settings.local.json
 .idea
+
+# PyInstaller output, from packaging/bash-editor.spec
+build/
+dist/

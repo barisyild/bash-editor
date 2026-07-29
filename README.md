@@ -3,6 +3,8 @@
 An editor for Crash Bash's `CRASHBSH.DAT`, cross-platform (macOS / Windows / Linux)
 in pure Python — PySide6 + OpenGL, no platform-specific code.
 
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/3KYcUfHsPA)
+
 **Where it stands.** Reading is done and verified: every model, texture, sound bank
 and animation clip in the game parses, renders and exports. Writing works: entries
 can be replaced and the disc rebuilt or patched in place, meshes can be transplanted
@@ -29,6 +31,24 @@ collision volumes and the spin-mesh swap were found.
 ![Bash Editor](docs/screenshot.png)
 
 ## Running
+
+The quickest route is a build from the [releases
+page](https://github.com/barisyild/bash-editor/releases): a standalone app per
+platform, Python and Qt bundled in, nothing to install. Each release is built by
+CI from the tagged source — Windows x64, macOS arm64 and x64, Linux x64.
+
+Two things those builds cannot do for themselves. They are unsigned, so **macOS
+quarantines a downloaded app**; clear it once with
+
+```bash
+xattr -dr com.apple.quarantine "Bash Editor.app"
+```
+
+and on **Linux** Qt still wants the system's own graphics libraries, which are
+driver-side and cannot be bundled — `sudo apt install libgl1 libxkbcommon-x11-0`
+covers Debian and Ubuntu.
+
+### From the source
 
 There is a launcher per platform. Each one creates the virtual environment the
 first time, reinstalls when `requirements.txt` changes, and starts the editor —
@@ -344,7 +364,25 @@ docs/FORMAT.md        the format specification, field by field
 docs/IMPORTING.md     the import pipeline, each rule with the failure behind it
 run.sh / run.command / run.bat
                       launchers: build the venv if needed, then start the editor
+packaging/bash-editor.spec
+                      PyInstaller recipe for the standalone builds
+.github/workflows/release.yml
+                      builds all four and attaches them to a published release
 ```
+
+A standalone build locally, if you want one without waiting for CI:
+
+```bash
+.venv/bin/pip install pyinstaller
+.venv/bin/pyinstaller --noconfirm packaging/bash-editor.spec
+```
+
+## Talking to people
+
+There is a [Discord server](https://discord.gg/3KYcUfHsPA) for this and the
+neighbouring reverse-engineering work — the place to bring a model that will not
+import, a disc that will not boot, or a field in `docs/FORMAT.md` still marked
+unknown that you have worked out.
 
 ## Credits
 

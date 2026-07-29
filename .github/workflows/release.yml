@@ -1,0 +1,76 @@
+# Builds a standalone Bash Editor for each platform and attaches the archives to
+# the GitHub release that triggered the run. Publishing a release is all it
+# takes; workflow_dispatch is here so the build can be exercised without one, in
+# which case the archives are left as workflow artifacts instead.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # attaching assets to a release is a write to the repository
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # one platform failing should not hide the others
+      matrix:
+        include:
+          - os: windows-latest
+            asset: bash-editor-windows-x64
+          - os: macos-14
+            asset: bash-editor-macos-arm64
+          - os: macos-13
+            asset: bash-editor-macos-x64
+          # Built on the oldest supported Ubuntu on purpose: the glibc a
+          # binary is linked against sets the floor for where it will run.
+          - os: ubuntu-22.04
+            asset: bash-editor-linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt pyinstaller
+
+      - name: Build
+        run: pyinstaller --noconfirm packaging/bash-editor.spec
+
+      # Each platform gets the archiver that preserves what its build needs:
+      # ditto keeps the .app bundle's symlinks and permissions, which a plain
+      # zip flattens into something macOS refuses to open.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent "dist/Bash Editor.app" "${{ matrix.asset }}.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: cd dist && zip -qry "../${{ matrix.asset }}.zip" "Bash Editor"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/Bash Editor" -DestinationPath "${{ matrix.asset }}.zip"
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ matrix.asset }}.zip" --clobber
+
+      - name: Keep as an artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.zip
