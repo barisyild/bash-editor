@@ -30,6 +30,33 @@ collision volumes and the spin-mesh swap were found.
 
 ## Running
 
+There is a launcher per platform. Each one creates the virtual environment the
+first time, reinstalls when `requirements.txt` changes, and starts the editor —
+nothing to set up by hand, and a game EXE can be passed straight to it to open
+that game on launch.
+
+| | |
+| --- | --- |
+| Windows | double-click **`run.bat`** |
+| macOS | double-click **`run.command`**, or `./run.sh` from a terminal |
+| Linux | `./run.sh` |
+
+Python 3.10 or newer has to be on `PATH`; the launcher says so plainly, with the
+install command for your platform, if it is not. On a bare Linux install Qt also
+wants its system libraries — `libgl1` and `libxkbcommon-x11-0` cover it on Debian
+and Ubuntu. For a menu entry rather than a terminal, a `.desktop` file pointing
+at `run.sh` is all it takes:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Bash Editor
+Exec=/path/to/crash-bash-editor/run.sh
+Terminal=false
+```
+
+By hand, if you would rather:
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python app/main.py
@@ -296,7 +323,13 @@ crashbash/            format library, no GUI dependency
   formats/anim.py     animation clips: keyframes, blending, posed vertices
   formats/tex.py      texture packs: BGR555 palettes, 4/8-bit images
   formats/sfx.py      sound banks: VAB header, SPU-ADPCM decoder, WAV output
+  formats/mdlwrite.py stripping, mesh install and transplant, table sharing
+  formats/animwrite.py clip blobs: frame records, keyframes, shared pool
+  formats/texwrite.py pixels and palettes replaced inside their slots
   formats/gltf.py     glTF 2.0 export: geometry, textures, morph animation
+  formats/gltfread.py poses back out of a .glb, matched by rest position
+  formats/gltfimport.py the import path the GUI drives: mesh, clips, textures
+  retarget.py         animation between characters of different proportions
   build.py            repack the DAT, patch the EXE tables, write a disc tree
   iso.py              CD-XA writer: master a folder, or patch an existing image
   cli.py              headless commands
@@ -308,6 +341,9 @@ app/                  PySide6 GUI
   main.py             entry point
 tools/psxdis.py       MIPS disassembly helper for checking claims against the EXE
 docs/FORMAT.md        the format specification, field by field
+docs/IMPORTING.md     the import pipeline, each rule with the failure behind it
+run.sh / run.command / run.bat
+                      launchers: build the venv if needed, then start the editor
 ```
 
 ## Credits
