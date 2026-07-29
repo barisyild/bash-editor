@@ -37,6 +37,13 @@ page](https://github.com/barisyild/bash-editor/releases): a standalone app per
 platform, Python and Qt bundled in, nothing to install. Each release is built by
 CI from the tagged source — Windows x64, macOS arm64 and x64, Linux x64.
 
+Each archive unpacks into a folder holding the application and an empty `game`
+beside it. **Put your Crash Bash files in that folder** — the extracted disc as
+it comes, EXE and `CRASHBSH.DAT` together — and the editor opens it on launch.
+That folder is the whole configuration: a packaged build reads its game from
+there and nowhere else, so a copy of the editor always edits the game it was
+unpacked next to. If the folder is missing the application makes it and says so.
+
 Two things those builds cannot do for themselves. They are unsigned, so **macOS
 quarantines a downloaded app**; clear it once with
 

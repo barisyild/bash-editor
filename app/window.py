@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings
@@ -24,6 +25,7 @@ from crashbash.archive import (
     UnknownGameVersion,
     find_dat,
     find_exe,
+    find_exe_near,
 )
 from crashbash import build, iso
 from crashbash.formats import anim, gltf, gltfimport, mdl, sfx, tex
@@ -41,6 +43,26 @@ from .panels import (
 )
 
 APP_NAME = "Bash Editor"
+
+# The folder a packaged build reads its game from, beside the application.
+GAME_DIR_NAME = "game"
+
+
+def program_dir() -> Path:
+    """The folder the editor itself lives in, as a user would see it.
+
+    For a frozen build that is the folder holding the executable — and on
+    macOS the folder holding the `.app`, not the `Contents/MacOS` inside it,
+    since that is where a user would drop a game next to the application.
+    Running from a checkout it is the repository root.
+    """
+    if getattr(sys, "frozen", False):
+        executable = Path(sys.executable).resolve()
+        for parent in executable.parents:
+            if parent.suffix == ".app":
+                return parent.parent
+        return executable.parent
+    return Path(__file__).resolve().parent.parent
 
 
 class MainWindow(QMainWindow):
@@ -121,12 +143,26 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self._build_menu()
-        self.statusBar().showMessage("Open a Crash Bash EXE to begin (⌘O)")
+        self.statusBar().showMessage(self._waiting_message())
         self.setAcceptDrops(True)
 
-        last = self.settings.value("last_exe", "")
-        if last and Path(last).exists():
-            self.load_archive(Path(last), quiet=True)
+        startup = self._startup_exe()
+        if startup is not None:
+            self.load_archive(startup, quiet=True)
+        elif getattr(sys, "frozen", False):
+            # The folder is the packaged build's whole configuration, so name
+            # it rather than leaving an empty window with no explanation. It
+            # exists by now, empty, which is half the instruction already.
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "No game found.\n\n"
+                "Put your Crash Bash files in the 'game' folder next to the "
+                "application, then start it again:\n\n"
+                f"{self._game_dir()}\n\n"
+                "It needs the game EXE and CRASHBSH.DAT — an extracted disc "
+                "as it comes.",
+            )
 
     # -- menu -----------------------------------------------------------
 
@@ -233,6 +269,51 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select the Crash Bash EXE", start)
         if path:
             self.load_archive(Path(path))
+
+    def _waiting_message(self) -> str:
+        """The status bar before anything is loaded."""
+        if getattr(sys, "frozen", False):
+            return f"Waiting for a game in {program_dir() / GAME_DIR_NAME}"
+        # Native text so the shortcut reads as the platform writes it.
+        shortcut = QKeySequence(QKeySequence.Open).toString(QKeySequence.NativeText)
+        return f"Open a Crash Bash EXE to begin ({shortcut})"
+
+    def _game_dir(self) -> Path:
+        """The `game` folder beside the program, created when it is missing.
+
+        Creating it is the point: an empty folder named `game` next to the
+        application says where the disc goes better than any message can, and
+        it is there before the message that names it. A location that cannot
+        be written to is not worth interrupting anyone over — the message
+        still gives the path, and the user can make the folder themselves.
+        """
+        folder = program_dir() / GAME_DIR_NAME
+        try:
+            folder.mkdir(exist_ok=True)
+        except OSError:
+            pass
+        return folder
+
+    def _startup_exe(self) -> Path | None:
+        """What to open on launch.
+
+        A packaged build reads one place and one place only: the `game` folder
+        beside the application. Nothing is remembered between runs and nothing
+        else on the machine is looked at, so what a packaged copy edits is
+        whatever was put in its own folder — visible from the outside, and the
+        same on every launch.
+
+        From a checkout the last-opened game wins instead, when it is still
+        there, falling back to the same `game` folder. Opening a second disc
+        during development should not be undone by the next launch.
+        """
+        if getattr(sys, "frozen", False):
+            return find_exe_near(self._game_dir())
+
+        last = self.settings.value("last_exe", "")
+        if last and Path(last).is_file():
+            return Path(last)
+        return find_exe_near(self._game_dir())
 
     def choose_folder(self) -> None:
         start = self.settings.value("last_dir", str(Path.home()))

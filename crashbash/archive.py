@@ -297,3 +297,27 @@ def find_exe(folder: str | os.PathLike) -> Path | None:
         if md5_of(path) in VERSIONS:
             return path
     return None
+
+
+def find_exe_near(folder: str | os.PathLike) -> Path | None:
+    """Find a Crash Bash EXE in `folder` or one level below it.
+
+    An extracted disc arrives as a directory of its own, so a copy dropped
+    beside something — the editor, say — sits one level down rather than loose
+    among its files. Hidden directories are skipped: they are caches and
+    checkouts, never a game.
+    """
+    folder = Path(folder)
+    found = find_exe(folder)
+    if found is not None:
+        return found
+    try:
+        children = sorted(folder.iterdir())
+    except OSError:
+        return None
+    for child in children:
+        if child.is_dir() and not child.name.startswith("."):
+            found = find_exe(child)
+            if found is not None:
+                return found
+    return None

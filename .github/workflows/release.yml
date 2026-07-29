@@ -46,21 +46,38 @@ jobs:
       - name: Build
         run: pyinstaller --noconfirm packaging/bash-editor.spec
 
-      # Each platform gets the archiver that preserves what its build needs:
-      # ditto keeps the .app bundle's symlinks and permissions, which a plain
-      # zip flattens into something macOS refuses to open.
+      # Every archive unpacks into one folder holding the application and an
+      # empty `game` next to it, which is the only place a packaged build
+      # reads a disc from. The application creates that folder itself if an
+      # archiver drops it -- shipping it is so the layout is obvious before
+      # anyone runs anything.
+      #
+      # macOS gets ditto rather than zip: the .app bundle's symlinks and
+      # permissions have to survive, and a plain zip flattens them into
+      # something macOS refuses to open.
       - name: Package (macOS)
         if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent "dist/Bash Editor.app" "${{ matrix.asset }}.zip"
+        run: |
+          mkdir -p "${{ matrix.asset }}/game"
+          ditto "dist/Bash Editor.app" "${{ matrix.asset }}/Bash Editor.app"
+          ditto -c -k --keepParent "${{ matrix.asset }}" "${{ matrix.asset }}.zip"
 
+      # On Windows and Linux the executable sits directly in the build folder,
+      # so `game` goes inside it, beside the executable.
       - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: cd dist && zip -qry "../${{ matrix.asset }}.zip" "Bash Editor"
+        run: |
+          mv "dist/Bash Editor" "${{ matrix.asset }}"
+          mkdir "${{ matrix.asset }}/game"
+          zip -qry "${{ matrix.asset }}.zip" "${{ matrix.asset }}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path "dist/Bash Editor" -DestinationPath "${{ matrix.asset }}.zip"
+        run: |
+          Move-Item "dist/Bash Editor" "${{ matrix.asset }}"
+          New-Item -ItemType Directory -Path "${{ matrix.asset }}/game" | Out-Null
+          Compress-Archive -Path "${{ matrix.asset }}" -DestinationPath "${{ matrix.asset }}.zip"
 
       - name: Attach to the release
         if: github.event_name == 'release'
