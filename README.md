@@ -203,9 +203,23 @@ default 24 fps the clips come back audibly off-beat and measurably off-pose. At
 30 fps the full round trip — export, Blender save, import — reproduces every pose
 exactly, verified against Blender 5.2.
 
-One thing still does not survive, knowingly. The PS1 blend is `texel * colour / 128`,
-so a colour above 128 brightens the texel; glTF has no such headroom, so `COLOR_0`
-carries the doubled colour clamped to 1, and colours above 128 come back dimmed to it.
+Colours need one word, because the console uses them at two scales: on a textured
+triangle the colour is a *multiplier* — the blend is `texel * colour / 128`, above
+128 it brightens, and half the game's colours are above 128 — while an untextured
+triangle draws its colour *directly*, no texel and no doubling. The export writes
+each corner at its own scale, and glTF display stops at 1, so the true values ride
+twice: in `COLOR_0`,
+which faithful multipliers (the three.js family) show at full brightness and strict
+viewers clamp — display only — and in a `_CRASHBASH_COLOR` attribute that Blender
+passes through untouched. For the trip back, **tick Data → Attributes in Blender's
+glTF export**; the importer then recovers every colour byte exactly, and warns when
+the attribute is missing rather than dimming silently. Blender's own viewport still
+draws with the clamped channel and relights in linear space, so hot-lit models (the
+cutscene casts) look paler there than in game — run
+[tools/blender_colours.py](tools/blender_colours.py) once after importing (Text
+Editor → Run Script) and Blender shows the game's own colours: it rebinds the
+materials to the unclamped channel, applies the gamma the game multiplies in, and
+sets the view transform to Standard.
 Re-striping on import also reorders the vertex pool, which is why the importer always
 rewrites the clips with the mesh — the two cannot be imported separately, and are not.
 
@@ -367,6 +381,8 @@ app/                  PySide6 GUI
   window.py           main window and export actions
   main.py             entry point
 tools/psxdis.py       MIPS disassembly helper for checking claims against the EXE
+tools/blender_colours.py
+                      run once in Blender: game-accurate colours in the viewport
 docs/FORMAT.md        the format specification, field by field
 docs/IMPORTING.md     the import pipeline, each rule with the failure behind it
 run.sh / run.command / run.bat

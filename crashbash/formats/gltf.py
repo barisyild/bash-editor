@@ -15,17 +15,37 @@ decoder's own output to within 0.0039 model units, and that number is exactly
 1/256: one step of the fixed point the positions are stored in. The difference
 is the game's rounding, not a structural mismatch.
 
-Two things do not survive the trip, both deliberately:
+Colours are written at the scale the console draws them. A textured triangle's
+colour is a *multiplier* -- the blend is `texel * colour / 128`, above 128 it
+brightens, and the true value runs to 2.0 where glTF display stops at 1. An
+untextured triangle's colour is the *pixel itself*: the console draws it
+directly, no texel, no doubling. So textured corners carry `colour / 127.5`
+unclamped, untextured corners carry `colour / 255` (swatch triangles fold
+their palette texel in and land on the same displayed-pixel scale), and the
+importer inverts by the primitive's material. One scale for both was the old
+mistake in the other direction: flat surfaces rendered twice as bright as the
+textured ones beside them.
 
-* The PS1 blend is `texel * colour / 128`, so a colour above 128 brightens the
-  texel. glTF multiplies without that headroom, so COLOR_0 carries the doubled
-  colour clamped to 1. What Blender shows then matches the viewport; the values
-  above 1 are lost. Re-importing a model takes its colours from the file it is
-  replacing, so nothing depends on recovering them from the .glb.
-* Triangle strips. glTF has loose triangles, so a re-import has to re-strip the
-  mesh -- and because a clip indexes vertices by their position in the pool,
-  that means rewriting the clips too. Model and animation cannot be imported
-  separately.
+The values live in two attributes:
+
+* `COLOR_0` -- viewers that multiply vertex colours as given (the three.js
+  family) show the game's own brightening; strict ones clamp at 1 and show
+  textured hot corners paler. Display only, never data. Blender is a clamper:
+  its importer quantises COLOR_0 into a byte attribute, which is why COLOR_0
+  alone cannot round-trip.
+* `_CRASHBASH_COLOR` -- the same accessor under an application name. Blender
+  imports it as a float attribute untouched and writes it back exactly when
+  "Attributes" is ticked in its glTF export -- measured: values of 2.0
+  survive the full Blender pass to the last bit, where COLOR_0 comes back
+  clamped and COLOR_1 comes back clamped *and* quantised. The importer
+  prefers it and recovers every colour byte exactly; clamping used to crush
+  128..255 to 128 on re-import, which drained the cutscene models built on
+  hot baked lighting.
+
+One thing does not survive the trip, deliberately: triangle strips. glTF has
+loose triangles, so a re-import has to re-strip the mesh -- and because a clip
+indexes vertices by their position in the pool, that means rewriting the clips
+too. Model and animation cannot be imported separately.
 """
 
 from __future__ import annotations
@@ -184,10 +204,16 @@ def _group_triangles(model, mesh, pack) -> list[_Group]:
 
         key: int | None = None
         corner_uvs = [(0.0, 0.0)] * 3
+        # Textured triangles carry a multiplier, untextured ones carry the
+        # pixel itself: the console draws an untextured polygon with the
+        # colour directly, no texel and no doubling. One factor per kind, and
+        # the importer inverts by the primitive's material accordingly.
+        factor = 1.0
         if kind == "texture" and uvs is not None and pack is not None:
             if 0 <= index < len(pack.textures):
                 texture = pack.textures[index]
                 key = index
+                factor = 2.0
                 corner_uvs = [
                     ((u + 0.5) / texture.width, (v + 0.5) / texture.height)
                     for u, v in uvs
@@ -196,16 +222,22 @@ def _group_triangles(model, mesh, pack) -> list[_Group]:
             u, v = uvs[0]
             cell = int(cells[min(v, swatch.height - 1), min(u, swatch.width - 1)])
             if index < len(pack.palettes) and cell < pack.palettes[index].shape[0]:
+                # Fold the swatch texel in once, doubled as the blend doubles:
+                # the folded value is the displayed colour, like any other
+                # untextured corner's.
                 texel = pack.palettes[index][cell][:3].astype(np.float32) / 255.0
-                base = base * texel * 2.0
+                base = base * texel
+                factor = 2.0
 
         group = groups.setdefault(key, _Group(key))
         for corner, vertex in enumerate((a, b, c)):
             group.corners.append(vertex)
             group.uvs.append(corner_uvs[corner])
-            # The PS1 blend doubles the colour; clamp so what a DCC shows
-            # matches the viewport.
-            rgb = np.clip(base[corner] * 2.0, 0.0, 1.0)
+            # Unclamped: a textured corner's multiplier runs to 2.0. Blender
+            # and the three.js family use float vertex colours as they are;
+            # strict viewers clamp at 1 and lose only display, never data --
+            # the importer's inversion is exact.
+            rgb = base[corner] * factor
             group.colours.append((float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0))
     return list(groups.values())
 
@@ -291,9 +323,15 @@ def export_glb(
         for group in groups:
             corners = np.asarray(group.corners, dtype=np.int32)
             positions = base_positions[corners]
+            colours = buffer.vec(np.asarray(group.colours), "VEC4")
             attributes = {
                 "POSITION": buffer.vec(positions, "VEC3", minmax=True),
-                "COLOR_0": buffer.vec(np.asarray(group.colours), "VEC4"),
+                "COLOR_0": colours,
+                # The same accessor again under an application name: Blender
+                # quantises and clamps COLOR_0 on import, but carries this one
+                # through as untouched floats, so a round trip through it can
+                # keep the multipliers above 1 (see the module docstring).
+                "_CRASHBASH_COLOR": colours,
             }
             if group.texture is not None:
                 attributes["TEXCOORD_0"] = buffer.vec(np.asarray(group.uvs), "VEC2")

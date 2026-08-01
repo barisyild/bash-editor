@@ -64,7 +64,8 @@ def _accessor_or_none(glb: Glb, primitive: dict, name: str):
     return None if index is None else glb.accessor(index)
 
 
-def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None]):
+def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
+                  warnings: list[str] | None = None):
     """One glTF mesh -> per-corner arrays in the writer's own terms."""
     positions, colours, uvs, textures = [], [], [], []
     base_vertices = []
@@ -75,7 +76,23 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None]):
         corners = indices.reshape(-1, 3)
         base_vertices.append(pos)
 
-        colour = _accessor_or_none(glb, primitive, "COLOR_0")
+        # The application attribute first: it is the one channel that carries
+        # the game's full 0..2 multiplier through Blender untouched. COLOR_0
+        # is the fallback -- correct from this exporter, but clamped at 1 by
+        # Blender's importer, so a file that has been through Blender without
+        # "Attributes" ticked on export comes back with 128..255 crushed.
+        colour = _accessor_or_none(glb, primitive, "_CRASHBASH_COLOR")
+        legacy_scale = False
+        if colour is None:
+            colour = _accessor_or_none(glb, primitive, "COLOR_0")
+            legacy_scale = colour is not None
+            if (colour is not None and warnings is not None
+                    and not any("_CRASHBASH_COLOR" in w for w in warnings)):
+                warnings.append(
+                    "_CRASHBASH_COLOR is missing, so colours above 128 may "
+                    "have been dimmed in transit; tick Data > Attributes "
+                    "in Blender's glTF export to carry them through"
+                )
         uv = _accessor_or_none(glb, primitive, "TEXCOORD_0")
         slot = slot_of.get(primitive.get("material", -1))
 
@@ -85,8 +102,15 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None]):
 
         if colour is not None:
             rgb = np.asarray(colour, dtype=np.float64)[:, :3]
-            # The exporter doubled and clamped; halving is the way back.
-            corner_rgb = np.clip(rgb[corners] * 127.5, 0, 255)
+            # Invert the exporter's scale, which follows the material: a
+            # textured corner holds the multiplier colour / 127.5, an
+            # untextured one holds the pixel colour / 255 -- the console
+            # draws untextured polygons with the colour directly. Rounding,
+            # not truncating: the float32 accessor sits a hair off the
+            # ratio. Files from before the split (no _CRASHBASH_COLOR)
+            # used the multiplier scale everywhere.
+            scale = 127.5 if (slot is not None or legacy_scale) else 255.0
+            corner_rgb = np.clip(np.round(rgb[corners] * scale), 0, 255)
         else:
             corner_rgb = np.full((len(corners), 3, 3), 128.0)
         colours.append(corner_rgb)
@@ -350,7 +374,9 @@ def import_glb(
     trimmed = MW.strip_animation(model_data, clips)
     payloads = {}
     for index, mesh in sorted(incoming.items()):
-        positions, colours, uvs, textures, bases = _mesh_payload(glb, mesh, slot_of)
+        positions, colours, uvs, textures, bases = _mesh_payload(
+            glb, mesh, slot_of, report.warnings
+        )
         payloads[index] = (mesh, bases)
         positions, colours, uvs, textures = _orient_consistently(
             positions, colours, uvs, textures

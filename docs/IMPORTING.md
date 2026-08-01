@@ -142,6 +142,30 @@ crashed while one honouring it booted.
   **0.00 raw units**, with mesh, material and clip names all surviving. That
   session is the editor's own round trip (File → Export model as glTF…, edit,
   File → Import model from glTF…), verified against Blender 5.2.
+- **Tick Data → Attributes in Blender's glTF export.** The PS1 blend
+  brightens as well as darkens — `texel * colour / 128` runs to 2.0 — and
+  glTF's own colour channels stop at 1: Blender quantises `COLOR_0` into a
+  clamped byte attribute on import, and its default export clamps a second
+  colour set the same way. The only channel measured to carry the full range
+  through a Blender pass to the last bit is the exporter's
+  `_CRASHBASH_COLOR` attribute, and Blender writes it back only when
+  Attributes is ticked. The importer prefers that attribute, recovers every
+  colour byte exactly from it — verified corpus-wide, 400 models,
+  331,885 faces, zero mismatches, and through a live Blender round trip on
+  the shot3 cutscene cast, whose corners are over 128 on more than half —
+  and warns rather than dimming silently when it is missing. Without it the
+  clamp crushes 128..255 to 128, which visibly drains any model whose baked
+  lighting runs hot: that is exactly the washed-out Cortex a user reported
+  from Blender, and the measurement that settled it.
+- **Blender's display needs `tools/blender_colours.py`, run once after the
+  import.** Data arriving intact does not make the viewport draw it: the
+  materials still read the clamped byte channel, and Blender shades in
+  linear space while the game multiplies in gamma space, so the correct
+  linear multiplier is `m^2.2`, not `m`. The script rebinds every material
+  to `_CRASHBASH_COLOR`, inserts that gamma, and sets the view transform to
+  Standard — AgX, the default, is a filmic look that desaturates flat-shaded
+  PS1 colour on sight. With all three in place the viewport matches the
+  game; with none of them Cortex's golden hat renders cream.
 
 ## 6. Disc and verification
 
