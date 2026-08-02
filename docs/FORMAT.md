@@ -316,7 +316,7 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x00 | u32 | `runtime_slot` | **Not padding.** Zero in the file (5990/5990) because the loader fills it; the mesh-iteration loop dereferences it. | **confirmed** |
 | 0x04 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x08 | i16 | `triangle_count` | Number of triangles. Equals the sum of the strip list's high bytes in **5990/5990**. Not read by any render pass — the runtime derives the count from the strip list. Redundant but exact. | **confirmed** |
-| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). Only 5990 samples; no reader identified. | ?unknown? |
+| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader, traced rather than assumed**: all eight halfword loads at this offset in the model region resolve to a stack local, a projected vertex or a GPU quad's corners, never a mesh header (§14). | **confirmed** (never read) / ?unknown? (meaning) |
 | 0x0C | i16 | — | Non-zero in 344/5990, in small families: 100 (138), 10 (68), 5 (51), 4 (29), 101–103 (22), 20–33 (16), others (20). **No reader found in the executable or in any of the 14 mode overlays.** The 138 meshes carrying 100 are exactly the backdrop domes each cutscene raises without a node (§9.11.6), and of the 342 that a scene could have claimed, **none is owned by a scene node** — correlation over the corpus, not a decoded meaning. | ?unknown? |
 | 0x0E | i16 | — | Non-zero in 162/5990, and only where 0x0C is. Where 0x0C is 100 it is 0 (72) or 1 (65), which is the order the two domes stack — opaque sky, then the additive tint over it. Same status: correlation, no reader found. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_bounds` | 0x14-byte bounds block; the vertex pool starts at `T(0x10) + 0x14`. | **confirmed** |
@@ -3110,10 +3110,21 @@ are not only undocumented format; they are also where a reader is quietly skippi
 
 **MDL mesh header**
 
-* **0x0A** ("format") — the distribution is known; the meaning is not, and I found no site
-  that reads it. That is not the same as proving it is never read: I did not trace the base
-  register of the eight halfword loads at offset 0x0A inside 0x80014000–0x8001F000.
-* **0x0C** (non-zero in 344) and **0x0E** (non-zero in 162) — no reader identified.
+* **0x0A** ("format"), **0x0C** (non-zero in 344) and **0x0E** (non-zero in 162) — the
+  distributions are known and the meanings are not, and **the trace the last revision left
+  undone is now done**. Every halfword load at those three immediates inside
+  0x80014000–0x8001F000 was followed back to what put its base register there:
+
+  | Offset | Loads | Off `$sp` | The rest |
+  | --- | --- | --- | --- |
+  | 0x0A | 8 | 6 | a projected-vertex copy after `RTPS` (0x8001B270) and a GPU quad's corner list (0x8001A26C, whose `$s0` is a 0x32 command word) |
+  | 0x0C | 13 | 7 | four are `descriptor + 0x18`, i.e. the **tpage** of §10.4; one is a caller's clip rectangle; one a struct with fields at +0x6C |
+  | 0x0E | 14 | 6 | the same descriptor tail, the same clip rectangle, and four node fields inside the §9.11 handlers |
+
+  **Not one of them is a mesh header.** So these three fields are read by nothing the disc
+  ships, which puts them with strip flag bit 3: authoring-tool output the game never
+  consults. That matters for the `0x0C == 100` correlation of §9.11.6 — it describes the
+  backdrop domes, it does not cause them.
 * **0x04, 0x30** — zero in 5990/5990, no reader.
 * **0x2C block contents** — the 16-byte records are unread. The `u16` at +0x00 is 0 (769),
   2 (6) or 5 (2).
