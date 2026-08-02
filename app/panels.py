@@ -970,11 +970,13 @@ class ViewOptions(QWidget):
         self.points = QCheckBox("Points")
         self.volumes = QCheckBox("Volumes")
         self.volumes.setToolTip(
-            "The gameplay volume a mesh carries at +0x2C, drawn as a cylinder. "
-            "For a playable character this is its collision body -- Crash stands "
-            "in a 128-unit radius, and his spin mesh widens it to 307. Only 812 "
-            "of the archive's meshes have one, and on the rest of that family "
-            "the volume serves some other purpose than collision."
+            "The gameplay volume a mesh carries at +0x2C, drawn as the box its "
+            "two horizontal extents describe. For a playable character this is "
+            "its collision body -- Crash stands in a 128-unit half-width, and "
+            "his spin mesh widens it to 307. Only 812 of the archive's meshes "
+            "have one, and on the rest of that family the volume serves some "
+            "purpose other than collision. Nothing found so far reads the block, "
+            "so the shape is the record's reading, not a proven test volume."
         )
         self.textures = QCheckBox("Textures", checked=True)
         self.vertex_colours = QCheckBox("Vertex colours", checked=True)

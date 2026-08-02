@@ -127,23 +127,31 @@ class Bounds:
 class Volume:
     """One record of a mesh's attachment block (§8.4).
 
-    For a playable character this is the collision cylinder, and that reading is
+    For a playable character this is the collision body, and that reading is
     behavioural in both directions: a replacement whose block was zeroed walked
     through the crates, and carrying the original's block through the same swap
     brought the collision back. For the rest of the 1717 records in the archive
     it is a volume of some other purpose -- `height` matches the mesh's own
-    standing height in only 41 % of them -- so a reader should show it, not
+    standing height in only 677 of them -- so a reader should show it, not
     trust it.
 
-    `offset`, `radius` and `height` are in world units like a vertex; `height`
-    is negative in 1708/1717, running from the base toward the model's -Y.
+    It has **two** horizontal extents, not one. `depth` is set in 349 records
+    and differs from `half_width` in 25 of those, which is what rules out a
+    circular cross-section; where it is zero the two are the same. Everything is
+    in world units like a vertex, and `height` is negative in 1708/1717, running
+    from the offset toward the model's -Y.
     """
 
     offset: Vec3
-    radius: float
-    height: float
+    half_width: float  # field 3
+    height: float  # field 4
+    depth: float  # field 5, zero meaning "the same as half_width"
     unknown: int  # field 6; 64 for Crash standing, 1360 for his spin body
     flags: int  # field 7; carries 0x4000 in 1356 of 1717
+
+    @property
+    def half_depth(self) -> float:
+        return self.depth or self.half_width
 
     @property
     def size(self) -> Vec3:
@@ -982,8 +990,9 @@ def _read_volumes(reader: Reader, mesh: Mesh, scale: float) -> None:
         f = reader.array_i16(ATTACHMENT_FIELDS)
         mesh.volumes.append(Volume(
             offset=(f[0] * scale, f[1] * scale, f[2] * scale),
-            radius=f[3] * scale,
+            half_width=f[3] * scale,
             height=f[4] * scale,
+            depth=f[5] * scale,
             unknown=f[6],
             flags=f[7],
         ))

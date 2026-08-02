@@ -219,23 +219,22 @@ def _place(points: np.ndarray, rotation, translation) -> np.ndarray:
     return (moved + np.asarray(translation, dtype=np.float64) * flip).astype(points.dtype)
 
 
-def _cylinder_lines(centre: np.ndarray, radius: float, height: float,
-                    segments: int = 24) -> np.ndarray:
-    """Line endpoints for a standing cylinder, as (n, 3) pairs.
+def _box_lines(centre: np.ndarray, half_width: float, half_depth: float,
+               height: float) -> np.ndarray:
+    """The twelve edges of a standing box, as (n, 3) line endpoints.
 
-    Two rings and a few uprights -- enough to read the radius and the height off
-    the screen without hiding the mesh inside it. `height` is signed: the record
-    measures from the base toward the model's -Y, which is up once flipped.
+    A box rather than a cylinder because the record carries **two** horizontal
+    extents and they differ in 25 of the 349 records that set the second one --
+    a circular cross-section cannot do that. `height` is signed: the record
+    measures from the offset toward the model's -Y, which is up once flipped.
     """
-    angle = np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False)
-    ring = np.stack([np.cos(angle) * radius,
-                     np.zeros(segments),
-                     np.sin(angle) * radius], axis=1)
-    top = ring + np.array([0.0, height, 0.0])
+    corner = np.array([[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0],
+                       [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]])
+    base = corner * np.array([half_width, 0.0, half_depth])
+    top = base + np.array([0.0, height, 0.0])
     pairs = [np.stack([r, np.roll(r, -1, axis=0)], axis=1).reshape(-1, 3)
-             for r in (ring, top)]
-    upright = np.arange(0, segments, max(segments // 4, 1))
-    pairs.append(np.stack([ring[upright], top[upright]], axis=1).reshape(-1, 3))
+             for r in (base, top)]
+    pairs.append(np.stack([base, top], axis=1).reshape(-1, 3))
     return np.vstack(pairs) + centre
 
 
@@ -962,8 +961,8 @@ class ModelView(QOpenGLWidget):
         for mesh, rotation, translation in drawn:
             for volume in mesh.volumes:
                 centre = np.asarray(volume.offset, dtype=np.float64) * AXIS_FLIP
-                lines = _cylinder_lines(centre, volume.radius,
-                                        -volume.height)  # -Y is up once flipped
+                lines = _box_lines(centre, volume.half_width, volume.half_depth,
+                                   -volume.height)  # -Y is up once flipped
                 volume_rows.append(_place(lines, rotation, translation))
                 # Keyed by mesh so hiding a mesh takes its volume with it, and
                 # so a reused object's copies each hide with the one row that

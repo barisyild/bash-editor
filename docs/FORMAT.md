@@ -1042,19 +1042,36 @@ decoded below for playable characters and remain ?unknown? for the rest of the f
 8 × i16, every crate-minigame character carries exactly one record of the shape
 
 ```
-[ox, oy, oz,  radius,  -height,  0,  unk,  0x4000|flag]
+[ox, oy, oz,  half_width,  -height,  depth,  unk,  0x4000|flag]
 ```
 
 where field 4 is the mesh's own standing height to the unit in **8 of 8** crate characters
-(Crash −502, Coco −619, Tiny −724, …), field 3 a body radius (119–179 for the characters),
-fields 0–2 a small centre offset, and field 7 carries the 0x4000 bit in 81 % of all records
-corpus-wide. Field 4 matches the mesh height in only 41 % of all 1,634 records measured, so
+(Crash −502, Coco −619, Tiny −724, …), field 3 a body half-width (119–179 for the
+characters), fields 0–2 a small centre offset, and field 7 carries the 0x4000 bit in 81 % of
+all records corpus-wide. Field 4 matches the mesh height in only 677 of the 1717 records, so
 the block is a family of purpose-dependent volumes rather than one fixed meaning — but for a
-playable character it is the collision cylinder, and the proof is behavioural **in both
+playable character it is the collision body, and the proof is behavioural **in both
 directions**: replacing the crate character with a mesh whose `+0x2C` was zeroed made crates
 stop colliding — the character walked straight through them — and carrying the replaced
 mesh's own block through the same swap, everything else identical, brought the collision
 back in play. **confirmed** for characters; tested on the NTSC-U crate minigame.
+
+**It is a box, not a cylinder — and even that is a reading.** An earlier revision of this
+section called it a standing cylinder and gave field 3 as a radius. Field 5 refutes that:
+it is a **second horizontal extent**, non-zero in **349 of 1717** records and **different
+from field 3 in 25** of those, which no circular cross-section can be. Two more measurements
+point the same way. Field 3 is half the mesh's own width (median ratio **1.000** over all
+1717) rather than half its diagonal (median **0.707**), so it is an inscribed half-extent and
+not a radius that would wrap the mesh. And the largest single family — **324 records**, the
+crates, every one of them `(−128, 0, −128, 128, −256, 128, 1792, 0)` — sits on a mesh whose
+own extent is exactly `x[−128, 128] y[−256, 0] z[−128, 128]`, a 256-unit cube. A crate's
+volume is its crate.
+
+Where field 5 is zero the two horizontal extents are the same, which is why the character
+records read equally well either way and why the cylinder went unchallenged. **No site has
+been found that tests against the block**, so the shape is what the record describes, not a
+proven test volume: the reader exposes both extents and the viewport draws the box, and if
+the routine that reads it ever turns up it may yet round the corners.
 
 The reading extends to the characters' second meshes. A crate character's mesh 1 is its
 **spin body** — no clip drives it; the game swaps the display to it and rotates the entity in
@@ -2740,7 +2757,7 @@ differently and `install_mesh` / `transplant_mesh` index the numbered one.
 
 `read_mesh` also opens the attachment block at mesh+0x2C into `Mesh.volumes` — 1717 records
 over 812 meshes, read with no warning anywhere in the corpus — and the viewport draws them as
-cylinders behind a **Volumes** toggle. `mdlwrite` still carries the block as opaque bytes,
+boxes behind a **Volumes** toggle. `mdlwrite` still carries the block as opaque bytes,
 which is right: a writer must move it unchanged, not rebuild it from a decoded reading that
 holds for characters and not for the rest of the family.
 
@@ -2825,6 +2842,7 @@ produce subtly broken output.
 | "The animated pose replaces the mesh's vertex pool." | **Refuted** | The decoders fill a separate 0x2038-byte buffer at 0x80056AC8 and the rasteriser takes the vertex array as an argument (0x80019D9C vs 0x80019D8C). `mesh+0x00` is a primitive-cache slot and is never written by the animation path. See §9.6. |
 | "A frame record is 16 bytes starting at the blob base." | **Refuted** | Record *f* is at `blob + 4 + 16*f`; `blob+0x00` is the blob's pool pointer. Under the shifted reading only 1,925 of 49,167 records validate and no clip validates completely. See §9.3. |
 | "The texture descriptors hang off the render context at 0x80056998." | **Refuted** | They hang off a second context at **0x80055684**, which only three sites in the image reference and which `0x8002C774` is what hands to the accessors of §6.2. Nothing anywhere on the disc — the EXE or any of the 15 code overlays — stores to +0x18 or +0x1C of 0x80056998. Aiming three exhaustive scans at the wrong structure is why §14 concluded for two revisions that the loader was not in `SCUS_945.70`; it is, at 0x8002926C. See §10.4. |
+| "The `mesh+0x2C` volume is a standing cylinder and field 3 is its radius." | **Refuted** | Field 5 is a second horizontal extent — non-zero in 349 of 1717 records and **different from field 3 in 25** of them, which a circle cannot be. Field 3 is half the mesh's width (median ratio 1.000) and not half its diagonal (0.707), so it is an inscribed half-extent rather than a wrapping radius; and the 324 crate records describe exactly their mesh's own 256-unit cube. See §8.4. |
 | "TEX record +0x08 is unused padding." | **Refuted** | It is the **tpage**: `0x80029450` copies it into `descriptor+0x0C`, which §6.2 reads as the page. It is zero in 15,160/15,160 because a shipped pack states no VRAM placement, not because the field is dead. |
 | "A level's objects are drawn where their own vertices sit." | **Refuted** | They are drawn once per record of the placement list at `model+0x18`, each under that record's own rotation and position: 2689 records over 1971 objects, 2120 of them moved off the origin. 668 records share an id with another record and **no two of those share a transform**, so the copies cannot be meant to coincide. See §8.5. |
 | "The 0x4000 id namespace indexes its table the way 0x5000 does." | **Refuted** | 0x5000 is `(id & 0xFFF) − 1`; 0x4000 packs two fields, `clip = (id & 0xF80) >> 7` and `frame = id & 0x7F` (0x80019B1C). Reading a 0x4000 id as `id & 0xFFF` makes the 45 clip placements in the corpus, all of them id 0x4000, look like an out-of-range index −1 instead of clip 0 frame 0. |

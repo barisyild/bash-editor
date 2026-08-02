@@ -132,13 +132,15 @@ texture pack in the archive and only `.mdl` entries open in the viewport.
 Toggles for solid / wireframe / points / volumes / textures / vertex colours sit
 under the viewport, and individual meshes can be hidden from the **Model** panel.
 
-**Volumes** draws the gameplay volume a mesh carries, as the cylinder it is. For
-a playable character that is its collision body, and you can see the two it has:
-Crash stands in a 128-unit radius, and the spin mesh he switches to widens it to
-307. Only 812 of the archive's meshes carry one at all — nearly all of them
-characters and props, since a level's floors and walls have none — and on the
-rest of that family the volume serves some purpose other than collision, so
-treat what you see as the file's word rather than a proven collision shape.
+**Volumes** draws the gameplay volume a mesh carries. For a playable character
+that is its collision body, and you can see the two it has: Crash stands in a
+128-unit half-width, and the spin mesh he switches to widens it to 307. It is
+drawn as a box because the record carries two horizontal extents and they
+differ in 25 of the 349 records that set the second — a crate's volume is
+exactly its own 256-unit cube. Only 812 of the archive's meshes carry one at
+all, nearly all of them characters and props, since a level's floors and walls
+have none. Nothing found so far reads the block, so what you see is the record's
+own shape rather than a proven test volume.
 
 An arena or a warp room keeps almost none of itself in the numbered mesh array the
 file counts: the floor, the walls, the lamp posts and the level boards are *objects*,
