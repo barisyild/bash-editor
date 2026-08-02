@@ -99,10 +99,35 @@ ANGLE_TURN = 4096.0  # the game's full circle
 ANIM_NAMESPACE = 0x4000
 NAMESPACE_MASK = 0x7000
 
-# The projection distance the camera is initialised with (0x80014388) and the
-# GTE reads from camera+0x18 (0x80018E8C), over a 240-line display.
+# The projection distance the camera is initialised with (0x800143A8, 0x140 =
+# 320) and the GTE reads straight from camera+0x18:
+#
+#     80018E8C  lw   $t3, 0x18($s7)   ; the camera's projection distance
+#     80018E94  ctc2 $t3 -> H         ;   into the GTE, unscaled
+#
+# and the vertical screen offset it is measured against is half the viewport:
+#
+#     80018E5C  lw   $v0, 0x14($s1)   ; the viewport's height
+#     80018E78  sra  $v0, $v0, 1      ;   halved
+#     80018E80  sll  $t5, $v0, 0x10   ;   into 16.16
+#     80018E88  ctc2 $t5 -> OFY
+#
+# so the vertical field of view is `2 * atan(OFY / H)`. The half-height is 240,
+# not the 120 a 240-line display would suggest: at 120 the cast overflows the
+# frame in 181 of 198 camera samples across the cutscenes, and at 240 the median
+# subject fills 0.94 of the frame height -- which is what a shot composed around
+# a character looks like. `level_intro_crashplain` settles it on screen: at 240
+# its opening frame is the whole plain with Crash small in it, and at 120 it is
+# a close-up of his head.
 SCREEN_DISTANCE = 400.0
-SCREEN_LINES = 240.0
+SCREEN_HALF_HEIGHT = 240.0
+
+NODE_TYPE_CAMERA = 2
+CAMERA_KEYS = 0x1C
+CAMERA_STRIDE = 0x28
+CAMERA_TARGET = 0x08
+CAMERA_EYE = 0x14
+NODE_SCREEN_DISTANCE = 0x18
 
 NODE_WINDOW_START = 0x04
 NODE_WINDOW_END = 0x08
@@ -273,10 +298,74 @@ class Prop:
     mesh_index: int
 
 
+@dataclass(frozen=True)
+class CameraKey:
+    tick: int
+    duration: int
+    eye: np.ndarray
+    target: np.ndarray
+
+
+@dataclass(frozen=True)
+class Camera:
+    """The viewpoint a shot is filmed through, over one stretch of its clock.
+
+    A node of type 2 is the camera, and it writes the struct the frame renderer
+    reads. Its keys carry two points, one stride of 0x28 apart: the handler
+    interpolates both, hands them to the look-at helper to get the angles, and
+    then stores the second as the eye:
+
+        8001F074  addiu $a0, $sp, 0x10   ; key+0x14: the eye
+        8001F078  addiu $a1, $sp, 0x20   ; key+0x08: what it looks at
+        8001F07C  jal   0x800153b4       ;   -> Euler angles from the difference
+        8001F080  addiu $a2, $s6, 0x54   ;      into camera+0x54
+        8001F090  sw    $t0, 0xc($s6)    ; and the eye into camera+0x0C..0x14
+        8001F09C  sw    $zero, 8($s6)    ; the offset is cleared
+        8001EF6C  lw    $v0, 0x18($a2)   ; node+0x18, the projection distance,
+        8001EF74  sw    $v0, 0x18($s6)   ;   -> camera+0x18, which the GTE reads
+
+    `s6` is 0x80051640, and 0x8002AF78 hands that same address to 0x80014540 --
+    the routine that turns the angles at +0x54 into the MATRIX at +0x74. So this
+    is the shot's viewpoint, not a guess: eye, target, and a field of view the
+    node names for itself.
+
+    A file may carry more than one, with windows that do not overlap:
+    `level_ending_good_shot3` cuts at tick 259 from a 303 distance to 609.
+    """
+
+    node: int
+    start: int
+    end: int
+    screen_distance: float
+    keys: tuple[CameraKey, ...]
+
+    def at(self, tick: int) -> tuple[np.ndarray, np.ndarray]:
+        """Eye and target at `tick`, interpolated within the key holding it."""
+        if not self.keys:
+            return np.zeros(3), np.array([0.0, 0.0, 1.0])
+        for index, key in enumerate(self.keys):
+            if key.tick <= tick < key.tick + key.duration:
+                if index + 1 < len(self.keys) and key.duration:
+                    weight = (tick - key.tick) / key.duration
+                    nxt = self.keys[index + 1]
+                    return (key.eye * (1.0 - weight) + nxt.eye * weight,
+                            key.target * (1.0 - weight) + nxt.target * weight)
+                return key.eye, key.target
+        last = self.keys[-1] if tick >= self.keys[-1].tick else self.keys[0]
+        return last.eye, last.target
+
+    @property
+    def field_of_view(self) -> float:
+        """Vertical field of view in degrees, over the 240-line display."""
+        return 2.0 * math.degrees(
+            math.atan(SCREEN_HALF_HEIGHT / max(self.screen_distance, 1.0)))
+
+
 @dataclass
 class Scene:
     actors: list[Actor] = field(default_factory=list)
     props: list[Prop] = field(default_factory=list)
+    cameras: list[Camera] = field(default_factory=list)
     # The root's own clock range, which is what the shot runs on. A node window
     # may fall outside it -- `level_shot8` has one opening at tick 63 in a shot
     # that runs 295..372 -- and such a node simply never opens.
@@ -307,6 +396,16 @@ class Scene:
 
     def props_at(self, tick: int) -> list[Prop]:
         return [p for p in self.props if p.track.start <= tick <= p.track.end]
+
+    def camera_at(self, tick: int) -> Camera | None:
+        """The camera filming `tick`, or the nearest one if none covers it."""
+        if not self.cameras:
+            return None
+        for camera in self.cameras:
+            if camera.start <= tick <= camera.end:
+                return camera
+        return min(self.cameras,
+                   key=lambda c: min(abs(tick - c.start), abs(tick - c.end)))
 
 
 def _read_keys(data: bytes, node: int, first: int, stride: int,
@@ -558,13 +657,27 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
 
     for node in spawn_order(data, index):
         kind = _i32(data, node + NODE_TYPE)
-        if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP, NODE_TYPE_SUBSCENE):
+        if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP,
+                        NODE_TYPE_SUBSCENE, NODE_TYPE_CAMERA):
             continue
         window_start = _i32(data, node + NODE_WINDOW_START)
         window_end = _i32(data, node + NODE_WINDOW_END)
         if not (0 <= window_start < window_end < MAX_TICK):
             continue
         command = _i32(data, node + NODE_COMMAND_ID)
+
+        if kind == NODE_TYPE_CAMERA:
+            keys = _read_camera_keys(data, node, offset, parent)
+            if not keys:
+                continue
+            scene.cameras.append(Camera(
+                node=node,
+                start=window_start + offset,
+                end=window_end + offset,
+                screen_distance=float(_i32(data, node + NODE_SCREEN_DISTANCE)),
+                keys=tuple(keys),
+            ))
+            continue
 
         if kind == NODE_TYPE_SUBSCENE:
             child, placement = _sub_scene(data, node, window_start)
@@ -627,6 +740,30 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
         ))
 
 
+def _read_camera_keys(data: bytes, node: int, offset: int,
+                      parent: Placement | None) -> list[CameraKey]:
+    """A camera node's keys, on the parent's clock and in its frame."""
+    keys: list[CameraKey] = []
+    at = node + CAMERA_KEYS
+    while 0 <= at <= len(data) - CAMERA_STRIDE and len(keys) < MAX_KEYS:
+        tick, duration = _i32(data, at), _i32(data, at + 4)
+        target = np.array(
+            [_i32(data, at + CAMERA_TARGET + 4 * i) for i in range(3)],
+            dtype=np.float64) * GTE_SCALE_SMALL
+        eye = np.array(
+            [_i32(data, at + CAMERA_EYE + 4 * i) for i in range(3)],
+            dtype=np.float64) * GTE_SCALE_SMALL
+        if parent is not None:
+            rotation = rotation_matrix(parent.rotation)
+            eye = parent.position + rotation @ (parent.scale * eye)
+            target = parent.position + rotation @ (parent.scale * target)
+        keys.append(CameraKey(tick + offset, duration, eye, target))
+        if duration == 0:
+            break
+        at += CAMERA_STRIDE
+    return keys
+
+
 def _onto_parent(node: int, start: int, end: int, keys: list[Key],
                  offset: int, parent: Placement | None) -> Track:
     """A track moved onto the parent's clock and into the parent's frame."""
@@ -639,12 +776,8 @@ def _onto_parent(node: int, start: int, end: int, keys: list[Key],
 
 
 def field_of_view() -> float:
-    """The camera's vertical field of view, in degrees.
-
-    `2 * atan(120 / 400)` -- half the display's 240 lines over the projection
-    distance the GTE is given.
-    """
-    return 2.0 * math.degrees(math.atan((SCREEN_LINES / 2.0) / SCREEN_DISTANCE))
+    """Vertical field of view for a camera that names no distance of its own."""
+    return 2.0 * math.degrees(math.atan(SCREEN_HALF_HEIGHT / SCREEN_DISTANCE))
 
 
 def rotation_matrix(quaternion: np.ndarray) -> np.ndarray:

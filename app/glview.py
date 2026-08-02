@@ -117,6 +117,10 @@ VERTEX_FLOATS = 11  # position 3, normal 3, colour 3, uv 2
 # a spare take of the same character rather than scenery. A tenth separates the
 # archive's 3 spare takes from its 132 unowned backdrops with room to spare.
 STAND_IN_TOLERANCE = 0.12
+
+# The console's display: 320 columns over the 240 lines the camera's field of
+# view is measured against.
+SCREEN_ASPECT = 4.0 / 3.0
 VERTEX_BYTES = VERTEX_FLOATS * 4
 
 # PS1 is Y-down / Z-into-screen; flip both to get a right-handed frame.
@@ -279,6 +283,10 @@ class ModelView(QOpenGLWidget):
         self._scene_clips: list = []
         self._scene_tick = 0
         self._stand_ins: set[int] = set()
+        self._backdrops: set[int] = set()
+        # Scenes that name a camera are filmed through it by default; the orbit
+        # controls take over the moment this is switched off.
+        self.use_shot_camera = True
         # Row spans whose position/normal columns have been rewritten in place
         # and still have to reach the VBO. Drained in paintGL rather than at the
         # call site so the widget's context is guaranteed current.
@@ -326,6 +334,7 @@ class ModelView(QOpenGLWidget):
         self._scene_clips = []
         self._scene_tick = 0
         self._stand_ins = set()
+        self._backdrops = set()
         self._atlas = build_atlas(pack)
         self._atlas_dirty = True
         self._texture_tick = 0.0
@@ -393,11 +402,48 @@ class ModelView(QOpenGLWidget):
         self._scene = scene
         self._scene_clips = list(clips or [])
         self._stand_ins = self._find_stand_ins(scene)
+        self._backdrops = self._find_backdrops(scene, self._stand_ins)
         if scene is not None:
             self._animation = None
             self._scene_tick = scene.start if tick is None else tick
         self._rebuild()
         self.frame_model()
+
+    def _find_backdrops(self, scene: Scene | None, stand_ins: set[int]) -> set[int]:
+        """Unowned meshes big enough to be the shot's sky rather than scenery.
+
+        These are shared domes -- a handful of shapes, 55 to 250 units across,
+        centred within a few units of the origin, and reused across the whole
+        set of cutscenes. 112 of the 132 unowned meshes that are not spare takes
+        are one of them, and the rest are small props under 37 units.
+
+        They have to follow the camera. `level_intro` puts its viewpoint 44
+        units out, well outside a dome of radius 25, so drawn where the file
+        puts them the sky becomes a purple ball sitting in front of the lens.
+        The game's own reason for that is not in hand -- no node owns these and
+        the code that raises them is still unfound -- so this is inference from
+        the geometry, not something read out of the executable.
+        """
+        model = self._model
+        if scene is None or model is None or not scene.cameras:
+            return set()
+        on_stage = [np.asarray(model.meshes[i].positions, dtype=np.float64)
+                    for i in sorted(scene.mesh_indices)
+                    if i < len(model.meshes) and model.meshes[i].positions]
+        if not on_stage:
+            return set()
+        stage = np.vstack(on_stage)
+        stage_diag = float(np.linalg.norm(stage.max(axis=0) - stage.min(axis=0)))
+        backdrops = set()
+        for mesh in model.meshes:
+            if (mesh.index in scene.mesh_indices or mesh.index in stand_ins
+                    or not mesh.positions):
+                continue
+            points = np.asarray(mesh.positions, dtype=np.float64)
+            extent = points.max(axis=0) - points.min(axis=0)
+            if float(np.linalg.norm(extent)) > stage_diag:
+                backdrops.add(mesh.index)
+        return backdrops
 
     def _find_stand_ins(self, scene: Scene | None) -> set[int]:
         """Meshes that are another take of someone already on stage.
@@ -508,6 +554,11 @@ class ModelView(QOpenGLWidget):
         if mesh.index not in scene.mesh_indices:
             if mesh.index in self._stand_ins:
                 return np.zeros((len(mesh.positions), 3), dtype=np.float32)
+            if mesh.index in self._backdrops:
+                shot = self._shot_camera()
+                if shot is not None:
+                    rest = np.asarray(mesh.positions, dtype=np.float32) * AXIS_FLIP
+                    return (rest + shot[0]).astype(np.float32)
             return None
         tick = self._scene_tick
         for actor in scene.actors_at(tick):
@@ -917,6 +968,43 @@ class ModelView(QOpenGLWidget):
         self.pitch = math.radians(18.0)
         self.frame_model()
 
+    def _set_viewport(self, letterbox: bool) -> None:
+        """Fill the widget, or the largest 4:3 rectangle centred inside it."""
+        ratio = self.devicePixelRatioF()
+        width = max(int(self.width() * ratio), 1)
+        height = max(int(self.height() * ratio), 1)
+        if not letterbox:
+            GL.glViewport(0, 0, width, height)
+            return
+        box_w = min(width, int(round(height * SCREEN_ASPECT)))
+        box_h = min(height, int(round(width / SCREEN_ASPECT)))
+        GL.glViewport((width - box_w) // 2, (height - box_h) // 2,
+                      max(box_w, 1), max(box_h, 1))
+
+    def _shot_camera(self) -> tuple[np.ndarray, np.ndarray, float] | None:
+        """Eye, target and field of view the shot itself names, if it names one.
+
+        The camera node's points are in the same frame as everything else in the
+        file, so they take the same axis flip the geometry does.
+        """
+        if not self.use_shot_camera or self._scene is None:
+            return None
+        camera = self._scene.camera_at(self._scene_tick)
+        if camera is None:
+            return None
+        eye, target = camera.at(self._scene_tick)
+        return (np.asarray(eye, dtype=np.float32) * AXIS_FLIP,
+                np.asarray(target, dtype=np.float32) * AXIS_FLIP,
+                camera.field_of_view)
+
+    def set_use_shot_camera(self, use: bool) -> None:
+        """Film through the shot's own camera, or orbit it by hand."""
+        self.use_shot_camera = bool(use)
+        self.update()
+
+    def has_shot_camera(self) -> bool:
+        return bool(self._scene is not None and self._scene.cameras)
+
     def _eye(self) -> np.ndarray:
         cp = math.cos(self.pitch)
         offset = np.array(
@@ -1038,6 +1126,35 @@ class ModelView(QOpenGLWidget):
             GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         self._texture_patches_pending = False
 
+    def _draw_solid(self, draws: list[MeshDraw]) -> None:
+        """The opaque run of each mesh, with blending off."""
+        GL.glDisable(GL.GL_BLEND)
+        for draw in draws:
+            if draw.opaque_count:
+                GL.glDrawArrays(GL.GL_TRIANGLES, draw.first, draw.opaque_count)
+
+    def _draw_blended(self, draws: list[MeshDraw]) -> None:
+        """The blended runs, one GL pass per ABR mode the console asks for."""
+        blended = [d for d in draws if d.blend_spans]
+        if not blended:
+            return
+        GL.glEnable(GL.GL_BLEND)
+        for abr in sorted({mode for d in blended for mode in d.blend_spans}):
+            source, dest, weight, subtract = _ABR_BLEND[abr]
+            GL.glBlendColor(weight, weight, weight, weight)
+            GL.glBlendEquation(
+                GL.GL_FUNC_REVERSE_SUBTRACT if subtract else GL.GL_FUNC_ADD
+            )
+            GL.glBlendFunc(source, dest)
+            for draw in blended:
+                span = draw.blend_spans.get(abr)
+                if span:
+                    GL.glDrawArrays(GL.GL_TRIANGLES,
+                                    draw.first + span[0], span[1])
+        GL.glBlendEquation(GL.GL_FUNC_ADD)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        GL.glDisable(GL.GL_BLEND)
+
     def paintGL(self) -> None:
         _drain_gl_errors()
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
@@ -1055,13 +1172,26 @@ class ModelView(QOpenGLWidget):
             return
 
         aspect = self.width() / max(self.height(), 1)
-        eye = self._eye()
-        target = self._center + self._pan
         up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-        near = max(self._radius * 0.01, 1e-3)
-        far = max(self.distance + self._radius * 6.0, near * 10)
+        shot = self._shot_camera()
+        self._set_viewport(shot is not None)
+        if shot is not None:
+            eye, target, fov = shot
+            # The shot was framed for a 320x240 display and its field of view is
+            # vertical, so any other shape either crops the sides or invents
+            # scenery beside them. Letterboxing to 4:3 keeps the framing the one
+            # the camera node describes.
+            aspect = SCREEN_ASPECT
+            near = 0.02
+            far = max(float(np.linalg.norm(eye - target)) + self._radius * 8.0, 1.0)
+        else:
+            eye = self._eye()
+            target = self._center + self._pan
+            fov = 45.0
+            near = max(self._radius * 0.01, 1e-3)
+            far = max(self.distance + self._radius * 6.0, near * 10)
         view = _look_at(eye, target, up)
-        mvp = _perspective(45.0, aspect, near, far) @ view
+        mvp = _perspective(fov, aspect, near, far) @ view
 
         self._program.bind()
         self._program.setUniformValue("mvp", _to_qmatrix(mvp))
@@ -1093,34 +1223,32 @@ class ModelView(QOpenGLWidget):
             # caller drew every surface with the blend the effects had asked
             # for: a red character over grass came out yellow.
             GL.glDisable(GL.GL_BLEND)
-            for draw in self._draws:
-                if draw.visible and draw.opaque_count:
-                    GL.glDrawArrays(GL.GL_TRIANGLES, draw.first, draw.opaque_count)
+
+            # The sky goes down first and takes no part in depth: the console
+            # puts it at the far end of the ordering table, and a dome centred
+            # on the camera is nearer than the set it is meant to sit behind.
+            # It still gets its own blends -- a dome's stars are additive cards,
+            # and drawn opaque they are black squares on the sky.
+            sky = [d for d in self._draws
+                   if d.visible and d.count and d.mesh_index in self._backdrops]
+            if sky:
+                GL.glDisable(GL.GL_DEPTH_TEST)
+                GL.glDepthMask(GL.GL_FALSE)
+                self._draw_solid(sky)
+                self._draw_blended(sky)
+                GL.glDepthMask(GL.GL_TRUE)
+                GL.glEnable(GL.GL_DEPTH_TEST)
+
+            stage = [d for d in self._draws
+                     if d.visible and d.mesh_index not in self._backdrops]
+            self._draw_solid(stage)
 
             # The console's blended triangles, after every opaque surface and
             # without writing depth, so a glow lights what is behind it and
-            # never hides the one beside it. One pass per ABR mode, since each
-            # is a different blend equation.
-            blended = [d for d in self._draws if d.visible and d.blend_spans]
-            if blended:
-                GL.glEnable(GL.GL_BLEND)
-                GL.glDepthMask(GL.GL_FALSE)
-                for abr in sorted({m for d in blended for m in d.blend_spans}):
-                    source, dest, weight, subtract = _ABR_BLEND[abr]
-                    GL.glBlendColor(weight, weight, weight, weight)
-                    GL.glBlendEquation(
-                        GL.GL_FUNC_REVERSE_SUBTRACT if subtract else GL.GL_FUNC_ADD
-                    )
-                    GL.glBlendFunc(source, dest)
-                    for draw in blended:
-                        span = draw.blend_spans.get(abr)
-                        if span:
-                            GL.glDrawArrays(GL.GL_TRIANGLES,
-                                            draw.first + span[0], span[1])
-                GL.glBlendEquation(GL.GL_FUNC_ADD)
-                GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-                GL.glDepthMask(GL.GL_TRUE)
-                GL.glDisable(GL.GL_BLEND)
+            # never hides the one beside it.
+            GL.glDepthMask(GL.GL_FALSE)
+            self._draw_blended(stage)
+            GL.glDepthMask(GL.GL_TRUE)
 
         if self.show_wireframe or self.show_points:
             self._program.setUniformValue1f("unlit", 1.0)

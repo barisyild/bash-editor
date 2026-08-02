@@ -1798,6 +1798,63 @@ Nothing in the file distinguishes the two; this editor uses "does the scene cast
 which is exact over the archive — all 55 shots with a character, none of the 72 arena scenes —
 but it is a guess, not a rule of the format.
 
+### 9.11.6 Node type 2 is the shot's camera — **certain**
+
+It fills the struct the frame renderer projects through. Its keys carry two points a stride
+apart; the handler interpolates both, takes the angles from their difference, and keeps the
+second as the eye:
+
+```
+8001F074  addiu $a0, $sp, 0x10   ; key+0x14, the eye
+8001F078  addiu $a1, $sp, 0x20   ; key+0x08, what it looks at
+8001F07C  jal   0x800153b4       ;   -> Euler angles from eye - target
+8001F080  addiu $a2, $s6, 0x54   ;      into camera+0x54
+8001F090  sw    $t0, 0xc($s6)    ; the eye -> camera+0x0C..0x14
+8001F09C  sw    $zero, 8($s6)    ; and the offset at +0x00..0x08 is cleared
+8001EF6C  lw    $v0, 0x18($a2)   ; node+0x18, the projection distance
+8001EF74  sw    $v0, 0x18($s6)   ;   -> camera+0x18
+```
+
+`s6` is 0x80051640, and 0x8002AF78 hands that address to 0x80014540 — the routine that turns
+the angles at +0x54 into the MATRIX at +0x74 the GTE is loaded with. The key stride is 0x28
+and the list ends at a zero duration like every other (§9.11.1):
+
+| Offset | Type | Meaning |
+| --- | --- | --- |
+| +0x00 | i32 | start tick |
+| +0x04 | i32 | duration; zero ends the list |
+| +0x08..0x10 | 3 × i32 | the point the camera looks at, model units |
+| +0x14..0x1C | 3 × i32 | the eye |
+| +0x20..0x27 | 8 bytes | unread; the first is the projection distance × 0.8 |
+
+56 of the 129 scenes carry one, 76 cameras in all, and a file may hold several with windows
+that do not overlap — `level_ending_good_shot3` cuts at tick 259 from a distance of 303 to 609.
+
+**The field of view is `2 * atan(240 / H)`.** The GTE takes `H` straight from camera+0x18 and
+its vertical offset is half the viewport:
+
+```
+80018E5C  lw   $v0, 0x14($s1)   ; the viewport height
+80018E78  sra  $v0, $v0, 1      ;   halved -> OFY
+80018E88  ctc2 $t5 -> OFY
+80018E8C  lw   $t3, 0x18($s7)   ; the projection distance
+80018E94  ctc2 $t3 -> H         ;   unscaled
+```
+
+The half-height is 240, which the disassembly gives the shape of but not the value. Measured:
+at 120 the cast overflows the frame in 181 of 198 camera samples across the cutscenes; at 240
+the median subject fills 0.94 of the frame height. On screen it is not close — at 240
+`level_intro_crashplain` opens on the whole plain with Crash small in it, and at 120 on a
+close-up of his head. So H = 320, which 52 of the 76 cameras use and which the camera is
+initialised with (0x800143A8, `0x140`), is a 73.7° shot.
+
+**The backdrop follows the camera.** Every cutscene carries two unowned domes ~50 units across,
+centred on the origin and shared across files, and `level_intro` puts its eye 44 units out —
+outside a dome of radius 25. Drawn where the file puts them the sky becomes a ball in front of
+the lens, so they have to be centred on the eye and drawn without depth, at the far end of the
+ordering table. The code that raises them is **still unfound** — no node owns them — so this
+part is inference from the geometry, unlike everything above it.
+
 | Offset | Type | Meaning |
 | --- | --- | --- |
 | +0x00 | u32 | start tick |

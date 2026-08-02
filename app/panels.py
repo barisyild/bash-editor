@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QTreeWidget,
     QTreeWidgetItem,
@@ -333,9 +334,24 @@ class AnimationPanel(QWidget):
 
         self.play_button = QPushButton("▶  Play")
         self.play_button.clicked.connect(self._toggle_play)
+        # A shot names its own viewpoint (§9.12); showing it by default is the
+        # point of scene playback, but the orbit controls have to stay reachable
+        # for looking at what the shot keeps off screen.
+        self.shot_camera = QCheckBox("Shot camera", checked=True)
+        self.shot_camera.setToolTip(
+            "Film through the camera the cutscene names, at its own field of view."
+        )
+        self.shot_camera.setEnabled(False)
         self.slider = QSlider(Qt.Horizontal, minimum=0, maximum=0)
         self.slider.valueChanged.connect(self._on_slider)
         self.frame_label = QLabel("—", alignment=Qt.AlignRight | Qt.AlignVCenter)
+        # A counter that reflows the row every time it gains a digit makes the
+        # whole transport twitch as a scene plays, so it is sized once for the
+        # widest thing it will ever hold.
+        self.frame_label.setMinimumWidth(
+            self.frame_label.fontMetrics().horizontalAdvance("8888 / 8888")
+        )
+        self.frame_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.info = QLabel("No model loaded")
         self.info.setWordWrap(True)
 
@@ -343,6 +359,7 @@ class AnimationPanel(QWidget):
         # with the mesh list, and beside a button it collapses to just the grip.
         transport = QHBoxLayout()
         transport.addWidget(self.play_button)
+        transport.addWidget(self.shot_camera)
         transport.addStretch(1)
         transport.addWidget(self.frame_label)
 
@@ -387,7 +404,9 @@ class AnimationPanel(QWidget):
                 f"prop tracks, over meshes {sorted(scene.mesh_indices)}.\n"
                 "A mesh a node owns is drawn only while one of its windows is "
                 "open, as the game does; meshes no node owns are the set and "
-                "stay put. The shot's own camera is not in the file, so orbit."
+                "stay put.\n"
+                + (f"{len(scene.cameras)} camera(s) of its own."
+                   if scene.cameras else "No camera of its own; orbit it.")
             )
             self.list.addItem(item)
         for clip in animations:
@@ -457,6 +476,7 @@ class AnimationPanel(QWidget):
         self._loading = False
         playable = scene is not None or (clip is not None and clip.frame_count > 1)
         self._set_enabled(playable)
+        self.shot_camera.setEnabled(bool(scene is not None and scene.cameras))
         self.frame_label.setText(f"0 / {last}" if playable else "—")
 
     @guarded

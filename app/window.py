@@ -119,6 +119,7 @@ class MainWindow(QMainWindow):
         self.anim_panel.animation_changed.connect(self._set_animation)
         self.anim_panel.scene_changed.connect(self._set_scene)
         self.anim_panel.frame_changed.connect(self._set_frame)
+        self.anim_panel.shot_camera.toggled.connect(self.view3d.set_use_shot_camera)
 
         model_side = QSplitter(Qt.Vertical)
         model_side.addWidget(self.mesh_panel)
