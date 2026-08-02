@@ -167,6 +167,13 @@ NODE_SCREEN_DISTANCE = 0x18
 
 NODE_WINDOW_START = 0x04
 NODE_WINDOW_END = 0x08
+
+# The fade (§9.11.10): a window and the two levels it ramps between, 4096 being
+# opaque. Over the corpus the pair is only ever (4096, 0), (0, 4096) or held.
+NODE_TYPE_FADE = 4
+FADE_FROM = 0x14
+FADE_TO = 0x18
+FADE_ONE = 4096.0
 NODE_COMMAND_ID = 0x14
 NODE_PLAY_START = 0x18
 NODE_PLAY_END = 0x1C
@@ -558,12 +565,37 @@ class Camera:
             math.atan(SCREEN_HALF_HEIGHT / max(self.screen_distance, 1.0)))
 
 
+@dataclass(frozen=True)
+class Fade:
+    """A type-4 node: the shot dipping to or out of a colour (§9.11.10).
+
+    `start`/`end` are the window and `level_at` ramps from `first` to `last`
+    across it, 1.0 being fully faded. The render pass scales the colour at the
+    context's +0x08 by `1 - level`, so 1.0 is that colour filling the screen.
+    """
+
+    node: int
+    start: int
+    end: int
+    first: float
+    last: float
+
+    def level_at(self, tick: int) -> float:
+        if tick <= self.start:
+            return self.first
+        if tick >= self.end or self.end == self.start:
+            return self.last
+        weight = (tick - self.start) / (self.end - self.start)
+        return self.first * (1.0 - weight) + self.last * weight
+
+
 @dataclass
 class Scene:
     actors: list[Actor] = field(default_factory=list)
     props: list[Prop] = field(default_factory=list)
     cameras: list[Camera] = field(default_factory=list)
     emitters: list[Emitter] = field(default_factory=list)
+    fades: list[Fade] = field(default_factory=list)
     # The root's own clock range, which is what the shot runs on. A node window
     # may fall outside it -- `level_shot8` has one opening at tick 63 in a shot
     # that runs 295..372 -- and such a node simply never opens.
@@ -859,11 +891,21 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
     for node in spawn_order(data, index):
         kind = _i32(data, node + NODE_TYPE)
         if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP, NODE_TYPE_SUBSCENE,
-                        NODE_TYPE_CAMERA, NODE_TYPE_EMITTER):
+                        NODE_TYPE_CAMERA, NODE_TYPE_EMITTER, NODE_TYPE_FADE):
             continue
         window_start = _i32(data, node + NODE_WINDOW_START)
         window_end = _i32(data, node + NODE_WINDOW_END)
         if not (0 <= window_start < window_end < MAX_TICK):
+            continue
+
+        if kind == NODE_TYPE_FADE:
+            scene.fades.append(Fade(
+                node=node,
+                start=window_start + offset,
+                end=window_end + offset,
+                first=_i32(data, node + FADE_FROM) / FADE_ONE,
+                last=_i32(data, node + FADE_TO) / FADE_ONE,
+            ))
             continue
         command = _i32(data, node + NODE_COMMAND_ID)
 

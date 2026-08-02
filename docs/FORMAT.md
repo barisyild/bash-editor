@@ -2479,6 +2479,54 @@ Four numbers, and the shot is reproducible. **confirmed** (the type table, the h
 id resolution, the scale track, the visibility bit, the camera struct and its rebuild, and
 the negatives as scoped above) / **?unknown?** (the cutscene's camera values).
 
+### 9.11.10 Node type 4 is the fade — **certain**
+
+The last type the spawner constructs that this document could not name. Its constructor keeps
+two fields of the node, and its handler ramps between them across the node's own window:
+
+```
+; 0x80021708 — the constructor; a0 = the node
+80021744  addiu $v0, $zero, 4
+80021748  sw    $v0, 4($v1)      ; the instance's type
+80021750  lw    $v0, 0x14($a0)   ; node+0x14 -> instance +0x08
+8002175C  lw    $v0, 0x18($a0)   ; node+0x18 -> instance +0x0C
+
+; 0x8001F4F8 — the handler, once the node's window is found to hold the tick
+8001F594  slt   $v0, $a3, $v0    ; tick < window start -> nothing
+8001F5A8  slt   $v0, $v0, $a3    ; tick > window end   -> nothing
+8001F5C0  lw    $a2, 8($v1)      ; the window's end
+8001F5C4  lw    $a3, 4($v1)      ;   and its start
+8001F5CC  lw    $a0, 8($t0)      ; the level to ramp from
+8001F5D0  lw    $a1, 0xc($t0)    ;   and the one to ramp to
+8001F5E4  jal   0x80015304       ; interpolate across the window
+8001F5F0  sw    $v0, -0x74a0($v1); -> 0x80058B60
+```
+
+Two measurements make it a fade rather than a nameless ramp. **The levels are only ever
+0 or 4096** — 1.0 in the 1.12 the rest of the graph uses — and over all 44 nodes the pair
+takes exactly three shapes: `(4096, 0)` fifteen times, `(0, 4096)` fifteen, and `(4096, 4096)`
+fourteen. Ramp down, ramp up, hold. All 44 sit in cutscene models: `uka` 12, `aku` 12,
+`aku_uka` 6 and `cutscene` 14.
+
+And the value it writes is composited, not merely stored. Both readers — 0x800201D4 in the
+executable and 0x80094EF8 in `gameeng.bin` — fold it into the render context's +0x14 as
+`1 − (1 − ramp)(1 − level)`, which is how two fades combine, and the render pass then scales a
+colour by it:
+
+```
+; 0x800191F8
+800191F8  lw    $a0, 0x14($a2)   ; the fade level
+80019200  beqz  $a0, ...         ;   zero -> nothing to draw
+8001921C  subu  $v1, $v1, $a0    ; 1 - fade
+80019220  mult  $v1, $a1         ;   scales the colour at ctx+0x08
+```
+
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
+| +0x00 | i32 | 4, the type | **confirmed** |
+| +0x04, +0x08 | i32 | the window, first and last tick | **confirmed** |
+| +0x14, +0x18 | i32 | the level to ramp from and to, 4096 being opaque | **confirmed** |
+
 ### 9.11.9 There are six node types, and the table says so — **certain**
 
 An earlier revision read the block at 0x80058B00 as a list of eighteen handlers and inferred
@@ -3136,12 +3184,9 @@ are not only undocumented format; they are also where a reader is quietly skippi
 * **The type-2 node** (keys at node+0x1C, stride 0x28, handler 0x8001EDFC, id namespace
   0x1000). Twelve in the corpus. It writes a position like the others, but what it drives
   and what the rest of its 0x28 bytes hold is unread.
-* **Node type 4.** 44 of the corpus's 3333 nodes, in 21 models, and the only type the
-  spawner constructs that nothing here decodes — the other 2173 are props, actors, cameras,
-  emitters and sub-scenes. Its handler at 0x8001F4F8 resolves the root array at `T(0x4C)`,
-  indexes a root by one field of the node and that root's child array by another, so it
-  **names another node** the way type 5 names another root. What it then does with it is
-  unread.
+* ~~**Node type 4**~~ — **closed**, see §9.11.10. It is the fade: a window and two levels in
+  1.12, ramped by 0x8001F4F8 into the render context's fade slot. Every node type the spawner
+  constructs is now named.
 * ~~**The rest of the track dispatch table**~~ — the earlier reading of it was wrong and is
   corrected in §9.11.9: the table holds **16 bytes per node type**, not one handler each, so
   its "eighteen handlers" are the four columns of six types rather than eighteen kinds of
