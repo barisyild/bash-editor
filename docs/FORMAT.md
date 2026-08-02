@@ -1062,6 +1062,20 @@ code — and its record widens the radius from Crash's standing 128 to **307** w
 from 64 to 1360: the spin attack's larger interaction volume. Replacing a character therefore
 means replacing both meshes, each under the original's own block.
 
+**A level's own geometry carries almost none of these.** Of the 1971 object meshes that make
+up the 73 arenas, warp rooms and hubs (§8.3), only **35 have a `+0x2C` block at all**, and
+they sit in seven models: `demo_hub1` (16), `boss_oxide/arena` (9), `boss_oxide/chaselevel`
+(4), `demo_hub2` and `boss_bear` (2 each), and one apiece in the two `medieval_dragon`
+arenas. Counting the numbered meshes of those same models adds 54 more, so 89 of the 777
+blocks in the archive are in a level and 688 are on something else — characters, props and
+cutscene actors. No arena floor, wall or warp-room stair has one.
+
+So **the MDL does not carry a level's collision geometry**: there is no collision mesh, no
+height field and no volume list behind the set. Nor do the minigames look for one — across
+the 14 mode overlays there is exactly **one** call to the object resolver at 0x800159C4
+(`warp.bin`, 0x800BB60C), so they are not walking the level's meshes to test against them
+either. Where a floor or a wall is defined is ?unknown? and is not in this file.
+
 When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
 5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
 
