@@ -2425,7 +2425,7 @@ Every pack in the corpus satisfies `u32@0x00 == 8` and `u32@0x04 == entry.size`.
 | 0x0C | u32 ptr | `ptr_textures` | **Self-relative**: `0x0C + value` == the first texture record, i.e. the end of the palette table, in **400/400**. | **confirmed** |
 | 0x10 | u32 ptr | `ptr_palettes` | **Self-relative**: `0x10 + value == 0x20` in **400/400**. | **confirmed** |
 | 0x14 | u32 | — | Multiple of 4 in 400/400, range 120..228,744, 272 distinct values. It is **not** a pointer (`0x14 + value` is outside the file for 198/400), not the pixel byte total, not the VRAM-unit total, not the pixel+palette total, and it differs between structurally identical packs (22980 / 25096 / 22760 for `uka` data / data2 / data3). | ?unknown? |
-| 0x18 | u32 | `ptr_animation` | **Absolute** offset of the animation block (§10.4), 0 when the pack has none — 314/400 have none. In the 86 that do, the value equals the end of the palette+texture walk in **86/86**. Note it is absolute, unlike 0x0C and 0x10. | **confirmed** |
+| 0x18 | u32 | `ptr_animation` | **Absolute** offset of the animation block (§10.5), 0 when the pack has none — 314/400 have none. In the 86 that do, the value equals the end of the palette+texture walk in **86/86**. Note it is absolute, unlike 0x0C and 0x10. | **confirmed** |
 | 0x1C | u32 | — | 0 in 400/400. | **confirmed** (zero) / ?unknown? (purpose) |
 
 The palette table therefore starts at **0x20**, not 0x24.
@@ -2455,7 +2455,7 @@ Records run back to back from `0x0C + u32@0x0C`, each immediately followed by it
 | +0x05 | u8 | — | 0 in 13,332/15,160; otherwise 1..5 mostly. | ?unknown? |
 | +0x06 | u8 | `used_width` | **≤ `vram_width * 2` (the row's byte count) in 15,160/15,160**, with equality in 11,890. | **confirmed** (the bound) / *likely* (a used-area width) |
 | +0x07 | u8 | `used_height` | **≤ `height` in 15,160/15,160**, with equality in 10,186. | **confirmed** (the bound) / *likely* (a used-area height) |
-| +0x08 | u32 | — | **0 in 15,160/15,160.** | **confirmed** (zero) / ?unknown? (purpose) |
+| +0x08 | u32 | `tpage` | **0 in 15,160/15,160**, but not dead: `0x80029450` copies it into `descriptor+0x0C`, the page §6.2 reads. A shipped pack states no VRAM placement. | **confirmed** (where it goes) / ?unknown? (who fills it) |
 | +0x0C | i16 | `palette_field` | Bit 0 = bit depth (0 → 4bpp, 1 → 8bpp; 14,885 / 275). Bits 1–15 = palette index. The value `0x7FFF` means "no palette of my own" — the swatch texture, 355 of 15,160. | *likely* |
 | +0x0E | i16 | — | 0 (14,985) or 3 (175). | ?unknown? |
 | +0x10 | u32 | `flags` | 19 distinct values; 1 (14,643), 2 (192), 16 (66), 8 (43), 7 (41), 12 (39), … | ?unknown? |
@@ -2475,7 +2475,86 @@ their palettes), since their one user leaves with it. Replacing pixels and palet
 inside a slot is safe either way (§10.1's unknowns are about *placement*, which never moves);
 what a slot is *for* is the question the data cannot answer.
 
-## 10.4 Animation block (`u32@0x18`)
+## 10.4 The loader: how a pack becomes runtime descriptors
+
+This is the routine §14 spent three exhaustive scans failing to find, and it was missed
+because the search was aimed at the wrong structure. The descriptors do **not** hang off the
+render context at 0x80056998. They hang off a second context at **0x80055684**, which is what
+the accessors of §6.2 are handed — `0x8002C774` passes it to `0x800160F8` — and which is
+reached by only three sites in the whole image.
+
+`0x80017070` hands it to `0x80016CA0`, which registers `0x80016D98` as its load callback;
+that callback calls `0x8002A5A4` with the context's own tail at `+0x10`, and `0x8002A5A4`
+sizes the two descriptor arrays straight out of the pack header:
+
+```
+; 0x8002A5A4 — s0 = context+0x10, a1 = the loaded pack
+8002A5CC  sw    $v0, 0x10($s0)     ; the pack base       -> context+0x20
+8002A5D0  lhu   $v0, 8($v0)        ; pack+0x08, the texture count
+8002A5D8  sll   $a0, $v0, 3
+8002A5DC  subu  $a0, $a0, $v0
+8002A5E4  sll   $a0, $a0, 3        ; (delay slot) 56 * count
+8002A5E0  jal   0x800115d8         ; allocate            -> context+0x18
+8002A5F4  lhu   $v0, 0xa($v0)      ; pack+0x0A, the palette count
+8002A5FC  sll   $a0, $v0, 1
+8002A600  addu  $a0, $a0, $v0
+8002A608  sll   $a0, $a0, 2        ; (delay slot) 12 * count
+8002A604  jal   0x800115d8         ; allocate            -> context+0x1C
+8002A62C  lw    $v0, 0x14($v1)     ; pack+0x14           -> context+0x24
+8002A634  jal   0x8002926c         ; and fill them
+```
+
+Two things fall out immediately. **The 56- and 12-byte strides §6.2 derived from the
+accessors are confirmed by the allocation itself**, and **`pack+0x14` has a reader** — the
+field §14 lists as taking 272 distinct values and matching no landmark is carried into the
+context at +0x24. What is done with it there is still ?unknown?, but "no reader" was wrong.
+
+`0x8002926C` then walks both tables. The palettes first, each descriptor 12 bytes:
+
+```
+800292C8  lhu   $v1, ($a0)         ; the palette's own entry count (§10.2)
+800292D0  subu  $v0, $a0, $v0      ; its offset from the pack, biased by +4
+800292D4  sh    $v1, ($a2)         ; CLUT descriptor +0x00 = the count
+800292D8  sw    $zero, -4($a1)     ;                 +0x04 = 0
+800292DC  sw    $v0, ($a1)         ;                 +0x08 = the offset
+800292F0  addiu $v0, $v0, 4        ; next palette: 4 + 2*count bytes
+```
+
+Then the textures, `s0` walking the records and `s1` the descriptor's +0x30. Every field of
+a texture descriptor comes from the record — this is the whole map:
+
+| Descriptor | From | Note |
+| --- | --- | --- |
+| +0x00 | `record+0x0C & 1` | the bit depth, exactly §10.3's bit 0 |
+| +0x02 | `(record+0x0C >> 1) & 0x7FFF` | and exactly §10.3's palette index |
+| +0x04 | `0x80063B1C + 12 * f(w, h, depth)` | `f` is 0x80028994, which halves the width at 4bpp and then shifts down to a bucket |
+| +0x08 | `record+0x00 << 2` at 4bpp, `<< 1` at 8bpp | the width in texels |
+| +0x0A | `record+0x02` | the height |
+| +0x0C | `record+0x08` | §6.2 reads this as the **tpage** |
+| +0x10, +0x11 | `width − 1`, `height − 1` | wrap masks |
+| +0x12 | `record+0x0E` | the 0-or-3 field |
+| +0x14 | `record+0x10` | the 19-value `flags` |
+| +0x1C, +0x1E | `record+0x00`, `record+0x02` | the raw dimensions again |
+| +0x20, +0x34 | 0, −1 | |
+| +0x30 | the record's own offset from the pack | biased by +0x14 |
+
+and the record stride closes §10.3 from the code rather than from measurement:
+
+```
+80029460  mult  $v1, $v0            ; vram_width * height
+80029470  sll   $v0, $t0, 1         ;   * 2
+80029474  addiu $v0, $v0, 0x14      ;   + the 20-byte header
+8002947C  addu  $s0, $s0, $v0       ; (delay slot) the next record
+```
+
+**And this is why no `GetClut` arithmetic exists anywhere on the disc.** The descriptor's
+tpage is not computed from anything: it is copied out of `record+0x08`, which is **0 in
+15,160/15,160 records**. So a shipped pack carries no VRAM placement at all, and whatever
+assigns one must write `descriptor+0x0C` after this loader has run. That is the remaining
+gap, and it is now a much smaller one: a single field of a known structure, written by
+something the load path reaches after `0x8002926C`.
+
+## 10.5 Animation block (`u32@0x18`)
 
 Two tables, each announced by a self-relative pointer in the block's own 8-byte header and each
 starting with its record count. Either may be absent. Present in 86 of 400 packs, holding
@@ -2725,6 +2804,8 @@ produce subtly broken output.
 | "The animation blend rounds to the nearest unit." | **Refuted** | GTE `INTPL` with `sf=1` shifts arithmetically, so the blend floors: `A + ((B−A)*w >> 12)`. Flooring differs from round-to-nearest on **10,071,343 of 38,535,099** interpolated coordinates (26 %). See §9.6. |
 | "The animated pose replaces the mesh's vertex pool." | **Refuted** | The decoders fill a separate 0x2038-byte buffer at 0x80056AC8 and the rasteriser takes the vertex array as an argument (0x80019D9C vs 0x80019D8C). `mesh+0x00` is a primitive-cache slot and is never written by the animation path. See §9.6. |
 | "A frame record is 16 bytes starting at the blob base." | **Refuted** | Record *f* is at `blob + 4 + 16*f`; `blob+0x00` is the blob's pool pointer. Under the shifted reading only 1,925 of 49,167 records validate and no clip validates completely. See §9.3. |
+| "The texture descriptors hang off the render context at 0x80056998." | **Refuted** | They hang off a second context at **0x80055684**, which only three sites in the image reference and which `0x8002C774` is what hands to the accessors of §6.2. Nothing anywhere on the disc — the EXE or any of the 15 code overlays — stores to +0x18 or +0x1C of 0x80056998. Aiming three exhaustive scans at the wrong structure is why §14 concluded for two revisions that the loader was not in `SCUS_945.70`; it is, at 0x8002926C. See §10.4. |
+| "TEX record +0x08 is unused padding." | **Refuted** | It is the **tpage**: `0x80029450` copies it into `descriptor+0x0C`, which §6.2 reads as the page. It is zero in 15,160/15,160 because a shipped pack states no VRAM placement, not because the field is dead. |
 | "A level's objects are drawn where their own vertices sit." | **Refuted** | They are drawn once per record of the placement list at `model+0x18`, each under that record's own rotation and position: 2689 records over 1971 objects, 2120 of them moved off the origin. 668 records share an id with another record and **no two of those share a transform**, so the copies cannot be meant to coincide. See §8.5. |
 | "The 0x4000 id namespace indexes its table the way 0x5000 does." | **Refuted** | 0x5000 is `(id & 0xFFF) − 1`; 0x4000 packs two fields, `clip = (id & 0xF80) >> 7` and `frame = id & 0x7F` (0x80019B1C). Reading a 0x4000 id as `id & 0xFFF` makes the 45 clip placements in the corpus, all of them id 0x4000, look like an out-of-range index −1 instead of clip 0 frame 0. |
 
@@ -2798,8 +2879,14 @@ Stated precisely, with the measurement that bounds each one.
 
 **TEX**
 
-* **VRAM placement.** This is the biggest gap in the whole format, and it is now bounded a
-  little better: **the descriptor is not built in `SCUS_945.70`.** A UV pair in a model is
+* **VRAM placement.** Still the biggest gap, but it is now one field rather than a missing
+  routine. §10.4 finds the loader — it was in `SCUS_945.70` all along, hanging off a second
+  context at 0x80055684 rather than the render context every earlier scan aimed at — and the
+  loader fills every field of a texture descriptor from its record except the page. The tpage
+  at `descriptor+0x0C` is copied from `record+0x08`, which is **0 in 15,160/15,160**, so a
+  shipped pack states no placement and something after `0x8002926C` must assign one. Find
+  that writer and the gap closes. What follows is the earlier reasoning, kept because its
+  negatives still hold and they are what narrows the search: a UV pair in a model is
   page-local and is OR'd at runtime with a per-texture origin from a 56-byte descriptor whose
   tpage (+0x0C), CLUT id (+0x0E) and UV origin (+0x10) the render pass only ever *reads*.
   Three exhaustive scans back that up: `.text` contains no `GetClut`-shaped arithmetic at all
@@ -2819,7 +2906,8 @@ Stated precisely, with the measurement that bounds each one.
   UV to a texel relies on assumption.
 * **Header 0x14** — multiple of 4 in 400/400, range 120..228,744, 272 distinct values. Not a
   pointer, not any pixel/palette/record total tested, and it differs between structurally
-  identical packs.
+  identical packs. It is no longer unread, though: `0x8002A62C` carries it into the texture
+  context at +0x24 (§10.4). What reads it there is the open half.
 * **Header 0x18** — 0 in 314/400; the 86 non-zero values match no landmark tested.
 * **Record +0x04..+0x07** — 321 distinct patterns. +0x04 is zero in 15,160/15,160 and +0x05 in
   13,332. The other two are bounded by the record's own dimensions — `+0x06 <= vram_width*2`
