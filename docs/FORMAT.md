@@ -266,6 +266,12 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
 
+Everything past `T(0x44)` is animation blobs and **zero padding to the next 0x800**. A
+byte-coverage walk over the archive leaves 1262 unclaimed spans in that region and **all 1262
+are entirely zero**; 1037 end exactly on a 0x800 boundary and the other 225 end at the file
+itself. Nothing is stored there, which is why a rebuilt model may pad freely as long as each
+blob still starts aligned.
+
 Block order, identical in all 373 models that have meshes:
 
 ```
@@ -318,7 +324,7 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x18 | i32 ptr | `ptr_uv_index` | One u16 per triangle (§6.1). Also the end of the vertex block. | **confirmed** |
 | 0x1C | i32 ptr | `ptr_texture_runs` | Run-length texture list (§6.2). | **confirmed** |
 | 0x20 | i32 ptr | `ptr_colour_index` | One u16 per triangle (§6.3). | **confirmed** |
-| 0x24 | i32 ptr | `ptr_end` | End of the mesh's own data. | **confirmed** |
+| 0x24 | i32 ptr | `ptr_end` | End of the mesh's own data, and the address of a **zero terminator word**: `u32 @ T(0x24) == 0` in **7961/7961** meshes, object meshes included. A byte-coverage walk over the archive leaves 6983 four-byte holes and every one of them is this word, so a writer must emit it — the block is `... colour index array, [attachment block,] 0x00000000`. | **confirmed** |
 | 0x28 | i32 ptr | `ptr_normals` | **Non-zero in exactly 300/5990.** When set, `T(0x28) == vertex_pool + 8*vertex_count` in 300/300 and a second 8-byte-per-vertex array of unit normals follows. When zero there are no normals. | **confirmed** (structure) / *likely* (that they are normals) |
 | 0x2C | i32 ptr | `ptr_attachments` | Non-zero in 777/5990. Live, id-addressed block (§8.4). | **confirmed** |
 | 0x30 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
@@ -1337,6 +1343,41 @@ the middle and its props stand in one heap at the centre.
 the scene nodes of §9.11 are the other thing in the file that names meshes, and over the
 whole corpus **no mesh is both named by a node and named by a record** (122 have a node,
 1861 have a record, the sets do not meet).
+
+## 8.6 The block a hub appends after its clip table
+
+Found by walking the archive byte by byte and asking what nothing claims. Seven models keep
+something past `T(0x44)` with **no clips at all**, so the payload that would be an animation
+blob in any other file is this instead: `demo_hub1`, `demo_hub2` and `warp_room1..5`, 242 KB
+between them, and nothing else in the archive has one.
+
+It starts where `base + i32@0x50` says the resident image ends, and its header is the same in
+all seven:
+
+| Offset | Type | Measured |
+| --- | --- | --- |
+| +0x00, +0x04 | i32 | 0 in 7/7 |
+| +0x08 | u16 | a count: 167, 167, 183, 236, 289, 360, 437 |
+| +0x0A, +0x0C, +0x0E | u16 | **4, 4, 1 in 7/7** |
+| +0x10 | i32 | 104, 120, 124, 128, 132, 212 |
+| +0x14 | i32 | **32 in 7/7** |
+| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7 |
+| +0x28..+0x30 | i32 | 0 in 7/7 |
+
+What the offsets reach is geometry. The first is 8-byte records read exactly like a vertex
+(§4.2) — `demo_hub1` opens `636, −171, 3169, 0` then `557, 4, 3065, 1` — and the other three
+are lists of small ascending integers, which is what an index list looks like. Between 42 and
+109 of those records per model, and their coordinates sit inside the room rather than around
+it: `warp_room1` spans x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent runs to
+±19000 on the sky dome alone.
+
+**What it is for is ?unknown?.** Nothing in `SCUS_945.70` reads it — the field that would
+locate it, `i32@0x50`, has no reader either (§2.1) — so if anything uses it the caller is in
+an overlay, and `warp.bin` is the one that drives exactly these seven rooms. It is worth
+saying what would be tempting and is not established: §8.4 shows a level carries no collision
+volumes and no mode overlay walks its meshes, so a floor has to be described somewhere, and
+this is room-scale geometry in the only files that are rooms. That is a reason to look, not a
+finding.
 
 ---
 
