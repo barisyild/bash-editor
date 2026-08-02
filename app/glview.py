@@ -14,6 +14,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from OpenGL import GL
 
 from crashbash.formats.anim import Animation
+from crashbash.formats import mdl
 from crashbash.formats.mdl import Mesh, Model
 from crashbash.formats.tex import TICKS_PER_SECOND
 from crashbash.scene import Scene, rotation_matrix
@@ -200,6 +201,22 @@ def _face_normals(corners: np.ndarray) -> np.ndarray:
     normals = np.cross(edge1, edge2)
     lengths = np.linalg.norm(normals, axis=1, keepdims=True)
     return np.divide(normals, np.maximum(lengths, 1e-9))
+
+
+def _place(points: np.ndarray, rotation, translation) -> np.ndarray:
+    """Stand a mesh where its placement record puts it (§8.5).
+
+    `points` have already been flipped into viewport axes, so the model-space
+    transform is conjugated by that same flip: since the flip F is diagonal and
+    its own inverse, `F(Rp + t)` is `(F R F)(Fp) + Ft`.
+    """
+    if rotation == mdl.IDENTITY and not any(translation):
+        return points
+    flip = AXIS_FLIP.astype(np.float64)
+    matrix = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    matrix = matrix * flip[:, None] * flip[None, :]
+    moved = points @ matrix.T
+    return (moved + np.asarray(translation, dtype=np.float64) * flip).astype(points.dtype)
 
 
 def _edge_pairs(corners: np.ndarray) -> np.ndarray:
@@ -768,7 +785,7 @@ class ModelView(QOpenGLWidget):
     def _rebuild(self) -> None:
         self._draws = []
         self._pose_pending = []
-        drawn = self._model.drawn_meshes if self._model is not None else []
+        drawn = self._model.draw_list() if self._model is not None else []
         if not drawn:
             self._vertex_data = np.zeros((0, VERTEX_FLOATS), dtype=np.float32)
             self._dirty = True
@@ -780,7 +797,7 @@ class ModelView(QOpenGLWidget):
         line_chunks: list[np.ndarray] = []
         pending: list[tuple[int, int, int, np.ndarray | None]] = []
 
-        for mesh in drawn:
+        for mesh, rotation, translation in drawn:
             triangles_indexed = (
                 _every_triangle(mesh)
                 if mesh.index == animated
@@ -805,6 +822,13 @@ class ModelView(QOpenGLWidget):
             opaque_count = 3 * len(groups.get(0, ()))
 
             positions = self._pose_positions(mesh)
+            # A mesh a scene node owns is already put where its track says, so
+            # placing it again would move it twice. The two never meet on retail
+            # data -- 122 meshes have a node, 1861 have a placement record, and
+            # no mesh has both -- but a level carries both kinds of list and
+            # nothing in the file forbids the overlap.
+            if self._scene is None or mesh.index not in self._scene.mesh_indices:
+                positions = _place(positions, rotation, translation)
             idx = np.asarray([t[:3] for t in triangles_indexed], dtype=np.int32)
 
             corners = positions[idx]  # (n, 3, 3)
@@ -1099,8 +1123,11 @@ class ModelView(QOpenGLWidget):
         shells: list[tuple[np.ndarray, np.ndarray]] = []
         if model is None:
             return None, shells
-        remaining = [np.asarray(m.positions, dtype=np.float64) * AXIS_FLIP
-                     for m in model.drawn_meshes if m.positions]
+        remaining = [
+            _place(np.asarray(m.positions, dtype=np.float64) * AXIS_FLIP,
+                   rotation, translation)
+            for m, rotation, translation in model.draw_list() if m.positions
+        ]
         if len(remaining) < 2:
             return None, shells
         while len(remaining) > 1:

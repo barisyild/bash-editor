@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from crashbash.archive import BashArchive, Entry
 from crashbash.formats import anim, sfx, tex
+from crashbash.formats.mdl import IDENTITY
 
 
 def guarded(fn):
@@ -301,6 +302,25 @@ class MeshPanel(QWidget):
                 f"{len(unresolved)} objects live in a model this level loads "
                 "alongside its own and cannot be shown from this file"
             )
+        if model.instances:
+            moved = sum(
+                1 for i in model.instances
+                if i.rotation != IDENTITY or any(i.translation)
+            )
+            unplaced = len([
+                o for o in model.objects
+                if o.mesh is not None
+                and not any(i.mesh is o.mesh for i in model.instances)
+            ])
+            lines.append(
+                f"{len(model.instances)} placements stand the set up, "
+                f"{moved} of them away from the origin"
+            )
+            if unplaced:
+                lines.append(
+                    f"{unplaced} objects that no placement names are shown "
+                    "where their own vertices sit"
+                )
         for warning in model.warnings:
             lines.append(f"model: {warning}")
         for mesh in drawn:

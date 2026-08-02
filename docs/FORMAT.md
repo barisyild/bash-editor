@@ -216,7 +216,7 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x0C | i32 | `subfile_slots` | Range 0..14. `≥ i32@0x40` in 400/400, equal in 328 of the 373 models that have meshes. No EXE site reads it. Reading it as "allocated slots vs used slots" is a guess. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_pool` | The one field through which the game reaches this block. The game does **not** use the plain self-relative form here — see the note below. | **confirmed** |
 | 0x14 | i32 | `count_18` | 0 in 327/400, 1 in 73/400. Repeated at `[T(0x18)]` in 400/400. Also a layout switch: `T(0x2C) == T(0x3C)` **iff** this is 0, 400/400. | **confirmed** |
-| 0x18 | i32 ptr | `ptr_subobjects` | `[i32 count == i32@0x14]` then `count` self-relative i32 pointers, entry *i* at `T(0x18)+4+4*i`. All 73 entries in the corpus resolve inside the file. | **confirmed** |
+| 0x18 | i32 ptr | `ptr_subobjects` | `[i32 count == i32@0x14]` then `count` self-relative i32 pointers, entry *i* at `T(0x18)+4+4*i`. All 73 entries in the corpus resolve inside the file, and each reaches the **placement list** that stands the level's set up — 2689 records naming an object and the transform to draw it under. See §8.5. | **confirmed** |
 | 0x1C | i32 ptr | `ptr_objects` | Object table addressed by id namespace 0x5000; 12-byte stride where the code indexes it. Its leading records each name a **mesh header in the pool** — the level's own set, 1971 meshes over the 73 models that have one; the scene nodes follow them. See §8.3. Extent is not a multiple of 12 in general (mod 12 is 0 in 279 models, 4 in 70, 8 in 51). | **confirmed** (stride/base/object record) / ?unknown? (total layout) |
 | 0x20 | i32 ptr | `ptr_colours` | Colour table: 4-byte `R G B 00` records. See §7.1. | **confirmed** |
 | 0x24 | i32 ptr | `ptr_uvs` | UV table: 2-byte `(u, v)` records. See §7.2. | **confirmed** |
@@ -1065,10 +1065,11 @@ means replacing both meshes, each under the original's own block.
 When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
 5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
 
-## 8.5 Sub-object array (`model + 0x18`)
+## 8.5 Sub-object array (`model + 0x18`) — the level's placement list
 
-`[i32 count]` then `count` self-relative i32 pointers. The resolve and the sub-object's own
-header:
+`[i32 count]` then `count` self-relative i32 pointers. The count is `i32@0x14`, so the 73
+models that have an object set have exactly one sub-object each and no other model has any.
+The resolve, and the four fields of the sub-object the binder reads:
 
 ```
 ; 0x8001DE18 — a0 = runtime instance, [a0+8] = which sub-object
@@ -1087,12 +1088,136 @@ header:
 ; the sub-object's own header, same self-relative convention
 8001DE50  lw    $v0, 0xc($v1)  -> instance +0x28   (and +4 -> instance +0x2C)
 8001DE6C  lw    $v0, 0x10($v1) -> instance +0x30
-8001DE80  lw    $v0, 0x20($v1) -> instance +0x14   (a COLOUR table, same offset as the model)
-8001DE94  lw    $v0, 0x1c($v1) -> instance +0x18   (raw, not resolved)
+8001DE80  lw    $v0, 0x20($v1) -> instance +0x14   ; the record array
+8001DE94  lw    $v0, 0x1c($v1) -> instance +0x18   ; how many records (raw, not resolved)
 ```
 
-73 entries exist in the corpus, all resolving inside their file. The sub-object's contents
-were not chased further — ?unknown?.
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
+| +0x00, +0x04, +0x08 | i32 | 0x2000 in 73/73. Not read on this path. | **confirmed** (constant) / ?unknown? (purpose) |
+| +0x0C | i32 ptr | Target is the **end of the record array** in 73/73 — `records + 160*count` to the byte. | **confirmed** |
+| +0x10 | i32 ptr | A second block after that one. | **confirmed** (pointer) / ?unknown? (contents) |
+| +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart, near the file's end. | ?unknown? |
+| +0x1C | i32 | **Record count.** Read raw into instance +0x18 and used as the loop bound. | **confirmed** |
+| +0x20 | i32 ptr | **The record array**, 0x14 in 73/73 — it always starts at sub-object +0x34. | **confirmed** |
+| +0x24 | i32 | 0 (40), 0x01000000 (20), 13 distinct values. | ?unknown? |
+| +0x28..+0x30 | i32 | 0 in 73/73. | **confirmed** (zero) / ?unknown? (purpose) |
+
+### The record: what is drawn, and where it stands
+
+The loader strides the array by **160 bytes** and copies six things out of each record. It is
+worth reading the offsets off the two bases it sets up — `t1` is the record array and
+`a2 = t1 + 0x77`, so `-0x73($a2)` is record +0x04:
+
+```
+; 0x8001E0A8 — a0 = the instance 0x8001DE18 filled in
+8001E0AC  lw    $t0, 0x1c($a0)     ; the runtime record array, stride 0xA8
+8001E0B0  lw    $a3, 0x18($a0)     ; the count, from sub-object +0x1C
+8001E0B4  lw    $t1, 0x14($a0)     ; the file record array, stride 0xA0 = 160
+8001E0C4  addiu $t2, $v0, -0x57d0  ; a 160-byte template at 0x8005A830
+8001E0D8  addiu $a1, $t0, 0x5c
+8001E0DC  addiu $a2, $t1, 0x77
+8001E0E8  ... copy the template over the runtime record ...
+8001E124  lw    $v0, ($t1)         ; record +0x00  -> runtime +0x00   (the flag word)
+8001E130  lw    $t6, -0x73($a2)    ; record +0x04  -> runtime +0x04   } the position,
+8001E134  lw    $t7, -0x6f($a2)    ; record +0x08  -> runtime +0x08   } three i32
+8001E138  lw    $t8, -0x6b($a2)    ; record +0x0C  -> runtime +0x0C   }
+8001E148  lw    $t6, -0x4f($a2)    ; record +0x28  -> runtime +0x30   } 32 bytes: one
+8001E168  lw    $t6, -0x3f($a2)    ; record +0x38  -> runtime +0x40   } libgte MATRIX
+8001E188  sw    $t4, -8($a1)       ; runtime +0x54 = 0x8001DD50, the draw handler
+8001E198  lhu   $v0, 0x11($a2)     ; record +0x88  -> runtime +0x74   the id
+8001E1A4  lhu   $v0, 0x27($a2)     ; record +0x9E  -> runtime +0x8A
+8001E1B0  lhu   $v0, 0x25($a2)     ; record +0x9C  -> runtime +0x68
+8001E1BC  lbu   $v0, -3($a2)       ; record +0x74..+0x77, four bytes -> runtime +0x64..+0x67
+8001E1EC  addiu $v0, $t0, 0xa8     ; runtime +0x5C = the next record: a linked list
+8001E1FC  addiu $a2, $a2, 0xa0     ; (delay slots) stride 160 through the file array
+```
+
+That the 32 bytes at +0x28 are a **libgte `MATRIX`** — `short m[3][3]`, two bytes of padding,
+`long t[3]` — is not read off the copy width alone. Over all 2689 records the 3×3 has
+orthonormal rows *and* columns to one part in a thousand in **2689/2689**, the padding
+halfword at +0x3A is zero in **2689/2689**, and `t[3]` at +0x3C equals the separate position
+vector at +0x04 in **2689/2689**. 1985 of the rotations are the identity; the other 704 turn
+the piece.
+
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
+| +0x00 | u32 | Flag word. **Bit 15 set in 2689/2689** and tested at 0x8001DD6C before anything is drawn. 0x02008000 (2100) or 0x00008000 (589). | **confirmed** (bit 15) / ?unknown? (bit 25) |
+| +0x04 | i32 ×3 | Position, in the same units as a vertex. | **confirmed** |
+| +0x18 | i32 ×3 | 4096, 4096, 4096 in 2689/2689 — a scale of 1.0 that no code site reads. | *likely* (scale) |
+| +0x28 | MATRIX | 3×3 rotation in 3.12 fixed point, pad, then `t[3]` repeating +0x04. | **confirmed** |
+| +0x48 | MATRIX | A second one, byte-identical to the first in 541/2689. Not read by the loader. | **confirmed** (shape) / ?unknown? (use) |
+| +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
+| +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
+| +0x9C, +0x9E | u16 | Copied to two different runtime slots. | ?unknown? |
+
+### The id is the same id the draw dispatcher takes
+
+The handler the loader installs walks straight into §8.3's dispatcher, with the record itself
+as the fourth argument so the transform travels with the id:
+
+```
+; 0x8001DD50 — s1 = the runtime record
+8001DD64  lw    $a2, ($s1)         ; the flag word
+8001DD68  lw    $v0, 0x6c($s1)     ; the owner
+8001DD6C  andi  $v1, $a2, 0x8000
+8001DD70  lw    $s0, 0xc($v0)      ; the model base
+8001DD74  beqz  $v1, 0x8001dda0    ; bit 15 clear -> nothing is drawn
+8001DD90  lhu   $a0, 0x74($s1)     ; the id, from record +0x88
+8001DD98  jal   0x80019a60         ; a1 = model, a2 = flags, a3 = the record
+```
+
+`0x80019A60` is the prologue of the routine whose body at 0x80019AD0 splits on `id & 0x7000`
+(§8.3). So a placement record names either an **object** (0x5000, 2644 records) or a **clip
+and a frame** (0x4000, 45 records), and every one of the 2689 resolves inside its own table.
+The clip form packs two fields, which is why a bare `id & 0xFFF` misreads it:
+
+```
+; 0x80019B1C — the 0x1000 and 0x4000 namespaces share this path
+80019B1C  andi  $v1, $s2, 0xf80
+80019B20  lw    $v0, 0x40($s1)     ; the clip count
+80019B24  sra   $a1, $v1, 7        ; clip index = (id & 0xF80) >> 7
+80019B28  slt   $v0, $a1, $v0      ; bounds-checked against it
+80019B40  sll   $v0, $v0, 3        ; 24 * index into T(0x44)
+80019B58  bgez  $s4, 0x80019b6c    ; flag bit 31 clear ...
+80019B60  lh    $a1, 0x72($s3)     ;   ... set: the live frame cursor (§9.7)
+80019B6C  andi  $a1, $s2, 0x7f     ;   ... clear: frame = id & 0x7F
+```
+
+### This is what stands a level up
+
+Measured over the 73 models that have one:
+
+| | |
+| --- | --- |
+| placement records | 2689 |
+| … drawn (flag bit 15) | 2689 / 2689 |
+| … naming an object, 0x5000 | 2644 |
+| … naming a clip and a frame, 0x4000 | 45 |
+| … with a rotation that is not the identity | 704 |
+| … with a non-zero position | 2120 |
+| records sharing an id with another record | 668 |
+| … pairs of those with the same transform | **0** |
+| objects with a mesh in this file | 1971 |
+| … that a record names | 1875 |
+
+The 668 figure is what settles that the transform composes with the object's own
+coordinates rather than replacing them: `boss_oxide/arena.mdl` draws 26 objects from 178
+records, `polar_polar/arena.mdl` 16 from 54, and no two records that share an id share a
+transform, so the copies cannot be meant to land on one another. The correlation runs the
+way that implies, too — of the objects a record moves, 1404 are authored within 600 units of
+the origin and are placed by their record, while 449 are authored out in room coordinates
+and their record leaves them alone.
+
+**A reader that ignores this list draws a level's set piled on the origin.** Pogo Painter's
+play grid is 72 records over a handful of tile objects; without them the arena has a hole in
+the middle and its props stand in one heap at the centre.
+
+96 objects are named by no record at all, in 13 of the 73 models — 16 in each
+`balls_crash` arena, 6 to 9 in each warp room. What draws them, if anything, is ?unknown?:
+the scene nodes of §9.11 are the other thing in the file that names meshes, and over the
+whole corpus **no mesh is both named by a node and named by a record** (122 have a node,
+1861 have a record, the sets do not meet).
 
 ---
 
@@ -2432,6 +2557,13 @@ keeps its set — 1971 meshes and 96,232 triangles the reader used to walk strai
 They live in `Model.objects`, apart from `Model.meshes`, because the two arrays are addressed
 differently and `install_mesh` / `transplant_mesh` index the numbered one.
 
+Reading the object table was only half of it: the objects still stood where their own vertices
+put them, which piled a level's set on the origin. `read_model` now also reads the placement
+list of §8.5 into `Model.instances`, and `Model.draw_list()` pairs every mesh with the
+transform to draw it under — the numbered meshes and the 96 unnamed objects at identity, and
+everything else once per record. `mdlwrite` has not been taught about either list; a writer
+that moves a mesh block still has to keep the placement records pointing at the right object.
+
 ### `crashbash/formats/anim.py`
 
 New since the previous revision, and the reference implementation of §9. Checked line by line
@@ -2505,6 +2637,8 @@ produce subtly broken output.
 | "The animation blend rounds to the nearest unit." | **Refuted** | GTE `INTPL` with `sf=1` shifts arithmetically, so the blend floors: `A + ((B−A)*w >> 12)`. Flooring differs from round-to-nearest on **10,071,343 of 38,535,099** interpolated coordinates (26 %). See §9.6. |
 | "The animated pose replaces the mesh's vertex pool." | **Refuted** | The decoders fill a separate 0x2038-byte buffer at 0x80056AC8 and the rasteriser takes the vertex array as an argument (0x80019D9C vs 0x80019D8C). `mesh+0x00` is a primitive-cache slot and is never written by the animation path. See §9.6. |
 | "A frame record is 16 bytes starting at the blob base." | **Refuted** | Record *f* is at `blob + 4 + 16*f`; `blob+0x00` is the blob's pool pointer. Under the shifted reading only 1,925 of 49,167 records validate and no clip validates completely. See §9.3. |
+| "A level's objects are drawn where their own vertices sit." | **Refuted** | They are drawn once per record of the placement list at `model+0x18`, each under that record's own rotation and position: 2689 records over 1971 objects, 2120 of them moved off the origin. 668 records share an id with another record and **no two of those share a transform**, so the copies cannot be meant to coincide. See §8.5. |
+| "The 0x4000 id namespace indexes its table the way 0x5000 does." | **Refuted** | 0x5000 is `(id & 0xFFF) − 1`; 0x4000 packs two fields, `clip = (id & 0xF80) >> 7` and `frame = id & 0x7F` (0x80019B1C). Reading a 0x4000 id as `id & 0xFFF` makes the 45 clip placements in the corpus, all of them id 0x4000, look like an out-of-range index −1 instead of clip 0 frame 0. |
 
 ---
 
@@ -2527,8 +2661,15 @@ Stated precisely, with the measurement that bounds each one.
 * **0x1C object table** — 12-byte stride confirmed where the code indexes it, but the block's
   total extent is not a multiple of 12 (mod 12 = 0 in 279 models, 4 in 70, 8 in 51) and no
   header field explains its length. Internal layout beyond +0x00/+0x04/+0x08 unread.
-* **0x18 sub-object targets** — the sub-object header uses the same self-relative convention
-  at +0x0C, +0x10, +0x1C, +0x20 (0x8001DE50–0x8001DE9C). Not chased further.
+* **0x18 sub-object header, the fields the binder does not read** — +0x00/+0x04/+0x08 are
+  0x2000 in 73/73 with no reader, +0x10 points at a block after the records whose contents
+  are unread, +0x14 and +0x18 hold the same value in 73/73 and land 4 bytes apart near the
+  end of the file, +0x24 takes 13 values. The array itself is **closed**, see §8.5.
+* **The unread bytes of a placement record.** The loader at 0x8001E0A8 consumes +0x00,
+  +0x04..+0x0C, +0x28..+0x47, +0x74..+0x77, +0x88, +0x9C and +0x9E; the rest of the 160 is
+  copied by nothing. That includes the second MATRIX at +0x48 — identical to the first in
+  541 of 2689 records and therefore not simply a duplicate — and the scale triple at +0x18,
+  which is 4096, 4096, 4096 in every record measured.
 * ~~**0x28 vector pool framing**~~ and ~~**0x44 record +0x08 / +0x0C**~~ — **closed**, see §9.
   The pool is the position source animation keyframes index; +0x08 is a frame count and +0x0C
   points at the mesh a clip drives.

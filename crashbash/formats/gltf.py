@@ -75,6 +75,24 @@ MODE_TRIANGLES = 4
 # PS1 is Y-down with Z into the screen; glTF is Y-up, right-handed, -Z forward.
 AXIS_FLIP = np.array([1.0, -1.0, -1.0], dtype=np.float32)
 
+_IDENTITY_MATRIX = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+def _node_matrix(rotation, translation) -> list[float]:
+    """A placement record as glTF's column-major 4x4, in the exporter's axes.
+
+    Positions are written out flipped by `AXIS_FLIP`, so the model-space
+    transform is conjugated by that flip: the flip is diagonal and its own
+    inverse, which makes `F(Rp + t)` into `(F R F)(Fp) + Ft`.
+    """
+    flip = AXIS_FLIP.astype(np.float64)
+    basis = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    matrix = np.eye(4)
+    matrix[:3, :3] = basis * flip[:, None] * flip[None, :]
+    matrix[:3, 3] = np.asarray(translation, dtype=np.float64) * flip
+    return matrix.T.reshape(-1).tolist()
+
 # The game bakes one animation record per tick. Nothing in the executable states
 # the tick rate, so this is the viewer's assumption carried over -- see the
 # playback note in docs/FORMAT.md.
@@ -316,6 +334,10 @@ def export_glb(
         for obj in model.objects if obj.mesh is not None
     })
 
+    # Where each mesh ended up, so the placement pass below can hang extra nodes
+    # off the one glTF mesh instead of writing its geometry again.
+    mesh_nodes: dict[int, tuple[int, int]] = {}
+
     for mesh in model.drawn_meshes:
         groups = _group_triangles(model, mesh, pack)
         if not groups:
@@ -373,6 +395,7 @@ def export_glb(
         meshes.append(entry)
         nodes.append({"mesh": len(meshes) - 1, "name": entry["name"]})
         node_index = len(nodes) - 1
+        mesh_nodes[mesh.index] = (node_index, len(meshes) - 1)
 
         for clip in clips:
             times = np.arange(clip.frame_count, dtype=np.float32) / FRAMES_PER_SECOND
@@ -401,6 +424,31 @@ def export_glb(
                     ],
                 }
             )
+
+    # A level stands its set up through the placement list (§8.5), so a mesh
+    # several records name is one glTF mesh under several nodes -- writing its
+    # geometry once per copy would bloat the file for nothing. The first record
+    # moves the mesh's own node so the animation channels above keep pointing at
+    # a node that is really in the scene.
+    seen: set[int] = set()
+    for instance in model.instances:
+        if instance.mesh is None or not instance.is_drawn:
+            continue
+        placement = mesh_nodes.get(instance.mesh.index)
+        if placement is None:
+            continue
+        node_index, gltf_mesh = placement
+        matrix = _node_matrix(instance.rotation, instance.translation)
+        if instance.mesh.index in seen:
+            nodes.append({
+                "mesh": gltf_mesh,
+                "name": f"{mesh_names[instance.mesh.index]}_copy{instance.index:03d}",
+                "matrix": matrix,
+            })
+        else:
+            seen.add(instance.mesh.index)
+            if matrix != _IDENTITY_MATRIX:
+                nodes[node_index]["matrix"] = matrix
 
     document = {
         "asset": {"version": "2.0", "generator": "Bash Editor"},

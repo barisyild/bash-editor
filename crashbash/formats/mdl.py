@@ -36,6 +36,7 @@ which is what scrambles its exports.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 
 from ..binreader import GTE_SCALE_SMALL, Reader
@@ -59,6 +60,33 @@ OBJECT_STRIDE = 12
 MODEL_REF_STRIDE = 16
 MODEL_REF_SLOT = 4  # the field an object's reference pointer lands on; the
 #                     loaded base address is the word after it
+
+# The placement list (§8.5): a level does not draw its objects where their
+# vertices sit, it draws them once per record of this list, each under the
+# record's own transform.
+PTR_SUBOBJECTS = 0x18
+COUNT_SUBOBJECTS = 0x14
+SUBOBJECT_HEADER_SIZE = 0x34
+SUBOBJECT_COUNT = 0x1C  # placement records, read raw at 0x8001E0B0
+SUBOBJECT_RECORDS = 0x20  # self-relative pointer to the first one
+PLACEMENT_STRIDE = 160
+PLACEMENT_FLAGS = 0x00
+PLACEMENT_TRANSLATION = 0x04
+PLACEMENT_MATRIX = 0x28  # a libgte MATRIX: i16 m[3][3], pad, i32 t[3]
+PLACEMENT_ID = 0x88
+PLACEMENT_FLAG_DRAWN = 0x8000  # tested at 0x8001DD6C before anything is drawn
+GTE_ONE = 4096  # 1.0 in the 3.12 fixed point a MATRIX rotation holds
+
+# A placement id names a clip and a frame rather than an object when it lands in
+# the 0x4000 namespace; the fields are split at 0x80019B1C.
+CLIP_NAMESPACE = 0x4000
+CLIP_INDEX_MASK = 0xF80
+CLIP_INDEX_SHIFT = 7
+CLIP_FRAME_MASK = 0x7F
+COUNT_CLIPS = 0x40
+PTR_CLIPS = 0x44
+CLIP_STRIDE = 24
+CLIP_DRIVES = 0x0C  # self-relative pointer to the mesh header the clip drives
 
 # The game masks the colour index with 0x1FFF and tests bit 15 separately.
 COLOUR_INDEX_MASK = 0x1FFF
@@ -238,12 +266,63 @@ class Object:
 
 
 @dataclass
+class Instance:
+    """One record of the level's placement list (§8.5).
+
+    `id` names what is drawn -- an object in the 0x5000 namespace, or a clip and
+    a frame in the 0x4000 one -- and the transform stands it where it belongs.
+    `rotation` is row-major and already divided by the 4096 the file stores, so
+    a placed vertex is `rotation @ position + translation`.
+
+    An object authored at the origin is placed by its record; one authored in
+    room coordinates carries identity here. Both compose the same way, so a
+    reader never has to tell them apart.
+    """
+
+    index: int
+    id: int
+    flags: int
+    translation: Vec3
+    rotation: tuple[float, float, float, float, float, float, float, float, float]
+    mesh: Mesh | None = None
+    clip: int | None = None
+    frame: int = 0
+
+    @property
+    def is_drawn(self) -> bool:
+        """The draw handler at 0x8001DD50 returns early without this bit."""
+        return bool(self.flags & PLACEMENT_FLAG_DRAWN)
+
+
+IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+def transform(point: Vec3, rotation, translation: Vec3) -> Vec3:
+    """Stand one point where its placement puts it: `rotation @ point + t`.
+
+    `rotation` is the row-major 3x3 a placement record holds, which is how
+    libgte stores a MATRIX and how it applies one -- row *r* of the matrix
+    against the whole point gives component *r* of the result.
+    """
+    return tuple(  # type: ignore[return-value]
+        rotation[3 * r] * point[0]
+        + rotation[3 * r + 1] * point[1]
+        + rotation[3 * r + 2] * point[2]
+        + translation[r]
+        for r in range(3)
+    )
+
+
+@dataclass
 class Model:
     meshes: list[Mesh] = field(default_factory=list)
     # The level's static set: a second mesh array the 0x54 count says nothing
     # about. Kept apart from `meshes` because the two are addressed differently
     # and a writer that confused them would move the wrong block.
     objects: list[Object] = field(default_factory=list)
+    # How the level stands its set up: one record per placed piece. Empty for
+    # everything that is not a level.
+    instances: list[Instance] = field(default_factory=list)
     # Shared tables that live after the last mesh, referenced per triangle.
     colours: list[tuple[int, int, int]] = field(default_factory=list)
     uvs: list[tuple[int, int]] = field(default_factory=list)
@@ -258,6 +337,36 @@ class Model:
         arrays without the two colliding.
         """
         return self.meshes + [o.mesh for o in self.objects if o.mesh is not None]
+
+    def draw_list(self) -> list[tuple[Mesh, tuple[float, ...], Vec3]]:
+        """Every mesh to draw, each with the transform to draw it under.
+
+        A level draws its set through the placement list, so an object several
+        records name is drawn once per record, each somewhere else -- reading
+        only `drawn_meshes` stacks those copies on one another at the origin.
+
+        No record names the 0x2000 namespace, but a numbered mesh can still be
+        placed: the 45 records that name a clip instead of an object all resolve
+        to one, and five arenas draw the same numbered mesh 1, 6 or 16 times
+        that way. Whatever a record places is left out of the identity pass, so
+        it is drawn where the records put it and not once more at the origin.
+
+        Objects no record names are drawn at identity rather than dropped; 96 of
+        the corpus's 1971 are in that position and nothing traced so far says
+        what, if anything, draws them.
+        """
+        drawn = [i for i in self.instances if i.mesh is not None and i.is_drawn]
+        placed = {id(i.mesh) for i in drawn}
+        origin: Vec3 = (0.0, 0.0, 0.0)
+        out: list[tuple[Mesh, tuple[float, ...], Vec3]] = [
+            (mesh, IDENTITY, origin) for mesh in self.meshes if id(mesh) not in placed
+        ]
+        out += [(i.mesh, i.rotation, i.translation) for i in drawn]  # type: ignore[misc]
+        out += [
+            (obj.mesh, IDENTITY, origin) for obj in self.objects
+            if obj.mesh is not None and id(obj.mesh) not in placed
+        ]
+        return out
 
     def face_colours(
         self, mesh: Mesh, face: int
@@ -357,7 +466,24 @@ class Model:
 
     @property
     def bounds(self) -> Bounds | None:
-        boxes = [m.bounds for m in self.drawn_meshes if m.bounds is not None]
+        """The box around everything drawn, each mesh in its placed position.
+
+        A placed box is the box around its eight transformed corners, not the
+        transformed box: a rotated one no longer has axis-aligned sides.
+        """
+        boxes = []
+        for mesh, rotation, translation in self.draw_list():
+            if mesh.bounds is None:
+                continue
+            corners = [
+                transform(corner, rotation, translation)
+                for corner in itertools.product(*zip(mesh.bounds.min, mesh.bounds.max))
+            ]
+            boxes.append(Bounds(
+                tuple(min(c[i] for c in corners) for i in range(3)),  # type: ignore[arg-type]
+                tuple(max(c[i] for c in corners) for i in range(3)),  # type: ignore[arg-type]
+                (0.0, 0.0, 0.0), 0.0,
+            ))
         if not boxes:
             return None
         lo = tuple(min(b.min[i] for b in boxes) for i in range(3))
@@ -367,7 +493,12 @@ class Model:
         return Bounds(lo, hi, center, radius)  # type: ignore[arg-type]
 
     def to_obj(self) -> str:
-        """Emit every mesh into one OBJ, keeping per-mesh objects separate."""
+        """Emit every mesh into one OBJ, keeping per-mesh objects separate.
+
+        A level's set is written out placed, so an object several records name
+        appears once per record. The name carries a copy number in that case,
+        since the mesh itself is the same one each time.
+        """
         names = {mesh.index: f"mesh_{mesh.index:02d}" for mesh in self.meshes}
         names.update({
             obj.mesh.index: f"object_{obj.id:04X}"
@@ -375,9 +506,13 @@ class Model:
         })
         chunks = []
         offset = 0
-        for mesh in self.drawn_meshes:
-            chunks.append(f"o {names[mesh.index]}")
-            for x, y, z in mesh.positions:
+        seen: dict[int, int] = {}
+        for mesh, rotation, translation in self.draw_list():
+            copy = seen.get(mesh.index, 0)
+            seen[mesh.index] = copy + 1
+            chunks.append(f"o {names[mesh.index]}" + (f"_{copy}" if copy else ""))
+            for position in mesh.positions:
+                x, y, z = transform(position, rotation, translation)
                 chunks.append(f"v {x:.6f} {-y:.6f} {-z:.6f}")
             for a, b, c in mesh.triangles(consistent_winding=True):
                 chunks.append(f"f {a + 1 + offset} {b + 1 + offset} {c + 1 + offset}")
@@ -820,8 +955,103 @@ def read_model(data: bytes | Reader, max_meshes: int = 4096) -> Model:
             break
 
     _read_objects(reader, model)
+    _read_instances(reader, model)
     _read_shared_tables(reader, model)
     return model
+
+
+def _read_instances(reader: Reader, model: Model) -> None:
+    """Read the placement list a level stands its set up with (§8.5).
+
+    `model+0x18` holds `[i32 count]` then that many self-relative pointers, and
+    each one reaches a sub-object whose +0x1C counts 160-byte placement records
+    starting at its +0x34. The loader at 0x8001E0A8 walks exactly that: it takes
+    the count from the sub-object's +0x1C and the array base from its +0x20,
+    strides by 160, and copies out the translation at +0x04, the 32-byte MATRIX
+    at +0x28 and the id at +0x88.
+    """
+    data = reader.data
+    if len(data) < MESH_COUNT_OFFSET + 4:
+        return
+
+    count = reader.peek_i32(COUNT_SUBOBJECTS)
+    if not 0 < count <= 64:
+        return
+    table = PTR_SUBOBJECTS + reader.peek_i32(PTR_SUBOBJECTS)
+    if not 0 < table < len(data):
+        return
+
+    for slot in range(count):
+        at = table + 4 + 4 * slot
+        if at + 4 > len(data):
+            return
+        subobject = at + reader.peek_i32(at)
+        if not 0 < subobject <= len(data) - SUBOBJECT_HEADER_SIZE:
+            model.warnings.append(f"sub-object {slot} points outside the file")
+            continue
+        records = subobject + SUBOBJECT_RECORDS + reader.peek_i32(
+            subobject + SUBOBJECT_RECORDS
+        )
+        total = reader.peek_i32(subobject + SUBOBJECT_COUNT)
+        if not 0 <= total <= 4096 or not 0 < records <= len(data):
+            model.warnings.append(f"sub-object {slot} has an implausible record array")
+            continue
+        for index in range(total):
+            base = records + PLACEMENT_STRIDE * index
+            if base + PLACEMENT_STRIDE > len(data):
+                model.warnings.append(f"sub-object {slot} runs past the end of the file")
+                break
+            model.instances.append(_read_instance(reader, model, base, index))
+
+
+def _read_instance(reader: Reader, model: Model, base: int, index: int) -> Instance:
+    """One 160-byte record, with its id resolved to the mesh it draws."""
+    reader.seek(base + PLACEMENT_MATRIX)
+    rotation = tuple(v / GTE_ONE for v in reader.array_i16(9))
+    reader.seek(base + PLACEMENT_TRANSLATION)
+    translation = tuple(v * GTE_SCALE_SMALL for v in reader.array_i32(3))
+
+    reader.seek(base + PLACEMENT_ID)
+    identifier = reader.u16()
+    reader.seek(base + PLACEMENT_FLAGS)
+    instance = Instance(
+        index=index,
+        id=identifier,
+        flags=reader.u16(),
+        translation=translation,  # type: ignore[arg-type]
+        rotation=rotation,  # type: ignore[arg-type]
+    )
+
+    namespace = identifier & 0x7000
+    if namespace == OBJECT_NAMESPACE:
+        # 1-based, the same bias the object resolver applies at 0x800159C8.
+        slot = (identifier & 0xFFF) - 1
+        if 0 <= slot < len(model.objects):
+            instance.mesh = model.objects[slot].mesh
+    elif namespace == CLIP_NAMESPACE:
+        instance.clip = (identifier & CLIP_INDEX_MASK) >> CLIP_INDEX_SHIFT
+        instance.frame = identifier & CLIP_FRAME_MASK
+        instance.mesh = _clip_mesh(reader, model, instance.clip)
+    return instance
+
+
+def _clip_mesh(reader: Reader, model: Model, clip: int) -> Mesh | None:
+    """The mesh a clip drives, matched to a mesh this reader already built.
+
+    The clip record's +0x0C is a self-relative pointer to a mesh header (§9.1),
+    so the header offset identifies which of the model's meshes it is.
+    """
+    data = reader.data
+    if len(data) < PTR_CLIPS + 4 or not 0 <= clip < reader.peek_i32(COUNT_CLIPS):
+        return None
+    record = PTR_CLIPS + reader.peek_i32(PTR_CLIPS) + CLIP_STRIDE * clip
+    if not 0 < record + CLIP_DRIVES + 4 <= len(data):
+        return None
+    header = record + CLIP_DRIVES + reader.peek_i32(record + CLIP_DRIVES)
+    for mesh in model.drawn_meshes:
+        if mesh.header_offset == header:
+            return mesh
+    return None
 
 
 def _read_objects(reader: Reader, model: Model) -> None:
