@@ -77,6 +77,7 @@ MESH_NAMESPACE = 0x2000
 
 ROOT_END_TICK = 0x08
 ROOT_START_TICK = 0x0C
+ROOT_CHILDREN = 0x1C  # where the child pointer array starts; count is at +0x00
 
 SUB_POSITION = 0x2C
 SUB_ANGLES = 0x38  # three of them, stride 4, only the low halfword read
@@ -696,15 +697,18 @@ def _root_offset(data: bytes, index: int) -> int | None:
         base = 0x4C + _i32(data, 0x4C)
     except (struct.error, IndexError):
         return None
-    if not (0 < count < 4096 and 0 <= base <= limit):
+    # Bound each read by what it actually needs, not by a slack off the end.
+    # The array sits close to EOF -- `text_intromovie` puts it 8 bytes short --
+    # so a blanket `len - 0x40` rejected 75 models outright and their scenes
+    # were never read at all.
+    if not (0 < count < 4096 and 0 <= base and base + 4 * count <= len(data)):
         return None
     if not 0 <= index < count:
         return None
     slot = base + 4 * index
-    if not 0 <= slot <= limit:
-        return None
     root = slot + _i32(data, slot)
-    return root if 0 <= root <= limit else None
+    # A root is only usable if its own header and child count are readable.
+    return root if 0 <= root and root + ROOT_CHILDREN <= len(data) else None
 
 
 def root_span(data: bytes, index: int = 0) -> tuple[int, int] | None:
@@ -750,16 +754,15 @@ def spawn_order(data: bytes, index: int = 0) -> list[int]:
     if root is None:
         return []
     children = _i32(data, root)
-    array = root + 0x1C
-    if not (0 <= children < 4096 and 0 <= array <= limit):
+    array = root + ROOT_CHILDREN
+    if not (0 <= children < 4096 and array + 4 * children <= len(data)):
         return []
 
     nodes: list[int] = []
     for child in range(children):
         slot = array + 4 * child
-        if not 0 <= slot <= limit:
-            break
         node = slot + _i32(data, slot)
+        # A node has to have room for the type word the spawner dispatches on.
         if 0 <= node <= limit:
             nodes.append(node)
     return nodes

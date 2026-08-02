@@ -2498,7 +2498,7 @@ before `jalr`. Read that way it holds six rows and two empty ones:
 
 The +0x04 column is the per-tick handler this document already decodes for three of them;
 +0x00 is the constructor the spawner calls. **The corpus agrees that six is all there is**:
-walking every root of every model finds 2217 nodes and not one whose type field falls outside
+walking every root of every model finds 3333 nodes and not one whose type field falls outside
 0..5.
 
 ---
@@ -2990,7 +2990,7 @@ produce subtly broken output.
 | "`model+0x28` is the bind pose." | **Refuted** | It is a shared *position pool* that animation keyframes index, and only 208 of 1037 clips use it at all. Decoding frame 0 of every clip reproduces the mesh's static positions in **39/1037** — there is no bind pose anywhere in an MDL. See §9.5, §9.9. |
 | "The animation blend rounds to the nearest unit." | **Refuted** | GTE `INTPL` with `sf=1` shifts arithmetically, so the blend floors: `A + ((B−A)*w >> 12)`. Flooring differs from round-to-nearest on **10,071,343 of 38,535,099** interpolated coordinates (26 %). See §9.6. |
 | "The animated pose replaces the mesh's vertex pool." | **Refuted** | The decoders fill a separate 0x2038-byte buffer at 0x80056AC8 and the rasteriser takes the vertex array as an argument (0x80019D9C vs 0x80019D8C). `mesh+0x00` is a primitive-cache slot and is never written by the animation path. See §9.6. |
-| "The block at 0x80058B00 is eighteen track handlers, so the graph holds eighteen track types." | **Refuted** | It is a table of **16-byte entries indexed by node type**, which is how the spawner reads it (`sll $v0, $v0, 4` before `jalr`). Six rows are live and two are null, and walking every root of every model finds 2217 nodes with no type outside 0..5. The "eighteen handlers" were the four columns of six rows. See §9.11.9. |
+| "The block at 0x80058B00 is eighteen track handlers, so the graph holds eighteen track types." | **Refuted** | It is a table of **16-byte entries indexed by node type**, which is how the spawner reads it (`sll $v0, $v0, 4` before `jalr`). Six rows are live and two are null, and walking every root of every model finds 3333 nodes with no type outside 0..5. The "eighteen handlers" were the four columns of six rows. See §9.11.9. |
 | "A frame record is 16 bytes starting at the blob base." | **Refuted** | Record *f* is at `blob + 4 + 16*f`; `blob+0x00` is the blob's pool pointer. Under the shifted reading only 1,925 of 49,167 records validate and no clip validates completely. See §9.3. |
 | "The texture descriptors hang off the render context at 0x80056998." | **Refuted** | They hang off a second context at **0x80055684**, which only three sites in the image reference and which `0x8002C774` is what hands to the accessors of §6.2. Nothing anywhere on the disc — the EXE or any of the 15 code overlays — stores to +0x18 or +0x1C of 0x80056998. Aiming three exhaustive scans at the wrong structure is why §14 concluded for two revisions that the loader was not in `SCUS_945.70`; it is, at 0x8002926C. See §10.4. |
 | "The `mesh+0x2C` volume is a standing cylinder and field 3 is its radius." | **Refuted** | Field 5 is a second horizontal extent — non-zero in 349 of 1717 records and **different from field 3 in 25** of them, which a circle cannot be. Field 3 is half the mesh's width (median ratio 1.000) and not half its diagonal (0.707), so it is an inscribed half-extent rather than a wrapping radius; and the 324 crate records describe exactly their mesh's own 256-unit cube. See §8.4. |
@@ -3007,21 +3007,17 @@ Stated precisely, with the measurement that bounds each one.
 
 **How much is left, measured.** `tools/coverage.py` marks every byte a structure in this
 document accounts for and prints what nothing claims. Over the 31.8 MB of MDL in the archive
-it reaches **98.77 %**, and the 392 KB it does not is:
+it reaches **99.72 %**, and the 90 KB it does not is `T(0x18)..T(0x44)`, `T(0x4C)..T(0x18)`
+and one model's head (`cutscene/gamelogo_text.mdl`, 7520 bytes between its mesh headers and
+its strip list, in a file whose two mesh headers point at the same geometry).
 
-| Region | Unclaimed | Spans |
-| --- | --- | --- |
-| the object graph, `T(0x1C)+12n .. T(0x4C)` | 302,228 | 352 |
-| `T(0x18) .. T(0x44)` | 70,508 | 57 |
-| `T(0x4C) .. T(0x18)` | 11,792 | 18 |
-| before the object table | 7,520 | 1 (`cutscene/gamelogo_text.mdl`) |
-
-The graph figure is the one that matters, and it is not unread node *types*: walking every
-root the way the spawner does finds 2217 nodes and only **44** of them — all type 4, in 21
-models — have a constructor this document has not decoded. What is left over is the space
-between nodes the walk reaches, which is either fields past a node's key list or nodes no
-root names. Run the tool after any change here; a byte being claimed says the format names
-it, not that the naming is right.
+The audit is worth running for what it catches rather than for the number. It found the mesh
+terminator of §3, the padding rule of §2.1 and the hub block of §8.6 — and then it found a
+**bug in this project's own reader**: `_root_offset` bounded the root array by `len − 0x40`,
+and the array sits close to the end of the file, so 75 models were rejected outright and
+their scenes never read. Bounding each read by what it needs instead took the corpus from
+2217 nodes to **3333** and from 130 models with a playable scene to **186**. Unclaimed bytes
+are not only undocumented format; they are also where a reader is quietly skipping something.
 
 **MDL file header**
 
@@ -3140,7 +3136,7 @@ it, not that the naming is right.
 * **The type-2 node** (keys at node+0x1C, stride 0x28, handler 0x8001EDFC, id namespace
   0x1000). Twelve in the corpus. It writes a position like the others, but what it drives
   and what the rest of its 0x28 bytes hold is unread.
-* **Node type 4.** 44 of the corpus's 2217 nodes, in 21 models, and the only type the
+* **Node type 4.** 44 of the corpus's 3333 nodes, in 21 models, and the only type the
   spawner constructs that nothing here decodes — the other 2173 are props, actors, cameras,
   emitters and sub-scenes. Its handler at 0x8001F4F8 resolves the root array at `T(0x4C)`,
   indexes a root by one field of the node and that root's child array by another, so it
