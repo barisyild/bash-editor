@@ -1158,7 +1158,7 @@ that read it settle its shape without settling what it holds. One searches it, t
 indexes it:
 
 ```
-; 0x8001E48C — a0 = the key being looked for; returns an index, or -1
+; 0x8001E48C — a0 = the key being looked for; returns the entry, or 0
 8001E490  lw    $v1, -0x7530($v0)  ; the current instance, a global at 0x80058AD0
 8001E4A8  lw    $a1, 0x28($v1)     ; -> sub-object +0x0C's target
 8001E4B0  lw    $a2, ($a1)         ; [+0x00] is a COUNT
@@ -1167,22 +1167,77 @@ indexes it:
 8001E4C4  lw    $v0, ($a1)
 8001E4CC  addu  $v0, $a1, $v0      ; self-relative resolve, stride 4
 8001E4D0  lw    $v0, 0xc($v0)      ; the field the search matches on
-8001E4D8  beq   $v0, $a0, ...      ; hit -> return v1
+8001E4D8  beq   $v0, $a0, 0x8001e4ec ; hit
 
-; 0x8001E4FC — the same array by index; instance +0x2C is its first pointer slot
-8001E504  lw    $v0, 0x2c($v0)
+; the tail, entered by falling through -- not a separate routine
+8001E4EC  bgez  $v1, 0x8001e4fc    ; miss -> return 0
+8001E504  lw    $v0, 0x2c($v0)     ; instance +0x2C is the array's first pointer slot
 8001E508  sll   $v1, $v1, 2
 8001E510  lw    $v1, ($v0)
-8001E518  addu  $v0, $v0, $v1
+8001E518  addu  $v0, $v0, $v1      ; return the resolved entry
 ```
 
 Measured: **217 pointers over the 73 models**, every one resolving inside its own file and
 every one landing between `T(0x18)` and `T(0x44)`. The count is 1 in 63 models and 2, 3, 13,
 15, 22 or 52 in the other ten. Consecutive targets sit 104 bytes apart in 124 of the 144
-gaps. `[target+0x00]` is 2 in 194 of 217 and `[target+0x0C]` — the field the search compares
-— takes 1 (73), 203 (19), 0 (18), 204 (18) and a tail of small values. **What a target is,
-is ?unknown?**: nothing else in `SCUS_945.70` reads one, and all three routines above are
-reached through a pointer rather than a call, so their callers are in an overlay.
+gaps. `[target+0x00]` is 2 in 194 of 217, and `[target+0x0C]` — the field the search compares
+— takes 1 (73, so every model has a key-1 entry), 203 (19), 0 (18), 204 (18), 2, 3, 101, 102
+and a tail of small values.
+
+### One entry is the level's camera
+
+Nothing in `SCUS_945.70` reads an entry's fields, but `overlays/gameeng.bin` does, and it is
+readable: sweeping candidate link addresses and scoring how many of its own `jal` targets
+land on a function prologue puts it at **0x80078C90** — 88 hits against 15 for the runner-up,
+all 571 in-band targets inside the image, and the file then ends at 0x800D7148, which is one
+word past the 0x800D7144 its own header word +0x10 holds. It calls 0x8001E48C three times,
+with key 1 twice and key 9 once, and what it does with the answer is build a camera:
+
+```
+; 0x80096184 (gameeng.bin) -- s1 = the entry, s0 = 0x80051640
+80096184  jal   0x8001e48c
+80096188  addiu $a0, $zero, 1       ; (delay slot) look up key 1
+80096194  addiu $a1, $s1, 0x30      ; the entry's first point
+80096198  addiu $a0, $s1, 0x4c      ; its second
+800961A4  addiu $a2, $s0, 0x54      ; -> camera+0x54, the Euler angles
+800961AC  jal   0x800153b4          ; the same routine the cutscene camera uses (§9.11.6)
+800961BC  lw    $a3, 0x30($s1)      ; and the first point again, as three i32
+800961C8  sw    $a3, 0xc($s0)       ;   -> camera+0x0C..0x14, the eye
+800961D8  sw    $v0, 0x18($s0)      ; H = 0x200, the projection distance
+```
+
+`0x80051640` is the camera §9.11.6 already decodes — 0x8002AF94 loads its +0x74 matrix into
+GTE control registers 0..4, its translation into 5..7 and its +0x18 into control 26, which is
+`H`. The second caller derives a heading from the same two points instead of a matrix, with
+`ratan2` at 0x8001463C:
+
+```
+; 0x80097158 (gameeng.bin)
+80097168  jal   0x8001e48c
+8009717C  lw    $v1, 0x58($a1)
+80097180  lw    $a0, 0x3c($a1)
+80097184  lw    $v0, 0x50($a1)
+80097188  lw    $a1, 0x34($a1)
+8009718C  subu  $a0, $v1, $a0       ; [+0x58] - [+0x3C]
+80097190  jal   0x8001463c          ; ratan2
+80097194  subu  $a1, $v0, $a1       ; [+0x50] - [+0x34]
+80097198  addiu $v0, $v0, -0x400    ; a quarter turn off
+8009719C  andi  $v0, $v0, 0xfff     ; 12-bit angle, 0x1000 to the turn
+```
+
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
+| +0x0C | i32 | The key the search matches. 1 exists in 73/73. | **confirmed** |
+| +0x30 | 3 × i32 | A point, read as a triple at 0x800961BC and landing in the camera's eye slot. **213 of 217 lie inside their own model's bounds.** | **confirmed** (a position) / *likely* (the eye) |
+| +0x4C | 3 × i32 | A second point, 0x1C further on, differenced against the first by 0x800153B4. | **confirmed** (a position) |
+
+Two things are deliberately not claimed. The heading at 0x80097158 reads +0x34/+0x3C and
++0x50/+0x58 — the *second* and *fourth* words of each point rather than the first and third —
+so either the points carry more than three words or the heading is taken in a different
+frame; nothing read so far settles which. And the cutscene path passes 0x800153B4 its eye as
+`a0` (§9.11.6) while `gameeng.bin` passes the point that ends up in the eye slot as `a1`, so
+one of the two takes the difference the other way round. Everything else in the entry is
+?unknown?.
 
 ### The id is the same id the draw dispatcher takes
 
@@ -2698,11 +2753,12 @@ Stated precisely, with the measurement that bounds each one.
   0x2000 in 73/73 with no reader, +0x14 and +0x18 hold the same value in 73/73 and land
   4 bytes apart near the end of the file, +0x24 takes 13 values. The array itself and the
   placement records are **closed**, see §8.5.
-* **What the +0x0C list points at.** Its shape is settled — a count and that many
-  self-relative pointers, searched on `[target+0x0C]` at 0x8001E48C — but a target's fields
-  have no reader in `SCUS_945.70`. 217 of them, all between `T(0x18)` and `T(0x44)`, 104
-  bytes apart where they run consecutively. The three routines that touch the list are
-  reached only through a pointer, so the callers are in an overlay; that is where to look.
+* **The rest of a +0x0C list entry.** The list is **closed** and three of the entry's fields
+  are read — the key at +0x0C and the two points at +0x30 and +0x4C, which `gameeng.bin`
+  turns into the level's camera (§8.5). The other ~0x50 bytes of the 104-byte record have no
+  reader yet, and neither does the key space: 1 is universal, but 203, 204, 101..103,
+  111..112 and the rest are unexplained, and only keys 1 and 9 are looked up in the code read
+  so far.
 * **The block at sub-object +0x10.** Reaches the instance as +0x30 and no site reads it back.
   It runs from the end of the +0x0C list to `T(0x14)`'s target, 180 to 780 bytes, always a
   multiple of 4.
@@ -2752,8 +2808,15 @@ Stated precisely, with the measurement that bounds each one.
   `lw`/`sw` against the render context's +0x10/+0x18/+0x1C descriptor-table slots
   (immediates 0x69A8/0x69B0/0x69B4 do not occur); and no site writes a 56-byte-strided record
   in the 0x80015000–0x8001F000 region. So the loader that turns a TEX pack into descriptors
-  lives in an overlay — `overlays/gameeng.bin` (386 KB, the only unclassified code overlay) is
-  the place to look next. Until that is read, mapping a UV to a texel relies on assumption.
+  lives in an overlay — `overlays/gameeng.bin` (386 KB, the only unclassified code overlay)
+  was the place to look next. **It is not there either.** The same `GetClut` shape run over
+  every code blob the disc ships — the 14 mode overlays and `gameeng.bin`, whose link address
+  is now recovered as 0x80078C90 (§8.5) — finds **0 sites out of 216 `sll ,6` instructions**,
+  none of them with a shift-by-4 anywhere within three instructions. Nothing in the shipped
+  code computes a CLUT id from a palette coordinate. So the question changes shape: the
+  packed tpage and CLUT words are either stored somewhere already in that form, or built by
+  arithmetic that looks nothing like the libgpu macro. Until one of those is found, mapping a
+  UV to a texel relies on assumption.
 * **Header 0x14** — multiple of 4 in 400/400, range 120..228,744, 272 distinct values. Not a
   pointer, not any pixel/palette/record total tested, and it differs between structurally
   identical packs.
@@ -2803,7 +2866,8 @@ Stated precisely, with the measurement that bounds each one.
   keeps it is not traced. `menu.bin` never writes the camera's position field directly, so
   the cutscene path either copies a block in (as its own screens do, from 0x8005A9A0) or
   eases toward a target the way `warp.bin` does. Reproducing a shot's framing needs that
-  answer.
+  answer. A **level's** camera is now traced and is in the MDL — `gameeng.bin` builds it from
+  a +0x0C list entry's two points (§8.5) — but that is a different path from a cutscene's.
 
 **Container**
 
@@ -2820,8 +2884,12 @@ Stated precisely, with the measurement that bounds each one.
   every candidate base and scoring how many of the overlay's own `jal` targets land exactly
   on a function prologue. For `warp.bin` and `menu.bin` alike the winner is
   **0x800B32B4** — 24 of 36 internal calls, against 4 for the runner-up — which also means
-  only one mode overlay is resident at a time. What each overlay does with the resident
-  engine beyond that is unread.
+  only one mode overlay is resident at a time. The same sweep puts `overlays/gameeng.bin` at
+  **0x80078C90** (88 prologue hits against 15 for the runner-up, all 571 in-band `jal`
+  targets inside the image, and the image then ending at 0x800D7148 — one word past the
+  0x800D7144 the file's own header word +0x10 holds). That places it below the mode overlays
+  and makes it the resident engine they sit on top of; §8.5 reads its camera setup. What
+  each overlay does beyond that is unread.
 * The internal structure of the 12 `overlays/text/*.bin` beyond "leading id, then 4-byte
   aligned NUL-terminated strings". They contain absolute 0x800Axxxx pointers, so something
   relocates them at load.
