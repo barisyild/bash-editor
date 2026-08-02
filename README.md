@@ -104,6 +104,7 @@ Measured against the NTSC-U release (992 entries):
 | --- | --- |
 | Archive | 992/992 entries, with the real file names |
 | Models | 5990/5990 meshes reconstruct exactly the triangle count the file states |
+| Level sets | 1971 object meshes over 73 arenas, warp rooms and hubs, all matching their stated triangle count |
 | Colours | gouraud, three per triangle, semi-transparency flags decoded |
 | Textures | 15160 textures from 400 packs, 4- and 8-bit, with transparency |
 | Texture animation | 136 flipbooks over 1137 frames, and 108 scrolling textures |
@@ -129,6 +130,13 @@ texture pack in the archive and only `.mdl` entries open in the viewport.
 
 Toggles for solid / wireframe / points / textures / vertex colours sit under the
 viewport, and individual meshes can be hidden from the **Model** panel.
+
+An arena or a warp room keeps almost none of itself in the numbered mesh array the
+file counts: the floor, the walls, the lamp posts and the level boards are *objects*,
+a second array the game reaches by id. They are listed alongside the meshes under the
+id that names them — `object 5001` — and drawn where the file puts them, which is
+already their place in the room. The level's sky is a mesh wrapped around all of it,
+so the view opens under the dome rather than outside it looking at its back.
 
 **Vertex colours** is worth knowing about. The file stores three colours per triangle
 and they multiply into the texture, so switching them off is the only way to see a

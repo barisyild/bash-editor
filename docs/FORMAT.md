@@ -217,11 +217,11 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x10 | i32 ptr | `ptr_pool` | The one field through which the game reaches this block. The game does **not** use the plain self-relative form here — see the note below. | **confirmed** |
 | 0x14 | i32 | `count_18` | 0 in 327/400, 1 in 73/400. Repeated at `[T(0x18)]` in 400/400. Also a layout switch: `T(0x2C) == T(0x3C)` **iff** this is 0, 400/400. | **confirmed** |
 | 0x18 | i32 ptr | `ptr_subobjects` | `[i32 count == i32@0x14]` then `count` self-relative i32 pointers, entry *i* at `T(0x18)+4+4*i`. All 73 entries in the corpus resolve inside the file. | **confirmed** |
-| 0x1C | i32 ptr | `ptr_objects` | Object table addressed by id namespace 0x5000; 12-byte stride where the code indexes it. Extent is not a multiple of 12 in general (mod 12 is 0 in 279 models, 4 in 70, 8 in 51). | **confirmed** (stride/base) / ?unknown? (total layout) |
+| 0x1C | i32 ptr | `ptr_objects` | Object table addressed by id namespace 0x5000; 12-byte stride where the code indexes it. Its leading records each name a **mesh header in the pool** — the level's own set, 1971 meshes over the 73 models that have one; the scene nodes follow them. See §8.3. Extent is not a multiple of 12 in general (mod 12 is 0 in 279 models, 4 in 70, 8 in 51). | **confirmed** (stride/base/object record) / ?unknown? (total layout) |
 | 0x20 | i32 ptr | `ptr_colours` | Colour table: 4-byte `R G B 00` records. See §7.1. | **confirmed** |
 | 0x24 | i32 ptr | `ptr_uvs` | UV table: 2-byte `(u, v)` records. See §7.2. | **confirmed** |
 | 0x28 | i32 ptr | `ptr_vectors` | Shared 6-byte `(i16 x, y, z)` position pool; the fallback source for animation poses (§9.5). Degenerate (`T(0x28) == T(0x08)`, zero length) in 360/400. See §7.3. | **confirmed** |
-| 0x2C | i32 ptr | `ptr_pool_hi` | `T(0x2C) == T(0x08) + 8` in 400/400. This is the address the game actually computes from field 0x10. **No EXE site resolves the file header's 0x2C** (the single 0x2C site, 0x80015700, is a *mesh* header). | **confirmed** |
+| 0x2C | i32 ptr | `ptr_pool_hi` | `T(0x2C) == T(0x08) + 8` in 400/400. This is the address the game actually computes from field 0x10. **No EXE site resolves the file header's 0x2C** (the single 0x2C site, 0x80015700, is a *mesh* header). The span it opens, up to `T(0x3C)`, holds the object meshes of §8.3 — empty in the 327 models whose `i32@0x14` is 0. | **confirmed** |
 | 0x30 | i32 | — | 0 in 400/400. Never read. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x34 | i32 | — | 0 in 400/400. Never read. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x38 | i32 | `count_3C` | 0 in 393/400. The 7 non-zero are `warp_room1..5/level.mdl` and `demo_hub1..2/level.mdl` (5, 6, 8, 7, 6, 3, 3). Repeated at `[T(0x3C)]` 400/400. The block stores **count+1** records. | **confirmed** |
@@ -906,6 +906,84 @@ The object table is addressed by the **0x5000** id namespace with a **12-byte st
 800159F4  addu  $a0, $a1, $a0      ; -> record+4
 800159F0  jal   0x8001dd20         ; reads that struct's +0 and +4
 ```
+
+### What an object record names: a mesh, and which model it lives in
+
+The resolver turns the record into an address:
+
+```
+; 0x8001DD20 — a0 = record + 4
+8001DD20  lw    $v0, 4($a0)      ; [record+0x08]
+8001DD28  addu  $v0, $v0, $a0    ; record+4 + [record+0x08] -- self-relative from +0x04
+8001DD2C  lw    $v1, 4($v0)      ; the address parked one word further on
+8001DD34  beqz  $v1, 0x8001dd48  ; nothing loaded there -> the object resolves to 0
+8001DD3C  lw    $v0, ($a0)       ; [record+0x04] = a byte offset
+8001DD44  addu  $v0, $v1, $v0    ; base + offset
+```
+
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
+| +0x00 | i32 | not read on this path | ?unknown? |
+| +0x04 | i32 | byte offset of a **mesh header**, inside the model named at +0x08 | **confirmed** |
+| +0x08 | i32 ptr | self-relative **from +0x04**, landing on `T(0x3C) + 4 + 16*j + 4` — the chunk descriptor *j* of §8.1, whose +0x08 is the runtime pointer slot the resolver reads. Record 0's slot is the model's own base (written at 0x8001DEE0), so `j == 0` means "a mesh in this file". | **confirmed** |
+
+That it is a mesh header is settled by the caller: the draw routine dispatches the two id
+namespaces down separate paths that meet on the same load.
+
+```
+; 0x80019AD0 — s2 = id, s1 = model base
+80019AD0  andi  $v1, $s2, 0x7000
+80019AEC  addiu $v0, $zero, 0x2000
+80019AF0  beq   $v1, $v0, 0x80019d0c    ; the numbered array
+80019B08  addiu $v0, $zero, 0x5000
+80019B0C  beq   $v1, $v0, 0x80019d3c    ; the object table
+
+80019D0C  lw    $v0, 0x54($s1)          ; the mesh count
+80019D10  andi  $v1, $s2, 0xfff
+80019D14  slt   $v0, $v0, $v1
+80019D18  bnez  $v0, 0x80019ef8         ; past the end: nothing is drawn
+80019D2C  sll   $v0, $v0, 2             ; 0x34 * index
+80019D30  addiu $v0, $v0, 0x24          ; 0x58 - 0x34: the id is 1-based here too
+80019D38  addu  $s0, $s1, $v0
+
+80019D3C  andi  $a0, $s2, 0xffff
+80019D40  jal   0x800159c4              ; -> the object table
+80019D44  move  $a1, $s1
+80019D48  move  $s0, $v0
+80019D4C  beqz  $s0, 0x80019ef8         ; unresolved: nothing is drawn
+
+80019D54  lw    $v0, 0x10($s0)          ; both arrive here: mesh + 0x10, the bounds
+80019D5C  addiu $v0, $v0, 0x10          ; block, and 0x14 further on the vertex pool
+80019D60  addu  $s1, $s0, $v0
+```
+
+### This is where a level keeps its set
+
+The headers those offsets reach lie in `T(0x2C) .. T(0x3C)`, the span §2.1 calls the pool:
+empty in exactly the 327 models whose `i32@0x14` is 0, non-empty in the other 73 — every
+arena, warp room, hub and the menu. Measured over those 73:
+
+| | |
+| --- | --- |
+| object records before the scene nodes start | 2009 |
+| … resolving into this file's own pool | 1971 (96,232 triangles) |
+| … naming a model the level loads alongside its own | 38 |
+| object meshes whose strip list matches their header's count | 1971 / 1971 |
+| models where `j == 0` ⟺ the offset lands in this file's pool | 73 / 73 |
+| meshes laid nose to tail, `ptr_end + 4 == the next header` | 1875 / 1971 |
+
+The remaining 96 are runs of consecutive headers sharing one geometry block, the same way
+the numbered array packs its headers together at 0x58.
+
+Nothing counts the records. The array runs until the scene nodes start, and what ends it is
+the reference field: a real record points at one of the `i32@0x38 + 1` chunk descriptors, so
+a walk stops at the first that does not (73/73).
+
+The 42 numbered meshes of `warp_room1/level.mdl` are its sky dome, its stars and the CRASH
+BASH sign. The room — floor, stairs, lamp posts, the CRASHBALL and POLAR PANIC boards — is
+77 objects, and their vertices are already in room coordinates, so they need no placement to
+stand where the game stands them. A reader that walks only the numbered array shows a purple
+dome with nothing under it.
 
 The 0x4C array is `i32@0x48` self-relative i32 pointers, stride 4, ending exactly where the
 0x18 block begins (400/400). All 688 corpus entries resolve inside the file and land **inside
@@ -2348,7 +2426,11 @@ the vertex stride now switches on `mesh+0x28` and reads the normal array separat
 the "header padding is not zero" warning no longer fires on 0x00/0x28/0x2C (596);
 a mesh count of 0 is accepted (696); `colour_start <= uv_start` is non-strict (729); the
 phantom bit-15 flag on the UV index is gone; the vertex-flag comment names bits 1, 2 and 8
-(631); and the module docstring covers the whole mesh header including 0x28 and 0x2C.
+(631); the module docstring covers the whole mesh header including 0x28 and 0x2C; and
+`read_model` now reads the object table as well as the numbered array, which is where a level
+keeps its set — 1971 meshes and 96,232 triangles the reader used to walk straight past (§8.3).
+They live in `Model.objects`, apart from `Model.meshes`, because the two arrays are addressed
+differently and `install_mesh` / `transplant_mesh` index the numbered one.
 
 ### `crashbash/formats/anim.py`
 

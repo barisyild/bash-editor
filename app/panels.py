@@ -260,11 +260,21 @@ class MeshPanel(QWidget):
             self._loading = False
             return
 
+        # An object's mesh is listed under the id the game reaches it by, since
+        # that is what names it everywhere else -- it has no place in the
+        # numbered array the header counts.
+        names = {mesh.index: f"mesh {mesh.index:02d}" for mesh in model.meshes}
+        names.update({
+            obj.mesh.index: f"object {obj.id:04X}"
+            for obj in model.objects if obj.mesh is not None
+        })
+
         matched = 0
-        for mesh in model.meshes:
+        drawn = model.drawn_meshes
+        for mesh in drawn:
             flag = "✓" if mesh.faces_match_header else "!"
             item = QListWidgetItem(
-                f"{flag} mesh {mesh.index:02d} — {mesh.vertex_count} verts, "
+                f"{flag} {names[mesh.index]} — {mesh.vertex_count} verts, "
                 f"{mesh.face_count} tris, {len(mesh.strips)} strips"
             )
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -273,20 +283,29 @@ class MeshPanel(QWidget):
             self.list.addItem(item)
             matched += mesh.faces_match_header
 
-        total_v = sum(m.vertex_count for m in model.meshes)
-        total_f = sum(m.face_count for m in model.meshes)
+        total_v = sum(m.vertex_count for m in drawn)
+        total_f = sum(m.face_count for m in drawn)
+        objects = len(drawn) - len(model.meshes)
         lines.append(
-            f"{len(model.meshes)} meshes, {total_v} vertices, {total_f} triangles"
+            f"{len(model.meshes)} meshes"
+            + (f" and {objects} objects" if objects else "")
+            + f", {total_v} vertices, {total_f} triangles"
         )
         lines.append(
-            f"{matched}/{len(model.meshes)} meshes match the triangle count in "
+            f"{matched}/{len(drawn)} meshes match the triangle count in "
             "their header"
         )
+        unresolved = [o for o in model.objects if o.mesh is None]
+        if unresolved:
+            lines.append(
+                f"{len(unresolved)} objects live in a model this level loads "
+                "alongside its own and cannot be shown from this file"
+            )
         for warning in model.warnings:
             lines.append(f"model: {warning}")
-        for mesh in model.meshes:
+        for mesh in drawn:
             for warning in mesh.warnings:
-                lines.append(f"mesh {mesh.index}: {warning}")
+                lines.append(f"{names[mesh.index]}: {warning}")
         self.report.setPlainText("\n".join(lines))
         self._loading = False
 

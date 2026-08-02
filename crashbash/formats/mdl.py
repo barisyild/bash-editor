@@ -48,6 +48,18 @@ BOUNDS_SIZE = 0x14  # bounds block in front of the vertex pool
 PTR_COLOUR_TABLE = 0x20  # file header field holding the colour table pointer
 PTR_UV_TABLE = 0x24  # file header field holding the UV table pointer
 
+# The object table (§8.3): a second mesh array, one entry per level object,
+# reached through the game's 0x5000 id namespace rather than the 0x54 count.
+PTR_OBJECT_TABLE = 0x1C
+PTR_POOL = 0x2C  # first byte an object's mesh header may occupy
+PTR_MODEL_REFS = 0x3C  # the load-time base addresses, and the end of the pool
+COUNT_MODEL_REFS = 0x38
+OBJECT_NAMESPACE = 0x5000
+OBJECT_STRIDE = 12
+MODEL_REF_STRIDE = 16
+MODEL_REF_SLOT = 4  # the field an object's reference pointer lands on; the
+#                     loaded base address is the word after it
+
 # The game masks the colour index with 0x1FFF and tests bit 15 separately.
 COLOUR_INDEX_MASK = 0x1FFF
 COLOUR_FLAG_TRANSLUCENT = 0x8000
@@ -210,12 +222,42 @@ class Mesh:
 
 
 @dataclass
+class Object:
+    """One entry of the object table: a mesh reached by a 0x5000 id.
+
+    `offset` is a byte offset into the model named by `reference`, not into this
+    file, so an object whose reference is anything but 0 belongs to a file the
+    level loads alongside this one and cannot be resolved from here; its `mesh`
+    stays None.
+    """
+
+    id: int
+    offset: int
+    reference: int
+    mesh: Mesh | None = None
+
+
+@dataclass
 class Model:
     meshes: list[Mesh] = field(default_factory=list)
+    # The level's static set: a second mesh array the 0x54 count says nothing
+    # about. Kept apart from `meshes` because the two are addressed differently
+    # and a writer that confused them would move the wrong block.
+    objects: list[Object] = field(default_factory=list)
     # Shared tables that live after the last mesh, referenced per triangle.
     colours: list[tuple[int, int, int]] = field(default_factory=list)
     uvs: list[tuple[int, int]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def drawn_meshes(self) -> list[Mesh]:
+        """Every mesh the game can draw out of this file, in index order.
+
+        The object meshes carry indices continuing past the last numbered mesh,
+        so a viewer can key visibility and palettes off `mesh.index` across both
+        arrays without the two colliding.
+        """
+        return self.meshes + [o.mesh for o in self.objects if o.mesh is not None]
 
     def face_colours(
         self, mesh: Mesh, face: int
@@ -315,7 +357,7 @@ class Model:
 
     @property
     def bounds(self) -> Bounds | None:
-        boxes = [m.bounds for m in self.meshes if m.bounds is not None]
+        boxes = [m.bounds for m in self.drawn_meshes if m.bounds is not None]
         if not boxes:
             return None
         lo = tuple(min(b.min[i] for b in boxes) for i in range(3))
@@ -326,10 +368,15 @@ class Model:
 
     def to_obj(self) -> str:
         """Emit every mesh into one OBJ, keeping per-mesh objects separate."""
+        names = {mesh.index: f"mesh_{mesh.index:02d}" for mesh in self.meshes}
+        names.update({
+            obj.mesh.index: f"object_{obj.id:04X}"
+            for obj in self.objects if obj.mesh is not None
+        })
         chunks = []
         offset = 0
-        for i, mesh in enumerate(self.meshes):
-            chunks.append(f"o mesh_{i:02d}")
+        for mesh in self.drawn_meshes:
+            chunks.append(f"o {names[mesh.index]}")
             for x, y, z in mesh.positions:
                 chunks.append(f"v {x:.6f} {-y:.6f} {-z:.6f}")
             for a, b, c in mesh.triangles(consistent_winding=True):
@@ -772,8 +819,59 @@ def read_model(data: bytes | Reader, max_meshes: int = 4096) -> Model:
             model.warnings.append(f"mesh {i}: {exc}")
             break
 
+    _read_objects(reader, model)
     _read_shared_tables(reader, model)
     return model
+
+
+def _read_objects(reader: Reader, model: Model) -> None:
+    """Read the object table: the level's static set (§8.3).
+
+    The game reaches a mesh two ways, both ending in the same draw call at
+    0x80019D54. An id in namespace 0x2000 indexes the numbered array counted at
+    0x54; an id in namespace 0x5000 goes through 0x800159C4 into this table
+    instead, and nothing in the file counts its entries -- the array simply runs
+    until the scene nodes start. What ends it is the reference field: every
+    entry names one of the load-time base addresses at `T(0x3C)`, so the walk
+    stops at the first entry that does not.
+    """
+    data = reader.data
+    if len(data) < MESH_COUNT_OFFSET + 4:
+        return
+
+    table = PTR_OBJECT_TABLE + reader.peek_i32(PTR_OBJECT_TABLE)
+    refs = PTR_MODEL_REFS + reader.peek_i32(PTR_MODEL_REFS)
+    pool = PTR_POOL + reader.peek_i32(PTR_POOL)
+    if not 0 < pool <= refs <= len(data) or not 0 < table <= len(data):
+        return
+
+    # `[T(0x38)] + 1` records of 16 bytes, the first one 4 bytes past the count.
+    reference_of = {
+        refs + 4 + MODEL_REF_STRIDE * j + MODEL_REF_SLOT: j
+        for j in range(reader.peek_i32(COUNT_MODEL_REFS) + 1)
+    }
+
+    index = 0
+    while table + OBJECT_STRIDE * (index + 1) <= len(data):
+        entry = table + OBJECT_STRIDE * index
+        # 0x8001DD20: the resolver reads the reference through `entry + 4`, then
+        # adds the offset to the base address it finds there.
+        slot = entry + 4 + reader.peek_i32(entry + 8)
+        reference = reference_of.get(slot)
+        if reference is None:
+            break
+        offset = reader.peek_i32(entry + 4)
+        obj = Object(
+            id=OBJECT_NAMESPACE + 1 + index, offset=offset, reference=reference
+        )
+        if reference == 0 and pool <= offset < refs:
+            reader.seek(offset)
+            try:
+                obj.mesh = read_mesh(reader, len(model.meshes) + len(model.objects))
+            except (EOFError, IndexError) as exc:
+                model.warnings.append(f"object 0x{obj.id:04X}: {exc}")
+        model.objects.append(obj)
+        index += 1
 
 
 def _read_shared_tables(reader: Reader, model: Model) -> None:
@@ -800,7 +898,7 @@ def _read_shared_tables(reader: Reader, model: Model) -> None:
     ]
 
     highest = -1
-    for mesh in model.meshes:
+    for mesh in model.drawn_meshes:
         for index in mesh.face_uv_index:
             highest = max(highest, index)
     if highest < 0:

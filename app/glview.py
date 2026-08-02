@@ -128,6 +128,12 @@ VERTEX_FLOATS = 11  # position 3, normal 3, colour 3, uv 2
 # archive's 3 spare takes from its 132 unowned backdrops with room to spare.
 STAND_IN_TOLERANCE = 0.12
 
+# How much of the rest of a model has to sit inside one mesh's box before that
+# mesh counts as a shell the whole thing is drawn under. Exact containment is
+# too strict -- a warp room's dome is an open bowl and its star sphere stands
+# three units out of the top -- and anything looser starts taking rooms off.
+SHELL_COVERAGE = 0.95
+
 # The console's display: 320 columns over the 240 lines the camera's field of
 # view is measured against.
 SCREEN_ASPECT = 4.0 / 3.0
@@ -296,6 +302,10 @@ class ModelView(QOpenGLWidget):
         self._backdrops: set[int] = set()
         self._sprays: list = []
         self._spawn_rank: dict[int, int] = {}
+        # The model's extent with its shells peeled off, computed once per model
+        # because peeling costs a pass over every vertex per round. The outer
+        # tuple only says "already worked out"; the value inside may be None.
+        self._open_box: tuple[tuple[np.ndarray, np.ndarray] | None] | None = None
         # Scenes that name a camera are filmed through it by default; the orbit
         # controls take over the moment this is switched off.
         self.use_shot_camera = True
@@ -349,6 +359,7 @@ class ModelView(QOpenGLWidget):
         self._backdrops = set()
         self._sprays = []
         self._spawn_rank = {}
+        self._open_box = None
         self._atlas = build_atlas(pack)
         self._atlas_dirty = True
         self._texture_tick = 0.0
@@ -757,7 +768,8 @@ class ModelView(QOpenGLWidget):
     def _rebuild(self) -> None:
         self._draws = []
         self._pose_pending = []
-        if self._model is None or not self._model.meshes:
+        drawn = self._model.drawn_meshes if self._model is not None else []
+        if not drawn:
             self._vertex_data = np.zeros((0, VERTEX_FLOATS), dtype=np.float32)
             self._dirty = True
             return
@@ -768,7 +780,7 @@ class ModelView(QOpenGLWidget):
         line_chunks: list[np.ndarray] = []
         pending: list[tuple[int, int, int, np.ndarray | None]] = []
 
-        for mesh in self._model.meshes:
+        for mesh in drawn:
             triangles_indexed = (
                 _every_triangle(mesh)
                 if mesh.index == animated
@@ -895,12 +907,16 @@ class ModelView(QOpenGLWidget):
         self._dirty = True
 
         bounds = self._model.bounds
-        cast = self._cast_extent()
+        # Watching a shot, frame the cast rather than the set. A cutscene
+        # carries its sky as a mesh 50 units across around actors barely two
+        # tall, so the file's own bounds pull the view back until nobody on
+        # stage is bigger than a speck. A level is the other way round -- it is
+        # its set, and what a node moves there is a crate lid -- so there the
+        # sky comes off the extent instead and the rest is framed whole.
+        cast = None if self._is_level() else self._cast_extent()
+        if cast is None:
+            cast = self._open_extent()
         if cast is not None:
-            # Watching a scene, frame the cast rather than the set. A cutscene
-            # carries its sky as a mesh 50 units across around actors barely two
-            # tall, so the file's own bounds pull the view back until nobody on
-            # stage is bigger than a speck.
             lo, hi = cast
             self._center = ((lo + hi) / 2).astype(np.float32)
             self._radius = max(float(np.linalg.norm(hi - lo) / 2), 1e-3)
@@ -1007,25 +1023,105 @@ class ModelView(QOpenGLWidget):
         self.update()
 
     def _enclosing_radius(self) -> float | None:
-        """Distance from the framed centre to the nearest mesh that wraps it.
+        """Distance from the framed centre to the nearest box that wraps it.
 
-        Only meaningful while a scene is playing; scenery a node never places
-        stays where the file put it, so the test is against its own extent.
+        A shot's candidates are the meshes no node places, which is the whole of
+        its set. A level's are the shells `_open_extent` peeled off, and only
+        those: an arena's floor slab holds the centre too, and clamping to it
+        would put the eye inside the ground.
         """
-        if self._scene is None or self._model is None:
+        if self._model is None:
             return None
-        owned = self._scene.mesh_indices
+        if self._is_level():
+            boxes = self._shell_boxes()
+        elif self._scene is not None:
+            owned = self._scene.mesh_indices
+            boxes = [
+                (points.min(axis=0), points.max(axis=0))
+                for points in (
+                    np.asarray(mesh.positions, dtype=np.float64) * AXIS_FLIP
+                    for mesh in self._model.meshes
+                    if mesh.index not in owned and mesh.positions
+                )
+            ]
+        else:
+            return None
         radii = []
-        for mesh in self._model.meshes:
-            if mesh.index in owned or not mesh.positions:
-                continue
-            points = np.asarray(mesh.positions, dtype=np.float64) * AXIS_FLIP
-            lo, hi = points.min(axis=0), points.max(axis=0)
+        for lo, hi in boxes:
             if not ((lo < self._center) & (self._center < hi)).all():
                 continue  # does not wrap the shot -- it is set dressing
             radii.append(float(np.abs(np.concatenate(
                 [hi - self._center, self._center - lo])).min()))
         return min(radii) if radii else None
+
+    def _is_level(self) -> bool:
+        """Whether this file is a level rather than a shot.
+
+        An object set is what tells them apart, and it is the file's own word,
+        not a guess about the geometry: 73 models have one -- every arena, warp
+        room, hub and the menu -- and no cutscene does.
+        """
+        return bool(self._model is not None and self._model.objects)
+
+    def _open_extent(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """The model's box with the shells it is drawn inside taken off.
+
+        A warp room is one dome 148 units across over a room 24 units across,
+        and framed on the file's bounds the viewpoint lands outside the dome,
+        where the only thing on screen is its own far side. Nothing in the file
+        marks the dome, so what takes it off is that everything else is inside
+        it: peel the mesh that holds the rest, then look again, until no mesh
+        holds the rest. Over the archive that takes four shells off every warp
+        room and hub, one or two off a fifth of the arenas, and none at all off
+        a character or a single-mesh model.
+
+        The threshold is a measurement, not a rule out of the executable: a
+        shell is not watertight -- a warp room's dome is a bowl whose star
+        sphere pokes three units out of the top -- so exact containment finds
+        nothing and `SHELL_COVERAGE` of the other vertices is what separates
+        the two cases across the set.
+        """
+        return self._peeled()[0]
+
+    def _shell_boxes(self) -> list[tuple[np.ndarray, np.ndarray]]:
+        """The boxes of the shells `_open_extent` took off, outermost first."""
+        return self._peeled()[1]
+
+    def _peeled(self) -> tuple[tuple[np.ndarray, np.ndarray] | None,
+                               list[tuple[np.ndarray, np.ndarray]]]:
+        if self._open_box is None:
+            self._open_box = (self._peel_shells(),)
+        return self._open_box[0]
+
+    def _peel_shells(self) -> tuple[tuple[np.ndarray, np.ndarray] | None,
+                                    list[tuple[np.ndarray, np.ndarray]]]:
+        model = self._model
+        shells: list[tuple[np.ndarray, np.ndarray]] = []
+        if model is None:
+            return None, shells
+        remaining = [np.asarray(m.positions, dtype=np.float64) * AXIS_FLIP
+                     for m in model.drawn_meshes if m.positions]
+        if len(remaining) < 2:
+            return None, shells
+        while len(remaining) > 1:
+            points = np.vstack(remaining)
+            total = points.shape[0]
+            shell = None
+            for k, own in enumerate(remaining):
+                lo, hi = own.min(axis=0), own.max(axis=0)
+                inside = int(((points >= lo) & (points <= hi)).all(axis=1).sum())
+                others = total - own.shape[0]
+                if others and inside - own.shape[0] >= SHELL_COVERAGE * others:
+                    shell = k
+                    break
+            if shell is None:
+                break
+            own = remaining.pop(shell)
+            shells.append((own.min(axis=0), own.max(axis=0)))
+        if not shells:
+            return None, shells
+        points = np.vstack(remaining)
+        return (points.min(axis=0), points.max(axis=0)), shells
 
     def reset_view(self) -> None:
         self.yaw = math.radians(35.0)

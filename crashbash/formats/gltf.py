@@ -305,7 +305,18 @@ def export_glb(
     nodes: list[dict] = []
     gltf_animations: list[dict] = []
 
-    for mesh in model.meshes:
+    # A level's set is object meshes, not numbered ones, and leaving them out
+    # exports a warp room as an empty sky. They are named after the id the game
+    # reaches them by, which also keeps them clear of the `_meshNN` the importer
+    # matches on: an object has no slot in the numbered array to be written back
+    # into, so an edited one must not look importable.
+    mesh_names = {mesh.index: f"{name}_mesh{mesh.index:02d}" for mesh in model.meshes}
+    mesh_names.update({
+        obj.mesh.index: f"{name}_object{obj.id:04X}"
+        for obj in model.objects if obj.mesh is not None
+    })
+
+    for mesh in model.drawn_meshes:
         groups = _group_triangles(model, mesh, pack)
         if not groups:
             continue
@@ -356,7 +367,7 @@ def export_glb(
                 ]
             primitives.append(primitive)
 
-        entry = {"primitives": primitives, "name": f"{name}_mesh{mesh.index:02d}"}
+        entry = {"primitives": primitives, "name": mesh_names[mesh.index]}
         if target_order:
             entry["weights"] = [0.0] * len(target_order)
         meshes.append(entry)
