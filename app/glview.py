@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
@@ -112,6 +112,11 @@ def configure_default_format() -> None:
 
 
 VERTEX_FLOATS = 11  # position 3, normal 3, colour 3, uv 2
+
+# How closely an unowned mesh has to match an on-stage one before it is read as
+# a spare take of the same character rather than scenery. A tenth separates the
+# archive's 3 spare takes from its 132 unowned backdrops with room to spare.
+STAND_IN_TOLERANCE = 0.12
 VERTEX_BYTES = VERTEX_FLOATS * 4
 
 # PS1 is Y-down / Z-into-screen; flip both to get a right-handed frame.
@@ -130,6 +135,42 @@ class MeshDraw:
     # an animation frame can refill these rows without going back through
     # `_shade`, which is a Python loop per triangle and the bulk of a rebuild.
     indices: np.ndarray | None = None
+    # Vertices from `first` that the console draws opaque. The rest are its
+    # blended ones, held back to a later pass -- see `_blend_group`.
+    opaque_count: int = 0
+    # ABR mode -> (offset from `first`, vertex count) for the blended runs.
+    blend_spans: dict[int, tuple[int, int]] = field(default_factory=dict)
+
+
+def _blend_group(model: Model, mesh: Mesh, face: int) -> int:
+    """0 for an opaque triangle, else 1 + the ABR mode the console blends it in.
+
+    Both come out of the triangle's colour index (§6.4): bit 15 turns the
+    primitive's semi-transparency bit on, and bits 13-14 land in the tpage's ABR
+    field, choosing which of the four blends the GPU runs. The polygon writer
+    forces ABR 1 for the effect path and otherwise passes the field through:
+
+        800178C8  andi  $v0, $v0, 0x8000  ; the triangle's translucent bit
+        800178DC  or    $v1, $v1, $v0     ; code |= 0x02: semi-transparent
+        800178E0  andi  $a0, $a0, 0xff9f  ; clear the tpage's ABR field
+        800178E8  ori   $a0, $a0, 0x20    ;   ABR 1 -- B + F
+        8001791C  or    $a0, $a0, $a3     ; or the triangle's own, from bits 13-14
+    """
+    if not model.face_is_translucent(mesh, face):
+        return 0
+    return 1 + model.face_blend_mode(mesh, face)
+
+
+# Each ABR mode as (source factor, destination factor, constant, subtract).
+# The console's B is the framebuffer -- GL's destination -- and its F the
+# incoming pixel, so `B + F/4` is a quarter of the source and all of the
+# destination. ABR 2 subtracts the source, which is an equation, not a factor.
+_ABR_BLEND = {
+    0: (GL.GL_CONSTANT_ALPHA, GL.GL_CONSTANT_ALPHA, 0.5, False),   # B/2 + F/2
+    1: (GL.GL_ONE, GL.GL_ONE, 1.0, False),                          # B + F
+    2: (GL.GL_ONE, GL.GL_ONE, 1.0, True),                           # B - F
+    3: (GL.GL_CONSTANT_ALPHA, GL.GL_ONE, 0.25, False),              # B + F/4
+}
 
 
 def _face_normals(corners: np.ndarray) -> np.ndarray:
@@ -237,6 +278,7 @@ class ModelView(QOpenGLWidget):
         self._scene = None
         self._scene_clips: list = []
         self._scene_tick = 0
+        self._stand_ins: set[int] = set()
         # Row spans whose position/normal columns have been rewritten in place
         # and still have to reach the VBO. Drained in paintGL rather than at the
         # call site so the widget's context is guaranteed current.
@@ -283,6 +325,7 @@ class ModelView(QOpenGLWidget):
         self._scene = None
         self._scene_clips = []
         self._scene_tick = 0
+        self._stand_ins = set()
         self._atlas = build_atlas(pack)
         self._atlas_dirty = True
         self._texture_tick = 0.0
@@ -349,11 +392,50 @@ class ModelView(QOpenGLWidget):
         """
         self._scene = scene
         self._scene_clips = list(clips or [])
+        self._stand_ins = self._find_stand_ins(scene)
         if scene is not None:
             self._animation = None
             self._scene_tick = scene.start if tick is None else tick
         self._rebuild()
         self.frame_model()
+
+    def _find_stand_ins(self, scene: Scene | None) -> set[int]:
+        """Meshes that are another take of someone already on stage.
+
+        A shot's node graph does not account for everything drawn: the backdrop
+        domes carry no node and the cutscene player puts them up anyway, so an
+        unowned mesh cannot simply be treated as absent. But a file also carries
+        spare versions of its cast -- `level_intro_crashplain` holds three Crash
+        meshes and spawns one, asleep at 0.6 scale, and drawing the other two
+        stood a full-size Crash beside him.
+
+        What tells them apart is that a spare take is the same size as the
+        character that is on stage, to within a tenth, while a backdrop is
+        nothing like anything. Over the archive that separates the 3 spare takes
+        from all 132 unowned backdrops and set pieces without a single
+        misplacement -- but it is a measurement, not something the file states.
+        """
+        model = self._model
+        if scene is None or model is None or not scene.actors:
+            return set()
+        sizes = []
+        for index in sorted(scene.mesh_indices):
+            if index < len(model.meshes) and model.meshes[index].positions:
+                points = np.asarray(model.meshes[index].positions, dtype=np.float64)
+                sizes.append(points.max(axis=0) - points.min(axis=0))
+        if not sizes:
+            return set()
+        stand_ins = set()
+        for mesh in model.meshes:
+            if mesh.index in scene.mesh_indices or not mesh.positions:
+                continue
+            points = np.asarray(mesh.positions, dtype=np.float64)
+            extent = points.max(axis=0) - points.min(axis=0)
+            if any(np.all(np.abs(extent - other)
+                          <= STAND_IN_TOLERANCE * np.maximum(extent, other) + 1e-6)
+                   for other in sizes):
+                stand_ins.add(mesh.index)
+        return stand_ins
 
     def set_scene_tick(self, tick: int) -> None:
         """Scrub the scene clock. Every actor reposes; the camera follows."""
@@ -417,25 +499,14 @@ class ModelView(QOpenGLWidget):
         collapses to a point rather than standing at the origin in the middle
         of the set.
 
-        A mesh with *no* node is never drawn by the scene at all: drawing is
-        per entity, and an entity draws one resource, the one its id names --
-
-            80019F44  lhu  $a2, 0x74($s0)   ; entity+0x7C, the id
-            80019F7C  beqz $s2, 0x8001a0bc  ;   nothing named -> nothing drawn
-
-        In a shot that settles it: `level_intro_crashplain` carries three Crash
-        meshes and the shot spawns one, so drawing the others put a full-size
-        Crash beside the scaled one. Elsewhere it does not, because an arena's
-        geometry is drawn by the level renderer and its scene is only the
-        moving parts -- 9% of an arena's meshes have a node against 73% of a
-        cutscene's. Telling the two apart by whether the scene casts an actor
-        is this editor's guess, not something the file states; it happens to be
-        exact over the archive, all 55 shots with a character against all 72
-        arena scenes.
+        A mesh with no node is scenery, and stays where the file put it. The
+        node graph is not the whole picture -- a shot's backdrop domes carry no
+        node and the cutscene player raises them anyway -- so the only unowned
+        meshes held back are spare takes of the cast; see `_find_stand_ins`.
         """
         scene = self._scene
         if mesh.index not in scene.mesh_indices:
-            if scene.actors:
+            if mesh.index in self._stand_ins:
                 return np.zeros((len(mesh.positions), 3), dtype=np.float32)
             return None
         tick = self._scene_tick
@@ -631,8 +702,22 @@ class ModelView(QOpenGLWidget):
                 else mesh.indexed_triangles()
             )
             if not triangles_indexed:
-                pending.append((mesh.index, 0, 0, None))
+                pending.append((mesh.index, 0, 0, None, 0, {}))
                 continue
+
+            # Sorted opaque first, then one contiguous run per blend mode, so a
+            # mesh stays a single span and each later pass is a slice of it.
+            groups: dict[int, list] = {}
+            for t in triangles_indexed:
+                groups.setdefault(_blend_group(self._model, mesh, t[3]), []).append(t)
+            triangles_indexed = []
+            spans: dict[int, tuple[int, int]] = {}
+            for group in sorted(groups):
+                start = 3 * len(triangles_indexed)
+                triangles_indexed.extend(groups[group])
+                if group:
+                    spans[group - 1] = (start, 3 * len(groups[group]))
+            opaque_count = 3 * len(groups.get(0, ()))
 
             positions = self._pose_positions(mesh)
             idx = np.asarray([t[:3] for t in triangles_indexed], dtype=np.int32)
@@ -663,7 +748,8 @@ class ModelView(QOpenGLWidget):
                 np.hstack([pairs, line_normals, line_colors, line_uvs])
             )
 
-            pending.append((mesh.index, flat.shape[0], pairs.shape[0], idx))
+            pending.append((mesh.index, flat.shape[0], pairs.shape[0], idx,
+                            opaque_count, spans))
 
         empty = np.zeros((0, VERTEX_FLOATS), dtype=np.float32)
         tri_data = np.vstack(tri_chunks) if tri_chunks else empty
@@ -671,7 +757,7 @@ class ModelView(QOpenGLWidget):
 
         tri_cursor = 0
         line_cursor = tri_data.shape[0]
-        for mesh_index, tri_count, line_count, idx in pending:
+        for mesh_index, tri_count, line_count, idx, opaque_count, spans in pending:
             self._draws.append(
                 MeshDraw(
                     mesh_index,
@@ -681,6 +767,8 @@ class ModelView(QOpenGLWidget):
                     line_count,
                     visible=mesh_index not in self._hidden,
                     indices=idx,
+                    opaque_count=opaque_count,
+                    blend_spans=spans,
                 )
             )
             tri_cursor += tri_count
@@ -999,9 +1087,40 @@ class ModelView(QOpenGLWidget):
             self._program.setUniformValue1f(
                 "use_texture", 1.0 if self.show_textures else 0.0
             )
+            # Qt hands paintGL a context with GL_BLEND already enabled, and
+            # whatever function was last set stays set -- so the opaque pass has
+            # to turn it off rather than assume it is off. Leaving that to the
+            # caller drew every surface with the blend the effects had asked
+            # for: a red character over grass came out yellow.
+            GL.glDisable(GL.GL_BLEND)
             for draw in self._draws:
-                if draw.visible and draw.count:
-                    GL.glDrawArrays(GL.GL_TRIANGLES, draw.first, draw.count)
+                if draw.visible and draw.opaque_count:
+                    GL.glDrawArrays(GL.GL_TRIANGLES, draw.first, draw.opaque_count)
+
+            # The console's blended triangles, after every opaque surface and
+            # without writing depth, so a glow lights what is behind it and
+            # never hides the one beside it. One pass per ABR mode, since each
+            # is a different blend equation.
+            blended = [d for d in self._draws if d.visible and d.blend_spans]
+            if blended:
+                GL.glEnable(GL.GL_BLEND)
+                GL.glDepthMask(GL.GL_FALSE)
+                for abr in sorted({m for d in blended for m in d.blend_spans}):
+                    source, dest, weight, subtract = _ABR_BLEND[abr]
+                    GL.glBlendColor(weight, weight, weight, weight)
+                    GL.glBlendEquation(
+                        GL.GL_FUNC_REVERSE_SUBTRACT if subtract else GL.GL_FUNC_ADD
+                    )
+                    GL.glBlendFunc(source, dest)
+                    for draw in blended:
+                        span = draw.blend_spans.get(abr)
+                        if span:
+                            GL.glDrawArrays(GL.GL_TRIANGLES,
+                                            draw.first + span[0], span[1])
+                GL.glBlendEquation(GL.GL_FUNC_ADD)
+                GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+                GL.glDepthMask(GL.GL_TRUE)
+                GL.glDisable(GL.GL_BLEND)
 
         if self.show_wireframe or self.show_points:
             self._program.setUniformValue1f("unlit", 1.0)
