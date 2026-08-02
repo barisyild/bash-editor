@@ -269,8 +269,9 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 Everything past `T(0x44)` is animation blobs and **zero padding to the next 0x800**. A
 byte-coverage walk over the archive leaves 1262 unclaimed spans in that region and **all 1262
 are entirely zero**; 1037 end exactly on a 0x800 boundary and the other 225 end at the file
-itself. Nothing is stored there, which is why a rebuilt model may pad freely as long as each
-blob still starts aligned.
+itself. That the bytes are zero is measured; that a rebuilt model may therefore pad freely is
+an inference from it, and the alignment half of that rests on §9's own reading of a blob's
+range rather than on anything read here.
 
 Block order, identical in all 373 models that have meshes:
 
@@ -324,7 +325,7 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x18 | i32 ptr | `ptr_uv_index` | One u16 per triangle (§6.1). Also the end of the vertex block. | **confirmed** |
 | 0x1C | i32 ptr | `ptr_texture_runs` | Run-length texture list (§6.2). | **confirmed** |
 | 0x20 | i32 ptr | `ptr_colour_index` | One u16 per triangle (§6.3). | **confirmed** |
-| 0x24 | i32 ptr | `ptr_end` | End of the mesh's own data, and the address of a **zero terminator word**: `u32 @ T(0x24) == 0` in **7961/7961** meshes, object meshes included. A byte-coverage walk over the archive leaves 6983 four-byte holes and every one of them is this word, so a writer must emit it — the block is `... colour index array, [attachment block,] 0x00000000`. | **confirmed** |
+| 0x24 | i32 ptr | `ptr_end` | End of the mesh's own data. The word **at** that address is zero in **7961/7961** meshes, object meshes included — a byte-coverage walk over the archive leaves 6983 four-byte holes and every one is this word. That is a measurement and nothing more: no site has been found that reads it, and `mdlwrite` has never emitted one deliberately on discs that boot, so whether a writer *must* is untested. | **confirmed** (the pointer, and that the word is zero) / ?unknown? (whether anything needs it) |
 | 0x28 | i32 ptr | `ptr_normals` | **Non-zero in exactly 300/5990.** When set, `T(0x28) == vertex_pool + 8*vertex_count` in 300/300 and a second 8-byte-per-vertex array of unit normals follows. When zero there are no normals. | **confirmed** (structure) / *likely* (that they are normals) |
 | 0x2C | i32 ptr | `ptr_attachments` | Non-zero in 777/5990. Live, id-addressed block (§8.4). | **confirmed** |
 | 0x30 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
@@ -1364,20 +1365,23 @@ all seven:
 | +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7 |
 | +0x28..+0x30 | i32 | 0 in 7/7 |
 
-What the offsets reach is geometry. The first is 8-byte records read exactly like a vertex
-(§4.2) — `demo_hub1` opens `636, −171, 3169, 0` then `557, 4, 3065, 1` — and the other three
-are lists of small ascending integers, which is what an index list looks like. Between 42 and
-109 of those records per model, and their coordinates sit inside the room rather than around
-it: `warp_room1` spans x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent runs to
-±19000 on the sky dome alone.
+What the offsets reach has the **shape** of geometry, which is as far as measurement goes.
+The first is 8-byte records laid out like a vertex record (§4.2) — `demo_hub1` opens
+`636, −171, 3169, 0` then `557, 4, 3065, 1` — and the other three are lists of small ascending
+integers, the shape an index list has. Between 42 and 109 of those records per model, and
+their coordinates fall inside the room rather than around it: `warp_room1` spans
+x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent reaches ±19000 on the sky dome
+alone.
 
-**What it is for is ?unknown?.** Nothing in `SCUS_945.70` reads it — the field that would
-locate it, `i32@0x50`, has no reader either (§2.1) — so if anything uses it the caller is in
-an overlay, and `warp.bin` is the one that drives exactly these seven rooms. It is worth
-saying what would be tempting and is not established: §8.4 shows a level carries no collision
-volumes and no mode overlay walks its meshes, so a floor has to be described somewhere, and
-this is room-scale geometry in the only files that are rooms. That is a reason to look, not a
-finding.
+**Everything above is corpus measurement. Nothing here is traced to code, in either
+direction.** No site is known that reads the block, but that is not the same as none
+existing: the two ways to locate it are `i32@0x50` and the end of the clip table, and their
+immediates (0x50, 0x40) appear hundreds of times across the disc against structs that are not
+models, so a scan for them proves nothing. The reading that would be tempting — §8.4 shows a
+level carries no collision volumes, so a floor must be described somewhere, and this is
+room-shaped data in the only files that are rooms — is **not** established and is written
+here only to say that it is the thing to test, by tracing `warp.bin`, which drives exactly
+these seven rooms.
 
 ---
 
@@ -2502,6 +2506,9 @@ two fields of the node, and its handler ramps between them across the node's own
 8001F5F0  sw    $v0, -0x74a0($v1); -> 0x80058B60
 ```
 
+`0x80015304` is the interpolation, not an assumption about one — `subu $a1, $a1, $a0` then
+`mult $a1, $a3` and a divide by `$a2` is `from + (to − from) × elapsed / span`.
+
 Two measurements make it a fade rather than a nameless ramp. **The levels are only ever
 0 or 4096** — 1.0 in the 1.12 the rest of the graph uses — and over all 44 nodes the pair
 takes exactly three shapes: `(4096, 0)` fifteen times, `(0, 4096)` fifteen, and `(4096, 4096)`
@@ -2531,8 +2538,20 @@ colour by it:
 
 An earlier revision read the block at 0x80058B00 as a list of eighteen handlers and inferred
 eighteen kinds of track. It is not a list. It is a table of **16-byte entries indexed by the
-node's own type**, which is what `spawn_order` shows the spawner doing — `sll $v0, $v0, 4`
-before `jalr`. Read that way it holds six rows and two empty ones:
+node's own type**, and the spawner says so:
+
+```
+8001FFE8  lui   $v0, 0x8006
+8001FFEC  addiu $s4, $v0, -0x7500   ; s4 = 0x80058B00, the table
+8001FFF0  lw    $v0, ($s2)          ; a child pointer
+8001FFFC  lw    $v0, ($a0)          ; the child's +0x00 -- its type
+80020004  sll   $v0, $v0, 4         ;   x 16
+80020008  addu  $v0, $v0, $s4       ;   -> its row
+8002000C  lw    $v0, ($v0)          ;   the constructor
+8002001C  jalr  $v0
+```
+
+Read that way it holds six rows and two empty ones:
 
 | Type | +0x00 | +0x04 | +0x08 | +0x0C | What it is |
 | --- | --- | --- | --- | --- | --- |
