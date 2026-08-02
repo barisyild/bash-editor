@@ -382,7 +382,9 @@ class ModelView(QOpenGLWidget):
         # The gameplay volumes of mesh+0x2C, drawn as the cylinders they are for
         # a character. Off by default: 812 of the archive's 7961 meshes have one.
         self.show_volumes = False
-        self._volume_span = (0, 0)
+        # (mesh index, first vertex, vertex count) per volume, so a hidden mesh
+        # takes its cylinder with it without a rebuild.
+        self._volume_spans: list[tuple[int, int, int]] = []
 
     # -- model ----------------------------------------------------------
 
@@ -812,7 +814,7 @@ class ModelView(QOpenGLWidget):
         drawn = self._model.draw_list() if self._model is not None else []
         if not drawn:
             self._vertex_data = np.zeros((0, VERTEX_FLOATS), dtype=np.float32)
-            self._volume_span = (0, 0)
+            self._volume_spans = []
             self._dirty = True
             return
 
@@ -954,12 +956,21 @@ class ModelView(QOpenGLWidget):
         # the mesh they belong to stands -- a placed object carries its volume
         # into place with it.
         volume_rows: list[np.ndarray] = []
+        self._volume_spans = []
+        base = tri_data.shape[0] + line_data.shape[0] + spray_data.shape[0]
+        cursor = 0
         for mesh, rotation, translation in drawn:
             for volume in mesh.volumes:
                 centre = np.asarray(volume.offset, dtype=np.float64) * AXIS_FLIP
                 lines = _cylinder_lines(centre, volume.radius,
                                         -volume.height)  # -Y is up once flipped
                 volume_rows.append(_place(lines, rotation, translation))
+                # Keyed by mesh so hiding a mesh takes its volume with it, and
+                # so a reused object's copies each hide with the one row that
+                # names them in the panel.
+                self._volume_spans.append(
+                    (mesh.index, base + cursor, lines.shape[0]))
+                cursor += lines.shape[0]
         volume_points = np.vstack(volume_rows) if volume_rows else np.zeros((0, 3))
         volume_data = np.hstack([
             volume_points,
@@ -967,10 +978,6 @@ class ModelView(QOpenGLWidget):
             np.zeros((volume_points.shape[0], 3)),
             np.tile(np.asarray(self._atlas.neutral_uv()), (volume_points.shape[0], 1)),
         ]) if volume_points.shape[0] else empty
-        self._volume_span = (
-            tri_data.shape[0] + line_data.shape[0] + spray_data.shape[0],
-            volume_points.shape[0],
-        )
 
         self._vertex_data = np.ascontiguousarray(
             np.vstack([tri_data, line_data, spray_data, volume_data]), dtype=np.float32
@@ -1567,15 +1574,17 @@ class ModelView(QOpenGLWidget):
         # The volumes go over everything and ignore depth: the point of showing
         # a collision cylinder is to see it against the body it wraps, and half
         # of it is inside the mesh.
-        first, count = self._volume_span
-        if self.show_volumes and count:
+        if self.show_volumes and self._volume_spans:
             self._program.setUniformValue1f("unlit", 1.0)
             self._program.setUniformValue1f("shade", 1.0)
             self._program.setUniformValue1f("use_texture", 0.0)
             self._program.setUniformValue1f("use_override", 1.0)
             self._program.setUniformValue("override_color", QVector3D(1.0, 0.35, 0.4))
             GL.glDisable(GL.GL_DEPTH_TEST)
-            GL.glDrawArrays(GL.GL_LINES, first, count)
+            for mesh_index, first, count in self._volume_spans:
+                if mesh_index in self._hidden:
+                    continue
+                GL.glDrawArrays(GL.GL_LINES, first, count)
             GL.glEnable(GL.GL_DEPTH_TEST)
 
         GL.glBindVertexArray(0)
