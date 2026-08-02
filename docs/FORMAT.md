@@ -2486,10 +2486,10 @@ Records run back to back from `0x0C + u32@0x0C`, each immediately followed by it
 | +0x05 | u8 | — | 0 in 13,332/15,160; otherwise 1..5 mostly. | ?unknown? |
 | +0x06 | u8 | `used_width` | **≤ `vram_width * 2` (the row's byte count) in 15,160/15,160**, with equality in 11,890. | **confirmed** (the bound) / *likely* (a used-area width) |
 | +0x07 | u8 | `used_height` | **≤ `height` in 15,160/15,160**, with equality in 10,186. | **confirmed** (the bound) / *likely* (a used-area height) |
-| +0x08 | u32 | `tpage` | **0 in 15,160/15,160**, but not dead: `0x80029450` copies it into `descriptor+0x0C`, the page §6.2 reads. A shipped pack states no VRAM placement. | **confirmed** (where it goes) / ?unknown? (who fills it) |
-| +0x0C | i16 | `palette_field` | Bit 0 = bit depth (0 → 4bpp, 1 → 8bpp; 14,885 / 275). Bits 1–15 = palette index. The value `0x7FFF` means "no palette of my own" — the swatch texture, 355 of 15,160. | *likely* |
-| +0x0E | i16 | — | 0 (14,985) or 3 (175). | ?unknown? |
-| +0x10 | u32 | `flags` | 19 distinct values; 1 (14,643), 2 (192), 16 (66), 8 (43), 7 (41), 12 (39), … | ?unknown? |
+| +0x08 | u32 | — | **0 in 15,160/15,160**. `0x80029450` copies it into `descriptor+0x0C`, which nothing then reads — the page lives at descriptor+0x24 and is allocated, not stored (§10.4). | **confirmed** (where it goes) / ?unknown? (what it would mean) |
+| +0x0C | i16 | `palette_field` | Bit 0 = bit depth (0 → 4bpp, 1 → 8bpp; 14,885 / 275). Bits 1–15 = palette index. The value `0x7FFF` means "no palette of my own" — the swatch texture, 355 of 15,160, and `0x80028EE8` compares against exactly that constant before it would look one up. | **confirmed** |
+| +0x0E | i16 | `variants` | 0 (14,985) or 3 (175). **Bit 1 gates a sibling lookup**: `0x80028E24` tests it and, when set, indexes a descriptor `56*n` further on (§10.4). Set only in warp rooms (2 apiece) and the crate object packs (7). | **confirmed** (the gate) / ?unknown? (what the variants are) |
+| +0x10 | u32 | `variant_count` | The bound that lookup compares the selector at `0x8005A640` against. Where +0x0E bit 1 is set it is 2 (134) or 7 (41), and the run of that many descriptors fits inside the pack in **175/175**. Where the flag is clear it is loaded and never used, which is why it takes 19 unrelated values. | **confirmed** (the bound) / ?unknown? (the selector) |
 | +0x14 | u8[] | `pixels` | `vram_width * height * 2` bytes. 4bpp packs two pixels per byte, **low nibble first** (leftmost). | **confirmed** |
 
 Walking `palette_count` palettes then `texture_count` records does **not** land exactly on the
@@ -2578,12 +2578,99 @@ and the record stride closes §10.3 from the code rather than from measurement:
 8002947C  addu  $s0, $s0, $v0       ; (delay slot) the next record
 ```
 
-**And this is why no `GetClut` arithmetic exists anywhere on the disc.** The descriptor's
-tpage is not computed from anything: it is copied out of `record+0x08`, which is **0 in
-15,160/15,160 records**. So a shipped pack carries no VRAM placement at all, and whatever
-assigns one must write `descriptor+0x0C` after this loader has run. That is the remaining
-gap, and it is now a much smaller one: a single field of a known structure, written by
-something the load path reaches after `0x8002926C`.
+### Where a texture lands in VRAM: assigned at load, not stored
+
+The pack states no placement — nor should it, because the game allocates one. `0x80016D98`
+follows the parse with `0x80029560`, and that is the whole answer.
+
+**The earlier scans missed it for a reason worth recording.** They looked for `GetClut`
+*inlined* — an `srl ,4` beside an `sll ,6`. The game calls it:
+
+```
+; 0x800364FC — GetClut(x, y), exactly the libgpu macro
+800364FC  sll   $v0, $a1, 6
+80036500  sra   $a0, $a0, 4
+80036504  andi  $a0, $a0, 0x3f
+80036508  or    $v0, $v0, $a0
+```
+
+and it builds the tpage by hand with a shift pattern the scan did not match. So the negative
+result was real and the conclusion drawn from it was wrong.
+
+Palettes first. Each is uploaded and given a CLUT id:
+
+```
+; 0x80029560 — s1 walks the 12-byte CLUT descriptors, s6 is the pack
+800295B0  lhu   $v0, ($s1)         ; the palette's entry count
+800295B8  sltiu $v0, $v0, 0x11     ; 16 or fewer -> the small allocator
+800295C4  jal   0x80028420         ;   otherwise 0x80028A00
+800295DC  sw    $v0, 2($s0)        ; +0x04 = the VRAM rect it got
+800295E8  lhu   $v0, ($v0)         ; the rect's x
+800295FC  lhu   $v0, 2($v0)        ;   and y
+80029618  lw    $a1, 6($s0)        ; +0x08, the palette's bytes in the pack
+80029620  jal   0x8002f014         ; LoadImage -- upload it
+80029630  jal   0x800364fc         ; GetClut(x, y)
+80029638  sh    $v0, ($s0)         ; +0x02 = the CLUT id
+```
+
+Then the textures, one call to `0x80028D40` each:
+
+```
+; 0x80028D40 — s0 = the texture descriptor
+80028D5C  lw    $a0, 4($s0)        ; its size-class bucket, from 0x80028994
+80028D60  jal   0x800282f8         ; pop a free rect off that bucket's list
+80028D6C  sw    $v0, 0x20($s0)
+80028D78  sh    $v0, 0x18($s0)     ; the rect's x
+80028D8C  sh    $a0, 0x1a($s0)     ;   and y
+;   8bpp                                     4bpp (0x80028DD0)
+80028DA0  ori  $v0, $v0, 0xa0        80028DE8  ori $v0, $v0, 0x20
+80028DA4  andi $v1, $v1, 0x380       80028DE0  andi $v0, $v0, 0x3ff
+80028DA8  sra  $v1, $v1, 6           80028DE4  srl  $v0, $v0, 6
+80028DB4  sll  $v1, $v1, 2           80028DF4  sll  $v0, $v0, 2
+80028DC0  sh   $v0, 0x24($s0)        80028E00  sh   $v1, 0x24($s0)
+80028E6C  jal   0x8002f014         ; LoadImage -- upload the pixels
+80028E88  sh    $v1, 0x28($s0)     ; the page-local UV of the top-left corner,
+80028EAC  sh    $v0, 0x2a($s0)     ;   and the other three, from the +0x10/+0x11
+80028EC8  sh    $v0, 0x2e($s0)     ;   masks the builder wrote
+80028EE8  addiu $v0, $zero, 0x7fff ; a palette index of 0x7FFF names none (§10.3)
+80028EF8  lw    $v1, 0xc($s2)      ; otherwise index the CLUT descriptors
+80028F0C  sh    $v0, 0x26($s0)     ;   and take the id GetClut gave it
+```
+
+`0xA0` is `(tp=1) << 7 | (abr=1) << 5` and `0x20` is `(abr=1) << 5` with `tp=0`, so both
+branches are `getTPage` to the letter. **Placement is a free-list allocation by size class**:
+`0x80028994` picks a bucket from the texture's own dimensions, the table of bucket heads sits
+at `0x80063B1C` at stride 12, and `0x800282F8` pops the first free rect. Nothing about it is
+in the file, which is why no field of a TEX pack ever named a page.
+
+That settles the whole descriptor, and it settles what the render pass reads. Its callers
+hand it **`descriptor + 0x18`**, not the descriptor — `0x8002C780` does `addiu $a0, $v0, 0x18`
+right after the accessor returns — so §6.2's "tpage at +0x0C, clut at +0x0E, UV origin at
++0x10" are this structure's +0x24, +0x26 and +0x28.
+
+| Descriptor | Written by | Meaning |
+| --- | --- | --- |
+| +0x00 | builder, `record+0x0C & 1` | bit depth |
+| +0x02 | builder, `record+0x0C >> 1` | palette index; 0x7FFF means none |
+| +0x04 | builder, `0x80063B1C + 12*f(w,h)` | the VRAM size-class bucket |
+| +0x08, +0x0A | builder | width in texels, height |
+| +0x0C | builder, `record+0x08` | zero in every shipped record, and **not** the page |
+| +0x10, +0x11 | builder | `width − 1`, `height − 1`, the wrap masks |
+| +0x12, +0x14 | builder, `record+0x0E`, `record+0x10` | the variant gate and its bound |
+| +0x18, +0x1A | `0x80028D40` | the allocated rect's x and y |
+| +0x1C, +0x1E | builder | the raw `vram_width` and `height` |
+| +0x20 | `0x80028D40` | the rect itself |
+| +0x24 | `0x80028D40` | **the tpage**, `getTPage` of the rect |
+| +0x26 | `0x80028D40` | **the CLUT id**, from the palette's own descriptor |
+| +0x28..+0x2E | `0x80028D40` | the four page-local UV corners |
+| +0x30 | builder | the record's pixel offset in the pack |
+| +0x34 | builder | −1 |
+
+**What this means for an editor.** A UV in a model is page-local and stays correct however
+VRAM is arranged, so nothing has to be reproduced. But the page a texture gets is decided by
+its **size class**, so a replacement that changes a texture's dimensions changes which bucket
+it draws from and where every later texture lands. That is the reason behind the empirical
+rule of §10.3, not a separate one.
 
 ## 10.5 Animation block (`u32@0x18`)
 
@@ -2843,7 +2930,8 @@ produce subtly broken output.
 | "A frame record is 16 bytes starting at the blob base." | **Refuted** | Record *f* is at `blob + 4 + 16*f`; `blob+0x00` is the blob's pool pointer. Under the shifted reading only 1,925 of 49,167 records validate and no clip validates completely. See §9.3. |
 | "The texture descriptors hang off the render context at 0x80056998." | **Refuted** | They hang off a second context at **0x80055684**, which only three sites in the image reference and which `0x8002C774` is what hands to the accessors of §6.2. Nothing anywhere on the disc — the EXE or any of the 15 code overlays — stores to +0x18 or +0x1C of 0x80056998. Aiming three exhaustive scans at the wrong structure is why §14 concluded for two revisions that the loader was not in `SCUS_945.70`; it is, at 0x8002926C. See §10.4. |
 | "The `mesh+0x2C` volume is a standing cylinder and field 3 is its radius." | **Refuted** | Field 5 is a second horizontal extent — non-zero in 349 of 1717 records and **different from field 3 in 25** of them, which a circle cannot be. Field 3 is half the mesh's width (median ratio 1.000) and not half its diagonal (0.707), so it is an inscribed half-extent rather than a wrapping radius; and the 324 crate records describe exactly their mesh's own 256-unit cube. See §8.4. |
-| "TEX record +0x08 is unused padding." | **Refuted** | It is the **tpage**: `0x80029450` copies it into `descriptor+0x0C`, which §6.2 reads as the page. It is zero in 15,160/15,160 because a shipped pack states no VRAM placement, not because the field is dead. |
+| "TEX record +0x08 is the tpage." | **Refuted** | Mine, and wrong. `0x80029450` does copy it into `descriptor+0x0C`, but that is not the page: the render pass is handed `descriptor+0x18`, so what §6.2 calls +0x0C is descriptor **+0x24**, written by `0x80028D40` from a VRAM rect the allocator hands out. Nothing reads +0x0C afterwards. See §10.4. |
+| "Nothing on the disc computes a CLUT id, so the arithmetic must be unlike libgpu's." | **Refuted** | `0x800364FC` *is* `GetClut`, letter for letter — `(y << 6) \| ((x >> 4) & 0x3F)`. Three scans missed it because they looked for the macro **inlined**, an `srl ,4` beside an `sll ,6`; the game calls it instead, and builds the tpage by hand with a shift pattern the same scan did not match. A negative from a shape scan bounds where a shape is, not where a routine is. |
 | "A level's objects are drawn where their own vertices sit." | **Refuted** | They are drawn once per record of the placement list at `model+0x18`, each under that record's own rotation and position: 2689 records over 1971 objects, 2120 of them moved off the origin. 668 records share an id with another record and **no two of those share a transform**, so the copies cannot be meant to coincide. See §8.5. |
 | "The 0x4000 id namespace indexes its table the way 0x5000 does." | **Refuted** | 0x5000 is `(id & 0xFFF) − 1`; 0x4000 packs two fields, `clip = (id & 0xF80) >> 7` and `frame = id & 0x7F` (0x80019B1C). Reading a 0x4000 id as `id & 0xFFF` makes the 45 clip placements in the corpus, all of them id 0x4000, look like an out-of-range index −1 instead of clip 0 frame 0. |
 
@@ -2917,31 +3005,16 @@ Stated precisely, with the measurement that bounds each one.
 
 **TEX**
 
-* **VRAM placement.** Still the biggest gap, but it is now one field rather than a missing
-  routine. §10.4 finds the loader — it was in `SCUS_945.70` all along, hanging off a second
-  context at 0x80055684 rather than the render context every earlier scan aimed at — and the
-  loader fills every field of a texture descriptor from its record except the page. The tpage
-  at `descriptor+0x0C` is copied from `record+0x08`, which is **0 in 15,160/15,160**, so a
-  shipped pack states no placement and something after `0x8002926C` must assign one. Find
-  that writer and the gap closes. What follows is the earlier reasoning, kept because its
-  negatives still hold and they are what narrows the search: a UV pair in a model is
-  page-local and is OR'd at runtime with a per-texture origin from a 56-byte descriptor whose
-  tpage (+0x0C), CLUT id (+0x0E) and UV origin (+0x10) the render pass only ever *reads*.
-  Three exhaustive scans back that up: `.text` contains no `GetClut`-shaped arithmetic at all
-  (no `srl rX,4` within three instructions of an `sll rY,6`; only 33 `sll ,6` in the whole
-  image, two of them in the model region and both allocation sizes); there is no absolute
-  `lw`/`sw` against the render context's +0x10/+0x18/+0x1C descriptor-table slots
-  (immediates 0x69A8/0x69B0/0x69B4 do not occur); and no site writes a 56-byte-strided record
-  in the 0x80015000–0x8001F000 region. So the loader that turns a TEX pack into descriptors
-  lives in an overlay — `overlays/gameeng.bin` (386 KB, the only unclassified code overlay)
-  was the place to look next. **It is not there either.** The same `GetClut` shape run over
-  every code blob the disc ships — the 14 mode overlays and `gameeng.bin`, whose link address
-  is now recovered as 0x80078C90 (§8.5) — finds **0 sites out of 216 `sll ,6` instructions**,
-  none of them with a shift-by-4 anywhere within three instructions. Nothing in the shipped
-  code computes a CLUT id from a palette coordinate. So the question changes shape: the
-  packed tpage and CLUT words are either stored somewhere already in that form, or built by
-  arithmetic that looks nothing like the libgpu macro. Until one of those is found, mapping a
-  UV to a texel relies on assumption.
+* ~~**VRAM placement**~~ — **closed**, see §10.4. It was never in the file: the game allocates
+  a rect off a free list chosen by the texture's size class (`0x80028994` picks the bucket,
+  `0x80063B1C` holds the heads, `0x800282F8` pops), computes the tpage inline at
+  `0x80028D90`/`0x80028DD0` and the CLUT id through `0x800364FC`, which is `GetClut` letter
+  for letter. Three scans had missed it because they searched for that macro *inlined* rather
+  than called. A model's UV is page-local and stays correct however VRAM is arranged; what a
+  replacement must not change is a texture's **size class**, since that is what picks the
+  bucket. The selector at `0x8005A640` that chooses between a texture's variants is the one
+  loose end — zero in the shipped image and stored nowhere on the disc, the EXE and all 15
+  overlays only ever read it.
 * **Header 0x14** — multiple of 4 in 400/400, range 120..228,744, 272 distinct values. Not a
   pointer, not any pixel/palette/record total tested, and it differs between structurally
   identical packs. It is no longer unread, though: `0x8002A62C` carries it into the texture
@@ -2951,7 +3024,9 @@ Stated precisely, with the measurement that bounds each one.
   13,332. The other two are bounded by the record's own dimensions — `+0x06 <= vram_width*2`
   and `+0x07 <= height`, both 15,160/15,160, with equality in 11,890 and 10,186 — which reads
   as the used sub-rectangle of a padded block, but no code site was found that consumes them.
-* **Record +0x0E** (0 or 3) and **+0x10** (19 distinct values) — no reader traced.
+* ~~**Record +0x0E** and **+0x10**~~ — **closed** as far as the code goes, see §10.3 and
+  §10.4: +0x0E bit 1 gates a sibling lookup and +0x10 bounds it. What the variants *are* is
+  still open, and so is the selector that picks one.
 * **The pack tail.** Walking the palettes and then the texture records leaves a residual
   before EOF: 8 bytes in 263 packs, 12 in 51, 32 in 12, and up to 32,904 in a few. Something
   else is stored there.
