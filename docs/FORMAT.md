@@ -326,7 +326,7 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x00 | u32 | `runtime_slot` | **Not padding.** Zero in the file (5990/5990) because the loader fills it; the mesh-iteration loop dereferences it. | **confirmed** |
 | 0x04 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x08 | i16 | `triangle_count` | Number of triangles. Equals the sum of the strip list's high bytes in **5990/5990**. Not read by any render pass — the runtime derives the count from the strip list. Redundant but exact. | **confirmed** |
-| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader found, and the search is stated**: all eight halfword loads at this offset inside 0x80014000–0x8001F000 were traced to their base register and each is a stack local, a projected vertex or a GPU quad's corners, not a mesh header (§14). Outside that range, and through a pointer, nothing was checked. | **confirmed** (the trace) / ?unknown? (meaning) |
+| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader found, over every code blob on the disc**: 132 halfword loads at this offset, each base register traced, and not one arrives through the `addiu 0x58 / 0x34 / 0x24` a mesh address is built with. See §14 for the search and its limits. | **confirmed** (the trace) / ?unknown? (meaning) |
 | 0x0C | i16 | — | Non-zero in 344/5990, in small families: 100 (138), 10 (68), 5 (51), 4 (29), 101–103 (22), 20–33 (16), others (20). **No reader found in the executable or in any of the 14 mode overlays.** The 138 meshes carrying 100 are exactly the backdrop domes each cutscene raises without a node (§9.11.6), and of the 342 that a scene could have claimed, **none is owned by a scene node** — correlation over the corpus, not a decoded meaning. | ?unknown? |
 | 0x0E | i16 | — | Non-zero in 162/5990, and only where 0x0C is. Where 0x0C is 100 it is 0 (72) or 1 (65), which is the order the two domes stack — opaque sky, then the additive tint over it. Same status: correlation, no reader found. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_bounds` | 0x14-byte bounds block; the vertex pool starts at `T(0x10) + 0x14`. | **confirmed** |
@@ -2676,8 +2676,17 @@ instructions and six distinct offsets:
 
 Not one is at +0x04, +0x05, +0x06 or +0x07. Their bounds against the record's own dimensions
 still hold over the corpus, so the "used sub-rectangle" reading remains the only one that
-fits the numbers. What is settled is that this loop does not consult them; a routine holding
-a record pointer some other way would not appear in the listing above.
+fits the numbers.
+
+And there is no other way to hold a record. A record's address comes from the pack header's
++0x0C, resolved self-relatively; scanning every code blob on the disc for that shape —
+`lw rX, 0x0C(rY)` with an `addiu rX, rX, 0x0C` within three — turns up **five sites in all**,
+and four of them belong to structures this document already reads: the mesh dispatcher
+(0x800156DC), the clip table (0x80019B8C), the sub-object binder (0x8001DE50) and the +0x10
+block walk (0x80024C40). The fifth is 0x80029310, the builder. So the enumeration above is
+not one routine's habits; it is every read of a texture record the shipped code performs.
+A routine that recovered a record by subtracting 0x14 from a descriptor's pixel pointer would
+still escape it, and nothing suggests one does.
 
 Walking `palette_count` palettes then `texture_count` records does **not** land exactly on the
 file size. Where `ptr_animation` is set the residual is the animation block below; where it is
@@ -3188,20 +3197,30 @@ are not only undocumented format; they are also where a reader is quietly skippi
 **MDL mesh header**
 
 * **0x0A** ("format"), **0x0C** (non-zero in 344) and **0x0E** (non-zero in 162) — the
-  distributions are known and the meanings are not, and **the trace the last revision left
-  undone is now done**. Every halfword load at those three immediates inside
-  0x80014000–0x8001F000 was followed back to what put its base register there:
+  distributions are known and the meanings are not. The search for a reader has been run
+  twice: first over 0x80014000–0x8001F000, then **over every code blob the disc ships** — the
+  executable, the 14 mode overlays and `gameeng.bin`. A mesh header can only be reached three
+  ways (§3, §8.3), all of which materialise the address with an `addiu` of 0x58, 0x34 or 0x24,
+  so each load's base register was followed back looking for that shape:
 
-  | Offset | Loads | Off `$sp` | The rest |
-  | --- | --- | --- | --- |
-  | 0x0A | 8 | 6 | a projected-vertex copy after `RTPS` (0x8001B270) and a GPU quad's corner list (0x8001A26C, whose `$s0` is a 0x32 command word) |
-  | 0x0C | 13 | 7 | four are `descriptor + 0x18`, i.e. the **tpage** of §10.4; one is a caller's clip rectangle; one a struct with fields at +0x6C |
-  | 0x0E | 14 | 6 | the same descriptor tail, the same clip rectangle, and four node fields inside the §9.11 handlers |
+  | Offset | Loads, disc-wide | Off `$sp` | No mesh arithmetic within 24 | Candidates |
+  | --- | --- | --- | --- | --- |
+  | 0x0A | 132 | 6 | 122 | 4 |
+  | 0x0C | 102 | 7 | 95 | **0** |
+  | 0x0E | 128 | 6 | 120 | 2 |
 
-  **Not one of them is a mesh header.** So these three fields are read by nothing the disc
-  ships, which puts them with strip flag bit 3: authoring-tool output the game never
-  consults. That matters for the `0x0C == 100` correlation of §9.11.6 — it describes the
-  backdrop domes, it does not cause them.
+  Every candidate was read. The four at 0x0A are one routine copied into four mode overlays,
+  an `lwl`/`lwr` pair at +0x09/+0x06 straddling **6-byte records** — the shape of the vector
+  pool (§7.3), not of a 0x34 header. The two at 0x0E are `lh $a3, 0xe(...)` inside the prop
+  and actor handlers, reading the per-tick context the same way the type-4 handler does
+  (§9.11.10). 0x0C has no candidate anywhere.
+
+  **No reader was found, and that is now the strongest form of the statement available from
+  static analysis**: not one site on the disc reaches these offsets through anything shaped
+  like a mesh address. It is still a failed search — a base arriving through a pointer or
+  more than 24 instructions earlier would not appear — but the shape it looked for is the
+  only one the game uses to reach a header. That is what makes the `0x0C == 100` correlation
+  of §9.11.6 a description of the backdrop domes rather than a cause of them.
 * **0x04, 0x30** — zero in 5990/5990, no reader.
 * **0x2C block contents** — the 16-byte records are unread. The `u16` at +0x00 is 0 (769),
   2 (6) or 5 (2).
@@ -3234,12 +3253,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   identical packs. It is no longer unread, though: `0x8002A62C` carries it into the texture
   context at +0x24 (§10.4). What reads it there is the open half.
 * **Header 0x18** — 0 in 314/400; the 86 non-zero values match no landmark tested.
-* **Record +0x04..+0x07** — what they *mean* is open; that nothing reads them is now closed.
-  Only the builder of §10.4 walks these records, and every load through its walker is
-  enumerated in §10.3: nineteen instructions at six offsets, none of them these four. Their
-  bounds against the record's own dimensions still hold in 15,160/15,160, so "the used
-  sub-rectangle of a padded block" remains the only reading that fits — it is simply not one
-  the shipped game acts on.
+* **Record +0x04..+0x07** — what they *mean* is open; the search for a reader is now as tight
+  as static analysis gets. A record can only be addressed through the pack header's +0x0C,
+  and **five sites on the whole disc** resolve a +0x0C self-relatively — four of them belong
+  to other structures, and the fifth is the builder of §10.4. Every load through the
+  builder's walker is enumerated in §10.3: nineteen instructions at six offsets, none of them
+  these four. Their bounds against the record's own dimensions still hold in 15,160/15,160,
+  so "the used sub-rectangle of a padded block" remains the only reading that fits.
 * ~~**Record +0x0E** and **+0x10**~~ — **closed** as far as the code goes, see §10.3 and
   §10.4: +0x0E bit 1 gates a sibling lookup and +0x10 bounds it. What the variants *are* is
   still open, and so is the selector that picks one.
