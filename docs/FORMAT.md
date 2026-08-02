@@ -311,8 +311,8 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x04 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x08 | i16 | `triangle_count` | Number of triangles. Equals the sum of the strip list's high bytes in **5990/5990**. Not read by any render pass — the runtime derives the count from the strip list. Redundant but exact. | **confirmed** |
 | 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). Only 5990 samples; no reader identified. | ?unknown? |
-| 0x0C | i16 | — | Non-zero in 344/5990. | ?unknown? |
-| 0x0E | i16 | — | Non-zero in 162/5990. | ?unknown? |
+| 0x0C | i16 | — | Non-zero in 344/5990, in small families: 100 (138), 10 (68), 5 (51), 4 (29), 101–103 (22), 20–33 (16), others (20). **No reader found in the executable or in any of the 14 mode overlays.** The 138 meshes carrying 100 are exactly the backdrop domes each cutscene raises without a node (§9.11.6), and of the 342 that a scene could have claimed, **none is owned by a scene node** — correlation over the corpus, not a decoded meaning. | ?unknown? |
+| 0x0E | i16 | — | Non-zero in 162/5990, and only where 0x0C is. Where 0x0C is 100 it is 0 (72) or 1 (65), which is the order the two domes stack — opaque sky, then the additive tint over it. Same status: correlation, no reader found. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_bounds` | 0x14-byte bounds block; the vertex pool starts at `T(0x10) + 0x14`. | **confirmed** |
 | 0x14 | i32 ptr | `ptr_strips` | Strip list (§5). | **confirmed** |
 | 0x18 | i32 ptr | `ptr_uv_index` | One u16 per triangle (§6.1). Also the end of the vertex block. | **confirmed** |
@@ -1904,6 +1904,54 @@ ticks and shrinking away from tick 12. That is the burst of stars that falls fro
 **The spray cannot be reproduced frame for frame.** The generator's state lives at 0x800517B8,
 which is not in the file — it is whatever the console had reached by the time the shot ran. A
 reader can match the distribution and nothing finer.
+
+### 9.11.8 What draws a mesh no node owns — **certain, but not yet traced to the data**
+
+The node graph is not the only thing that draws (§9.11.5 said as much, and the backdrop domes
+of §9.11.6 prove it). The other path is an **object list**, and it is fully mapped:
+
+```
+8001DB90  lw   $s0, 0x1c($s2)   ; the list head on the scene context
+8001DBA0  lw   $v0, 0x54($s0)   ;   each object's draw slot
+8001DBB4  jalr $v0
+8001DBBC  lw   $s0, 0x5c($s0)   ;   and the next one
+```
+
+The draw installed in that slot is 0x8001DD50, which reads the object's resource id and hands
+it to the same renderer the entity path uses:
+
+```
+8001DD6C  andi $v1, $a2, 0x8000  ; the visibility bit again
+8001DD90  lhu  $a0, 0x74($s1)    ; the object's resource id
+8001DD98  jal  0x80019a60        ;   -> 0x80019094 -> the polygon writer
+```
+
+Objects are built by 0x8001D6B4: `[ctx+0x18]` of them, 0xA8 bytes each, from a source array at
+`[ctx+0x14]` with a stride of 0xA0, copying the id from source `+0x88` into object `+0x74` and
+installing the draw. And the context is filled straight from the model:
+
+```
+8001DE28  lw   $v0, 0x18($v1)   ; v1 = the model; +0x18 is self-relative
+8001DE34  addu $v1, $v1, $v0    ;   -> a table
+8001DE48  addu $v1, $v1, $v0    ;   -> a record inside it
+8001DE90  ctx+0x14 = record + [record+0x20] + 0x20   ; the source array
+8001DE9C  ctx+0x18 = [record+0x1C]                   ; how many
+```
+
+So `model+0x18` is the section that feeds it. **It is empty in every model but one.**
+`intro_eurocom` carries 164 bytes there, eight 20-byte records shaped `(0, flags, mesh index,
+0, 0)`, and the two flagged `0x40000000` name exactly its two backdrop domes — meshes 10 and
+11, the pair `mesh+0x0C == 100` marks. Those two ids appear nowhere else in that file, so the
+raw index in this table is the only reference to them.
+
+What is **not** settled is where the other 64 cutscenes get their object list, since their
+`model+0x18` is empty. Nor is `mesh+0x0C` read anywhere: the immediate 100 appears 9 times in
+the executable and 32 times across the 14 mode overlays, and not one of those sites is near a
+mesh-header load. The mesh-by-index entry point at 0x8001CE00 that would suit a backdrop is
+dead code — no `jal`, no `j`, no word, no `lui`/`addiu` pair reaches it anywhere in the image
+or the overlays. The rest of the pipeline is dispatched through the class table at 0x800527C4,
+which is filled at boot (0x8001492C, `draw_object` in slot +0x58) and indexed through registers
+that cannot be followed statically.
 
 | Offset | Type | Meaning |
 | --- | --- | --- |

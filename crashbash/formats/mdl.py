@@ -103,6 +103,11 @@ class Mesh:
 
     face_count_header: int  # u11: triangle count as stated by the file
     format: int  # mesh 0x0A: an attribute-format selector; 4, 6 or 7, rarely 5 or 2
+    # 0x0C and 0x0E. MEASURED, no reader found in the executable yet: value 100
+    # at 0x0C sits on exactly the backdrop domes every cutscene raises without
+    # a node (138 meshes), with 0x0E ordering their layers -- opaque 0, tint 1.
+    # Other small families (4, 5, 10, 20..33, 101..103) appear only in arenas,
+    # and no mesh carrying any of them is ever owned by a scene node.
     unk13: int
     unk14: int
 
