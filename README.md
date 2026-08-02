@@ -224,10 +224,22 @@ node's frame mapping is a step function the game recomputes every tick and a cam
 cut is a hard change between two nodes, and neither survives being handed to an
 interpolating exporter as sparse keys.
 
-Two things do not go out. glTF has no visibility track, so a node off stage is
-scaled to zero — the usual convention, and every importer understands it. And a
-particle emitter is a simulation rather than a set of keys, so the sprays are left
-behind; they are still there in the viewport.
+Two things have no place in glTF itself. It has no visibility track, so a node off
+stage is scaled to zero — the usual convention, and every importer understands it.
+And it has no particle system at all, so an emitter cannot be a spray in the scene
+graph.
+
+Neither is lost, though. The shot also rides in the file's `extras`, which is where
+the glTF spec puts application data and which every loader carries through
+untouched: every track and camera key, every emitter with all sixteen fields its
+simulation runs on, every placement record — each with the byte offset it came
+from. So the file is lossless even where the scene graph is not, and 130 shots
+export with **zero** disagreement against what the reader sees in the DAT.
+
+Those offsets are the thing that makes a trip back thinkable. All 7938 of them land
+on exactly the bytes they name, once the sub-scene shift each track records is
+undone — a sub-scene runs on its own clock and in its parent's frame, so 433 of the
+corpus's prop keys are not the file's own values and `extras` says so per track.
 
 In Blender the morph targets arrive as shape keys with the clips driving them, so a
 character can be retargeted with the tools that already exist there.
@@ -243,13 +255,17 @@ default 24 fps the clips come back audibly off-beat and measurably off-pose. At
 30 fps the full round trip — export, Blender save, import — reproduces every pose
 exactly, verified against Blender 5.2.
 
-The import does **not** read a shot back. Meshes, clips and textures come home; the
-tracks, the camera and the placement list do not. That is a deliberate stop rather
-than an oversight: those live in the object graph at `T(0x1C)..T(0x4C)`, a region
-the writers have never touched and whose layout is only partly read — the record
-kinds beyond the nodes are still unknown (see `docs/FORMAT.md` §8.3). Rebuilding it
-from a modelling tool's idea of a scene is how you get a disc that boots into a
-crash, so moving a camera in Blender changes the export you look at, not the game.
+The import does not read a shot back **yet**, and the reason is worth stating
+precisely, because it is narrower than it first looks. Rebuilding the object graph
+at `T(0x1C)..T(0x4C)` is out of reach — the writers have never touched it and the
+record kinds past the nodes are still unread (`docs/FORMAT.md` §8.3), so adding a
+node or changing how many keys one has means writing a region nobody has decoded.
+But *changing what an existing record holds* is a different thing entirely: no
+count moves, no size changes, no offset shifts, and the undecoded bytes are never
+even read. That is what the offsets in `extras` are for, and they are verified
+against every one of the 7938 records they name. Moving a camera, sliding a prop
+or repositioning a level object is the reachable half; adding or deleting one is
+not.
 
 Colours need one word, because the console uses them at two scales: on a textured
 triangle the colour is a *multiplier* — the blend is `texel * colour / 128`, above

@@ -322,6 +322,7 @@ class Instance:
     index: int
     id: int
     flags: int
+    record: int  # byte offset of the 160-byte record, for an in-place rewrite
     translation: Vec3
     rotation: tuple[float, float, float, float, float, float, float, float, float]
     mesh: Mesh | None = None
@@ -1085,6 +1086,7 @@ def _read_instance(reader: Reader, model: Model, base: int, index: int) -> Insta
     instance = Instance(
         index=index,
         id=identifier,
+        record=base,
         flags=reader.u16(),
         translation=translation,  # type: ignore[arg-type]
         rotation=rotation,  # type: ignore[arg-type]

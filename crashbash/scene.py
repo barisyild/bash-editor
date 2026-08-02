@@ -242,6 +242,12 @@ class Track:
     start: int
     end: int
     keys: tuple[Key, ...]
+    # What `_onto_parent` did to the file's own values to get these. A sub-scene
+    # runs on its own clock and in its parent's frame, so its keys are shifted
+    # by `shift` ticks and, when `parented`, moved as well -- and anything
+    # writing a key back to `node` has to undo both or it corrupts the record.
+    shift: int = 0
+    parented: bool = False
 
     def at(self, tick: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Position, rotation and scale at `tick`, interpolated within its key.
@@ -1005,7 +1011,8 @@ def _onto_parent(node: int, start: int, end: int, keys: list[Key],
     if offset:
         keys = [Key(key.tick + offset, key.duration,
                     key.position, key.rotation, key.scale) for key in keys]
-    return Track(node, start + offset, end + offset, tuple(keys))
+    return Track(node, start + offset, end + offset, tuple(keys),
+                 shift=offset, parented=parent is not None)
 
 
 def field_of_view() -> float:
