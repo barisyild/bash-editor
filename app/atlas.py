@@ -10,6 +10,10 @@ from crashbash.formats import tex
 
 PADDING = 1  # keeps bilinear-free sampling from bleeding between neighbours
 
+# Enough to keep a corner off the exact texel boundary, far too little to reach
+# the next one. On the boundary the floor in the shader could fall either way.
+EDGE_NUDGE = 1.0 / 512.0
+
 
 @dataclass
 class Atlas:
@@ -22,20 +26,31 @@ class Atlas:
         return self.image.shape[1], self.image.shape[0]
 
     def uv(self, texture_index: int, u: int, v: int) -> tuple[float, float]:
-        """Map a texture-local pixel coordinate into atlas texture space."""
+        """Map a texture-local pixel coordinate to an atlas *texel* coordinate.
+
+        Not a normalised one: the shader floors what it is handed, because that
+        is what the console does. It interpolates the coordinate along the span
+        and truncates, so a quad whose corners are texel 0 and texel 63 only
+        reaches 63 on the very last pixel -- and where two quads meet that pixel
+        belongs to the next quad under the fill rule, so the last column never
+        appears. Interpolating between normalised centres instead runs half a
+        texel past the end and draws it, and every tile of the `intro_eurocom`
+        logo carries a black last row and column: they showed as a dark cross
+        through the badge.
+
+        The nudge keeps the near corner off the exact cell boundary, where the
+        rounding direction is the driver's to choose and the seam came back
+        dashed.
+        """
         if not 0 <= texture_index < len(self.rects):
             return self.neutral_uv()
         rx, ry, rw, rh = self.rects[texture_index]
-        # Sample texel centres; UVs are inclusive pixel indices, not corners.
-        px = rx + min(max(u, 0), rw - 1) + 0.5
-        py = ry + min(max(v, 0), rh - 1) + 0.5
-        w, h = self.size
-        return (px / w, py / h)
+        return (rx + min(max(u, 0), rw - 1) + EDGE_NUDGE,
+                ry + min(max(v, 0), rh - 1) + EDGE_NUDGE)
 
     def neutral_uv(self) -> tuple[float, float]:
         x, y = self.neutral
-        w, h = self.size
-        return ((x + 0.5) / w, (y + 0.5) / h)
+        return (x + 0.5, y + 0.5)
 
     def flipbook_patches(
         self, pack: tex.TexturePack | None, tick: float

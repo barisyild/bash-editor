@@ -123,6 +123,41 @@ SCREEN_DISTANCE = 400.0
 SCREEN_HALF_HEIGHT = 240.0
 
 NODE_TYPE_CAMERA = 2
+# A particle emitter. Its draw walks a linked list of live particles it owns at
+# entity+0x0C, each with its own draw at +0x54 and the next at +0x5C
+# (0x80021330), and its per-tick handler integrates each one's position from a
+# velocity (0x8001F990..0x8001F9EC). What every particle draws is one mesh, and
+# the node names it in the 0x2000 namespace like any prop.
+NODE_TYPE_EMITTER = 1
+EMITTER_POSITION = 0x18
+EMITTER_BUDGET = 0x24  # the whole spray, and the size of the record array
+EMITTER_PER_TICK = 0x28  # how many of it leave each tick
+EMITTER_LIFETIME = 0x2C  # ticks a particle lives before its bit 15 is cleared
+EMITTER_LAST_TICK = 0x30
+EMITTER_FADE_IN = 0x6C
+EMITTER_FADE_OUT = 0x70
+# A second ramp, on the particle's scale rather than its colour:
+# it writes the same value to three consecutive words at 0x8001FC5C.
+EMITTER_GROW_END = 0x74
+EMITTER_SHRINK_START = 0x78
+EMITTER_SPEED_MIN = 0x34
+EMITTER_SPEED_MAX = 0x38
+EMITTER_MESH_ID = 0x3C
+EMITTER_YAW = 0x44
+EMITTER_YAW_SPREAD = 0x48
+EMITTER_PITCH = 0x4C
+EMITTER_PITCH_SPREAD = 0x50
+EMITTER_ACCEL = (0x54, 0x5C, 0x64)
+EMITTER_DAMP = (0x58, 0x60, 0x68)
+EMITTER_SPIN = 0x7C
+
+ANGLE_ONE = 4096  # a full turn, and the length of the game's sine table
+DAMP_ONE = 256  # the value the handler reads as "leave the velocity alone"
+# The spawner scales speed by a sine table entry and shifts down by four
+# (0x8001F738, 0x8001F74C); the tick loop shifts the velocity down by eight
+# again to move the position (0x8001F99C).
+SPEED_SHIFT = 4
+VELOCITY_SHIFT = 8
 CAMERA_KEYS = 0x1C
 CAMERA_STRIDE = 0x28
 CAMERA_TARGET = 0x08
@@ -298,6 +333,161 @@ class Prop:
     mesh_index: int
 
 
+class _Random:
+    """The game's generator, reimplemented from 0x80015590.
+
+        800155A4  lw   $v1, 0x17b8($a0)   ; the seed
+        800155A8  lw   $a1, 0x17bc($a2)   ;   and its increment
+        800155B0  addu $v1, $v1, $a1      ; seed += increment
+        800155BC  divu $zero, $v1, $a3    ; the result is seed % n
+        800155D0  addu $v1, $v1, $a0      ; then the increment moves too
+        800155D4  addu $a1, $a1, $v1
+        800155DC  sw   $a1, 0x17bc($a2)
+
+    The state lives at 0x800517B8, which is not in the file -- it is whatever
+    the console had reached by the time the shot ran. So a spray can be
+    reproduced in distribution and never frame for frame, and this starts from
+    a fixed seed to at least make playback repeatable.
+    """
+
+    MASK = 0xFFFFFFFF
+    CARRY = 0x80050000  # the register the generator folds back into its state
+
+    def __init__(self, seed: int = 1, increment: int = 1):
+        self.seed = seed & self.MASK
+        self.increment = increment & self.MASK
+
+    def below(self, bound: int) -> int:
+        if bound < 2:
+            return 0
+        self.seed = (self.seed + self.increment) & self.MASK
+        result = self.seed % bound
+        self.increment = (self.increment + self.seed + self.CARRY) & self.MASK
+        return result
+
+
+def _sin(angle: int) -> float:
+    return math.sin(2.0 * math.pi * (angle % ANGLE_ONE) / ANGLE_ONE)
+
+
+def _cos(angle: int) -> float:
+    return math.cos(2.0 * math.pi * (angle % ANGLE_ONE) / ANGLE_ONE)
+
+
+@dataclass(frozen=True)
+class Particle:
+    position: np.ndarray
+    spin: float
+    scale: float
+
+
+@dataclass(frozen=True)
+class Emitter:
+    """A node that sprays copies of one mesh and lets them fly.
+
+    Type 1 does not place a mesh, it spawns them. Its constructor takes a block
+    of `max_live` 40-byte records (0x800216D4), the per-tick handler integrates
+    each live one, and the spawner fills a fresh record from the node:
+
+        8001F650  jal  0x80015590      ; a speed between the two bounds
+        8001F6B8  jal  0x80015590      ;   a yaw around its centre
+        8001F700  jal  0x80015590      ;   and a pitch around its
+        8001F738  mult $s1, $v0        ; speed x the sine table at 0x80068BD4
+        8001F9A8  addu $v0, $v0, $v1   ; each tick, position += velocity >> 8
+        8001FA08  addu $v0, $v0, $v1   ;   and velocity += the acceleration
+        8001FA68  mult $v0, $v1        ;   then damped, 256 being no damping
+
+    In `intro_eurocom` the eight emitters sit at the eight letters, each opening
+    six ticks after its letter lands, spraying an omnidirectional burst that
+    falls: 360 degrees of spread and an acceleration of 7 along the console's
+    down axis.
+    """
+
+    node: int
+    start: int
+    end: int
+    position: np.ndarray
+    mesh_index: int
+    budget: int
+    per_tick: int
+    lifetime: int
+    last_tick: int
+    speed: tuple[int, int]
+    yaw: tuple[int, int]
+    pitch: tuple[int, int]
+    accel: np.ndarray
+    damp: np.ndarray
+    spin: int
+    fade: tuple[int, int]
+    grow: tuple[int, int]
+
+    def particles(self, tick: int) -> list[Particle]:
+        """Every live particle at `tick`, simulated from the emitter's start.
+
+        They do go out rather than merely leave the frame: once a particle's
+        age passes the lifetime the handler clears the bit the loop tests for
+        life, which is the same bit the draw path reads.
+
+            8001FAE0  lw    $v1, 0x18($s2)   ; node+0x2C, the lifetime
+            8001FAEC  slt   $v1, $v1, $a0    ;   against the age
+            8001FB00  ori   $v1, $v1, 0x7fff
+            8001FB04  and   $v0, $v0, $v1    ; clear bit 15: dead
+        """
+        if tick < self.start:
+            return []
+        random = _Random()
+        live: list[list] = []       # [position, velocity, spin, age]
+        remaining = self.budget
+        for step in range(self.start, min(tick, self.end) + 1):
+            for particle in live:
+                particle[0] = particle[0] + particle[1] / (1 << VELOCITY_SHIFT)
+                particle[1] = (particle[1] + self.accel) * self.damp
+                particle[2] += self.spin
+                particle[3] += 1
+            live = [p for p in live if p[3] <= self.lifetime]
+            if step <= self.last_tick and remaining > 0:
+                for _ in range(min(self.per_tick, remaining)):
+                    live.append(self._spawn(random))
+                    remaining -= 1
+        return [Particle(self.position + p[0] * GTE_SCALE_SMALL,
+                         (p[2] % ANGLE_ONE) / ANGLE_ONE * 2.0 * math.pi,
+                         self._scale_at(p[3]))
+                for p in live]
+
+    def _scale_at(self, age: int) -> float:
+        """The particle's size at `age`: it grows in, holds, then shrinks away.
+
+            8001FC08  slt $v0, $a3, $a2    ; age < node+0x74 -> ramp up from 0
+            8001FC24  slt $v0, $v1, $a3    ; node+0x78 < age -> ramp down to 0
+            8001FC40  subu $a2, $t0, $v1   ;   over the rest of the lifetime
+            8001FC5C  sw  $v1, 0x28($s0)   ; and the result is the scale, three
+            8001FC60  sw  $v1, 0x24($s0)   ;   words of it, 4096 being full size
+        """
+        grow, shrink = self.grow
+        if not grow and not shrink:
+            return 1.0
+        if age < grow:
+            return age / grow if grow else 1.0
+        if age > shrink:
+            span = self.lifetime - shrink
+            if span <= 0:
+                return 0.0
+            return max(0.0, 1.0 - (age - shrink) / span)
+        return 1.0
+
+    def _spawn(self, random: _Random) -> list:
+        low, high = self.speed
+        speed = low + random.below(max(high - low, 0))
+        yaw = (self.yaw[0] + random.below(self.yaw[1])) % ANGLE_ONE
+        pitch = (self.pitch[0] + random.below(self.pitch[1])) % ANGLE_ONE
+        # speed * direction, at the shift the spawner applies
+        scale = speed * ANGLE_ONE / (1 << SPEED_SHIFT)
+        velocity = np.array([
+            _cos(pitch) * _sin(yaw), _sin(pitch), _cos(pitch) * _cos(yaw),
+        ]) * scale
+        return [np.zeros(3), velocity, float(random.below(ANGLE_ONE)), 0]
+
+
 @dataclass(frozen=True)
 class CameraKey:
     tick: int
@@ -366,6 +556,7 @@ class Scene:
     actors: list[Actor] = field(default_factory=list)
     props: list[Prop] = field(default_factory=list)
     cameras: list[Camera] = field(default_factory=list)
+    emitters: list[Emitter] = field(default_factory=list)
     # The root's own clock range, which is what the shot runs on. A node window
     # may fall outside it -- `level_shot8` has one opening at tick 63 in a shot
     # that runs 295..372 -- and such a node simply never opens.
@@ -389,7 +580,8 @@ class Scene:
     def mesh_indices(self) -> set[int]:
         """Meshes a node owns: drawn only while one of their windows is open."""
         return ({a.mesh_index for a in self.actors}
-                | {p.mesh_index for p in self.props})
+                | {p.mesh_index for p in self.props}
+                | {e.mesh_index for e in self.emitters})
 
     def actors_at(self, tick: int) -> list[Actor]:
         return [a for a in self.actors if a.track.start <= tick <= a.track.end]
@@ -633,7 +825,7 @@ def read_scene(data: bytes, model, clips) -> Scene | None:
     """
     scene = Scene(window=root_span(data, 0))
     _read_root(data, model, clips, 0, 0, None, scene, set())
-    if scene.actors or scene.props:
+    if scene.actors or scene.props or scene.emitters:
         return scene
 
     # Root 0 empty: four arena models put their nodes in later roots that
@@ -644,7 +836,7 @@ def read_scene(data: bytes, model, clips) -> Scene | None:
     for index in range(1, min(max(count, 0), 64)):
         scene = Scene(window=root_span(data, index))
         _read_root(data, model, clips, index, 0, None, scene, set())
-        if scene.actors or scene.props:
+        if scene.actors or scene.props or scene.emitters:
             return scene
     return None
 
@@ -657,14 +849,55 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
 
     for node in spawn_order(data, index):
         kind = _i32(data, node + NODE_TYPE)
-        if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP,
-                        NODE_TYPE_SUBSCENE, NODE_TYPE_CAMERA):
+        if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP, NODE_TYPE_SUBSCENE,
+                        NODE_TYPE_CAMERA, NODE_TYPE_EMITTER):
             continue
         window_start = _i32(data, node + NODE_WINDOW_START)
         window_end = _i32(data, node + NODE_WINDOW_END)
         if not (0 <= window_start < window_end < MAX_TICK):
             continue
         command = _i32(data, node + NODE_COMMAND_ID)
+
+        if kind == NODE_TYPE_EMITTER:
+            ident = _i32(data, node + EMITTER_MESH_ID)
+            mesh_index = (ident & 0xFFF) - 1
+            if (ident & NAMESPACE_MASK) != MESH_NAMESPACE:
+                continue
+            if not 0 <= mesh_index < len(model.meshes):
+                continue
+            position = np.array(
+                [_i32(data, node + EMITTER_POSITION + 4 * i) for i in range(3)],
+                dtype=np.float64) * GTE_SCALE_SMALL
+            if parent is not None:
+                position = (parent.position + rotation_matrix(parent.rotation)
+                            @ (parent.scale * position))
+            scene.emitters.append(Emitter(
+                node=node,
+                start=window_start + offset,
+                end=window_end + offset,
+                position=position,
+                mesh_index=mesh_index,
+                budget=_i32(data, node + EMITTER_BUDGET),
+                per_tick=max(_i32(data, node + EMITTER_PER_TICK), 1),
+                lifetime=_i32(data, node + EMITTER_LIFETIME),
+                last_tick=_i32(data, node + EMITTER_LAST_TICK) + offset,
+                speed=(_i32(data, node + EMITTER_SPEED_MIN),
+                       _i32(data, node + EMITTER_SPEED_MAX)),
+                yaw=(_i32(data, node + EMITTER_YAW),
+                     _i32(data, node + EMITTER_YAW_SPREAD)),
+                pitch=(_i32(data, node + EMITTER_PITCH),
+                       _i32(data, node + EMITTER_PITCH_SPREAD)),
+                accel=np.array([_i32(data, node + o) for o in EMITTER_ACCEL],
+                               dtype=np.float64),
+                damp=np.array([_i32(data, node + o) for o in EMITTER_DAMP],
+                              dtype=np.float64) / DAMP_ONE,
+                spin=_i32(data, node + EMITTER_SPIN),
+                fade=(_i32(data, node + EMITTER_FADE_IN),
+                      _i32(data, node + EMITTER_FADE_OUT)),
+                grow=(_i32(data, node + EMITTER_GROW_END),
+                      _i32(data, node + EMITTER_SHRINK_START)),
+            ))
+            continue
 
         if kind == NODE_TYPE_CAMERA:
             keys = _read_camera_keys(data, node, offset, parent)

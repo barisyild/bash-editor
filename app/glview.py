@@ -33,7 +33,11 @@ uniform mat4 model;
 out vec3 v_normal;
 out vec3 v_color;
 out vec3 v_world;
-out vec2 v_uv;
+// Sampled at a covered point rather than the pixel centre. With
+// multisampling the centre of an edge pixel can lie in the next
+// triangle, and the coordinate extrapolated there reaches past the
+// tile -- which is the black last column of every atlas cell.
+centroid out vec2 v_uv;
 
 void main() {
     v_normal = mat3(model) * in_normal;
@@ -49,7 +53,7 @@ FRAGMENT_SHADER = """
 in vec3 v_normal;
 in vec3 v_color;
 in vec3 v_world;
-in vec2 v_uv;
+centroid in vec2 v_uv;
 
 uniform vec3 view_pos;
 uniform vec3 override_color;
@@ -57,6 +61,7 @@ uniform float use_override;
 uniform float unlit;
 uniform float shade;
 uniform float use_texture;
+uniform vec2 atlas_size;
 uniform sampler2D atlas;
 
 out vec4 frag;
@@ -64,7 +69,12 @@ out vec4 frag;
 void main() {
     vec3 base = mix(v_color, override_color, use_override);
     if (use_texture > 0.5) {
-        vec4 texel = texture(atlas, v_uv);
+        // v_uv arrives in atlas texels, and the console truncates the
+        // interpolated coordinate rather than rounding it. Flooring here is
+        // that truncation: without it the interpolation runs half a texel past
+        // the last one and drags a tile's black edge into every shared seam.
+        vec2 texel_uv = (floor(v_uv) + 0.5) / atlas_size;
+        vec4 texel = texture(atlas, texel_uv);
         if (texel.a < 0.5) discard;
         // PS1 modulation: a colour of 128 leaves the texel unchanged. A third of
         // the triangles sit above that, so clamping here would blow them out
@@ -284,6 +294,8 @@ class ModelView(QOpenGLWidget):
         self._scene_tick = 0
         self._stand_ins: set[int] = set()
         self._backdrops: set[int] = set()
+        self._sprays: list = []
+        self._spawn_rank: dict[int, int] = {}
         # Scenes that name a camera are filmed through it by default; the orbit
         # controls take over the moment this is switched off.
         self.use_shot_camera = True
@@ -335,6 +347,8 @@ class ModelView(QOpenGLWidget):
         self._scene_tick = 0
         self._stand_ins = set()
         self._backdrops = set()
+        self._sprays = []
+        self._spawn_rank = {}
         self._atlas = build_atlas(pack)
         self._atlas_dirty = True
         self._texture_tick = 0.0
@@ -403,6 +417,14 @@ class ModelView(QOpenGLWidget):
         self._scene_clips = list(clips or [])
         self._stand_ins = self._find_stand_ins(scene)
         self._backdrops = self._find_backdrops(scene, self._stand_ins)
+        # Where each mesh sits in the order the scene spawns its nodes,
+        # which is the order the ordering table takes them in.
+        self._spawn_rank = {}
+        if scene is not None:
+            for rank, holder in enumerate(
+                    list(scene.props) + list(scene.emitters)
+                    + list(scene.actors)):
+                self._spawn_rank.setdefault(holder.mesh_index, rank)
         if scene is not None:
             self._animation = None
             self._scene_tick = scene.start if tick is None else tick
@@ -825,9 +847,51 @@ class ModelView(QOpenGLWidget):
             tri_cursor += tri_count
             line_cursor += line_count
 
+        # An emitter is not one placement but a spray, so it gets its own run of
+        # the mesh repeated once per particle slot. The rows are rewritten every
+        # tick from the simulation; unused slots collapse to a point.
+        spray_chunks: list[np.ndarray] = []
+        self._sprays = []
+        cursor = tri_data.shape[0] + line_data.shape[0]
+        for emitter in (self._scene.emitters if self._scene else []):
+            if not 0 <= emitter.mesh_index < len(self._model.meshes):
+                continue
+            mesh = self._model.meshes[emitter.mesh_index]
+            triangles = mesh.indexed_triangles()
+            slots = max(min(emitter.budget, 256), 0)
+            if not triangles or not slots:
+                continue
+            groups: dict[int, list] = {}
+            for t in triangles:
+                groups.setdefault(_blend_group(self._model, mesh, t[3]), []).append(t)
+            ordered, spans, opaque = [], {}, 0
+            for group in sorted(groups):
+                start = 3 * len(ordered)
+                ordered.extend(groups[group])
+                if group:
+                    spans[group - 1] = (start, 3 * len(groups[group]))
+                else:
+                    opaque = 3 * len(groups[group])
+            idx = np.asarray([t[:3] for t in ordered], dtype=np.int32)
+            base = np.asarray(mesh.positions, dtype=np.float64)[idx].reshape(-1, 3)
+            colour_rows, uv_rows = self._shade(mesh, ordered)
+            stride = base.shape[0]
+            for _ in range(slots):
+                spray_chunks.append(np.hstack([
+                    np.zeros((stride, 3), dtype=np.float32),
+                    np.zeros((stride, 3), dtype=np.float32),
+                    colour_rows, uv_rows,
+                ]))
+            self._sprays.append((emitter, cursor, stride, slots,
+                                 (base * AXIS_FLIP).astype(np.float32),
+                                 opaque, spans))
+            cursor += stride * slots
+
+        spray_data = np.vstack(spray_chunks) if spray_chunks else empty
         self._vertex_data = np.ascontiguousarray(
-            np.vstack([tri_data, line_data]), dtype=np.float32
+            np.vstack([tri_data, line_data, spray_data]), dtype=np.float32
         )
+        self._pose_sprays()
         self._dirty = True
 
         bounds = self._model.bounds
@@ -1126,6 +1190,45 @@ class ModelView(QOpenGLWidget):
             GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
         self._texture_patches_pending = False
 
+    def _pose_sprays(self) -> None:
+        """Place every emitter's particles for the current tick.
+
+        Each particle is the emitter's mesh turned about the view axis by its
+        own spin and moved to its own position; a slot with no particle in it
+        collapses to a point and rasterises to nothing.
+        """
+        data = self._vertex_data
+        for emitter, first, stride, slots, base, _opaque, _spans in self._sprays:
+            live = emitter.particles(self._scene_tick)
+            for slot in range(slots):
+                rows = slice(first + slot * stride, first + (slot + 1) * stride)
+                if slot >= len(live):
+                    data[rows, 0:3] = 0.0
+                    continue
+                particle = live[slot]
+                angle = float(particle.spin)
+                cos, sin = math.cos(angle), math.sin(angle)
+                turn = np.array([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]],
+                                dtype=np.float32)
+                placed = (base * np.float32(particle.scale)) @ turn.T + (
+                    np.asarray(particle.position, dtype=np.float32) * AXIS_FLIP)
+                data[rows, 0:3] = placed
+                data[rows, 3:6] = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        if self._sprays:
+            self._dirty = True
+
+    def _spray_draws(self) -> list[MeshDraw]:
+        """One draw record per emitter slot, sharing the mesh's blend groups."""
+        out = []
+        for emitter, first, stride, slots, _base, opaque, spans in self._sprays:
+            if emitter.mesh_index in self._hidden:
+                continue
+            for slot in range(slots):
+                out.append(MeshDraw(emitter.mesh_index, first + slot * stride,
+                                    stride, 0, 0, opaque_count=opaque,
+                                    blend_spans=spans))
+        return out
+
     def _draw_solid(self, draws: list[MeshDraw]) -> None:
         """The opaque run of each mesh, with blending off."""
         GL.glDisable(GL.GL_BLEND)
@@ -1134,23 +1237,35 @@ class ModelView(QOpenGLWidget):
                 GL.glDrawArrays(GL.GL_TRIANGLES, draw.first, draw.opaque_count)
 
     def _draw_blended(self, draws: list[MeshDraw]) -> None:
-        """The blended runs, one GL pass per ABR mode the console asks for."""
+        """The blended runs, in the order the console's ordering table gives.
+
+        Not grouped by mode: `AddPrim` pushes onto a list head, so primitives
+        that land in the same slot come back out in reverse of the order they
+        went in, and the scene inserts them in the order it spawns its nodes.
+        That ordering is what makes a pair of coplanar cards work.
+        `intro_eurocom` draws its Cerny Games logo twice at the same depth --
+        once subtractive at full colour to punch the sky black, then additive at
+        neutral to fill the hole -- and either mode alone, or the two the other
+        way round, leaves a black rectangle where the logo should be.
+        """
         blended = [d for d in draws if d.blend_spans]
         if not blended:
             return
+        blended.sort(key=lambda d: -self._spawn_rank.get(d.mesh_index, 0))
         GL.glEnable(GL.GL_BLEND)
-        for abr in sorted({mode for d in blended for mode in d.blend_spans}):
-            source, dest, weight, subtract = _ABR_BLEND[abr]
-            GL.glBlendColor(weight, weight, weight, weight)
-            GL.glBlendEquation(
-                GL.GL_FUNC_REVERSE_SUBTRACT if subtract else GL.GL_FUNC_ADD
-            )
-            GL.glBlendFunc(source, dest)
-            for draw in blended:
-                span = draw.blend_spans.get(abr)
-                if span:
-                    GL.glDrawArrays(GL.GL_TRIANGLES,
-                                    draw.first + span[0], span[1])
+        current = None
+        for draw in blended:
+            for abr in sorted(draw.blend_spans):
+                if abr != current:
+                    source, dest, weight, subtract = _ABR_BLEND[abr]
+                    GL.glBlendColor(weight, weight, weight, weight)
+                    GL.glBlendEquation(
+                        GL.GL_FUNC_REVERSE_SUBTRACT if subtract else GL.GL_FUNC_ADD
+                    )
+                    GL.glBlendFunc(source, dest)
+                    current = abr
+                offset, count = draw.blend_spans[abr]
+                GL.glDrawArrays(GL.GL_TRIANGLES, draw.first + offset, count)
         GL.glBlendEquation(GL.GL_FUNC_ADD)
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
         GL.glDisable(GL.GL_BLEND)
@@ -1200,6 +1315,10 @@ class ModelView(QOpenGLWidget):
         self._program.setUniformValue("override_color", QVector3D(0.82, 0.80, 0.76))
         self._program.setUniformValue1f("use_override", 0.0)
         self._program.setUniformValue1i("atlas", 0)
+        width, height = self._atlas.size
+        self._program.setUniformValue(
+            "atlas_size", QVector3D(float(width), float(height), 0.0).toVector2D()
+        )
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._atlas_texture)
 
@@ -1241,6 +1360,7 @@ class ModelView(QOpenGLWidget):
 
             stage = [d for d in self._draws
                      if d.visible and d.mesh_index not in self._backdrops]
+            stage = stage + self._spray_draws()
             self._draw_solid(stage)
 
             # The console's blended triangles, after every opaque surface and

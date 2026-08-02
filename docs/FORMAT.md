@@ -1855,6 +1855,56 @@ the lens, so they have to be centred on the eye and drawn without depth, at the 
 ordering table. The code that raises them is **still unfound** — no node owns them — so this
 part is inference from the geometry, unlike everything above it.
 
+### 9.11.7 Node type 1 is a particle emitter — **certain**
+
+It does not place a mesh, it sprays them. The constructor takes a block of `node+0x24`
+40-byte records and hands each new particle the node's mesh id; the draw walks the live ones;
+the per-tick handler integrates each and retires it:
+
+```
+800216D4  lw   $v0, 0x10($s2)   ; s2 = node+0x14; +0x10 is the whole budget
+800216E4  jal  0x800115d8       ;   and the record block is that many x 40
+800216A4  lhu  $v0, 0x3c($s3)   ; node+0x3C, the mesh every particle draws
+800216B0  sh   $v0, 0x74($v1)   ;   -> the particle's own entity+0x7C
+80021354  lw   $s1, ($s0)       ; the draw walks a linked list at entity+0x0C,
+80021360  lw   $v0, 0x54($s0)   ;   each with its own draw at +0x54
+8001F9A8  addu $v0, $v0, $v1    ; each tick, position += velocity >> 8
+8001FA08  addu $v0, $v0, $v1    ;   velocity += the acceleration
+8001FA68  mult $v0, $v1         ;   then damped, 256 meaning no damping
+8001FAEC  slt  $v1, $v1, $a0    ; and once the age passes the lifetime
+8001FB04  and  $v0, $v0, $v1    ;   bit 15 goes out: the particle is dead
+```
+
+A new particle is drawn from the node through the generator at 0x80015590, four times: a
+speed between two bounds, a starting spin, then a yaw and a pitch each around a centre. Speed
+times the sine table at 0x80068BD4 gives the velocity (0x8001F738, `>> 4`).
+
+| Offset | Meaning |
+| --- | --- |
+| +0x18..0x20 | where the emitter stands |
+| +0x24 | the whole spray, and the size of the record block |
+| +0x28 | how many leave each tick |
+| +0x2C | lifetime, in ticks |
+| +0x30 | the last tick that spawns |
+| +0x34, +0x38 | speed bounds |
+| +0x3C | the mesh, in the 0x2000 namespace |
+| +0x44, +0x48 | yaw centre and spread, 4096 to the turn |
+| +0x4C, +0x50 | pitch centre and spread |
+| +0x54, +0x5C, +0x64 | acceleration, skipped at zero |
+| +0x58, +0x60, +0x68 | damping, skipped at 256 |
+| +0x6C, +0x70 | a ramp into `particle+0x76` |
+| +0x74, +0x78 | a ramp into the particle's **scale**, three words at 0x8001FC5C |
+| +0x7C | spin per tick |
+
+All 76 emitters in the game name a mesh in range. `intro_eurocom` has eight, one per letter of
+the logo, each opening six ticks after its letter lands: 16 particles at 4 a tick, living 24
+ticks, 360° of spread, an acceleration of 7 along the console's down axis, growing over 4
+ticks and shrinking away from tick 12. That is the burst of stars that falls from each letter.
+
+**The spray cannot be reproduced frame for frame.** The generator's state lives at 0x800517B8,
+which is not in the file — it is whatever the console had reached by the time the shot ran. A
+reader can match the distribution and nothing finer.
+
 | Offset | Type | Meaning |
 | --- | --- | --- |
 | +0x00 | u32 | start tick |
