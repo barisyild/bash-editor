@@ -2479,6 +2479,28 @@ Four numbers, and the shot is reproducible. **confirmed** (the type table, the h
 id resolution, the scale track, the visibility bit, the camera struct and its rebuild, and
 the negatives as scoped above) / **?unknown?** (the cutscene's camera values).
 
+### 9.11.9 There are six node types, and the table says so — **certain**
+
+An earlier revision read the block at 0x80058B00 as a list of eighteen handlers and inferred
+eighteen kinds of track. It is not a list. It is a table of **16-byte entries indexed by the
+node's own type**, which is what `spawn_order` shows the spawner doing — `sll $v0, $v0, 4`
+before `jalr`. Read that way it holds six rows and two empty ones:
+
+| Type | +0x00 | +0x04 | +0x08 | +0x0C | What it is |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0x80021A1C | 0x8001EAA4 | 0x80021990 | — | prop (§9.11.5) |
+| 1 | 0x80021604 | 0x8001F828 | 0x80021330 | 0x8002141C | particle emitter (§9.11.7) |
+| 2 | 0x80021940 | 0x8001EDFC | — | — | camera (§9.11.6) |
+| 3 | 0x80021798 | 0x8001F0D4 | 0x80021770 | — | actor (§9.11.5) |
+| 4 | 0x80021708 | 0x8001F4F8 | — | — | names another node; see §14 |
+| 5 | 0x8002128C | 0x8001FCDC | 0x80021238 | 0x8002120C | sub-scene trigger |
+| 6, 7 | 0 | 0 | 0 | 0 | none |
+
+The +0x04 column is the per-tick handler this document already decodes for three of them;
++0x00 is the constructor the spawner calls. **The corpus agrees that six is all there is**:
+walking every root of every model finds 2217 nodes and not one whose type field falls outside
+0..5.
+
 ---
 
 # 10. TEX packs
@@ -2968,6 +2990,7 @@ produce subtly broken output.
 | "`model+0x28` is the bind pose." | **Refuted** | It is a shared *position pool* that animation keyframes index, and only 208 of 1037 clips use it at all. Decoding frame 0 of every clip reproduces the mesh's static positions in **39/1037** — there is no bind pose anywhere in an MDL. See §9.5, §9.9. |
 | "The animation blend rounds to the nearest unit." | **Refuted** | GTE `INTPL` with `sf=1` shifts arithmetically, so the blend floors: `A + ((B−A)*w >> 12)`. Flooring differs from round-to-nearest on **10,071,343 of 38,535,099** interpolated coordinates (26 %). See §9.6. |
 | "The animated pose replaces the mesh's vertex pool." | **Refuted** | The decoders fill a separate 0x2038-byte buffer at 0x80056AC8 and the rasteriser takes the vertex array as an argument (0x80019D9C vs 0x80019D8C). `mesh+0x00` is a primitive-cache slot and is never written by the animation path. See §9.6. |
+| "The block at 0x80058B00 is eighteen track handlers, so the graph holds eighteen track types." | **Refuted** | It is a table of **16-byte entries indexed by node type**, which is how the spawner reads it (`sll $v0, $v0, 4` before `jalr`). Six rows are live and two are null, and walking every root of every model finds 2217 nodes with no type outside 0..5. The "eighteen handlers" were the four columns of six rows. See §9.11.9. |
 | "A frame record is 16 bytes starting at the blob base." | **Refuted** | Record *f* is at `blob + 4 + 16*f`; `blob+0x00` is the blob's pool pointer. Under the shifted reading only 1,925 of 49,167 records validate and no clip validates completely. See §9.3. |
 | "The texture descriptors hang off the render context at 0x80056998." | **Refuted** | They hang off a second context at **0x80055684**, which only three sites in the image reference and which `0x8002C774` is what hands to the accessors of §6.2. Nothing anywhere on the disc — the EXE or any of the 15 code overlays — stores to +0x18 or +0x1C of 0x80056998. Aiming three exhaustive scans at the wrong structure is why §14 concluded for two revisions that the loader was not in `SCUS_945.70`; it is, at 0x8002926C. See §10.4. |
 | "The `mesh+0x2C` volume is a standing cylinder and field 3 is its radius." | **Refuted** | Field 5 is a second horizontal extent — non-zero in 349 of 1717 records and **different from field 3 in 25** of them, which a circle cannot be. Field 3 is half the mesh's width (median ratio 1.000) and not half its diagonal (0.707), so it is an inscribed half-extent rather than a wrapping radius; and the 324 crate records describe exactly their mesh's own 256-unit cube. See §8.4. |
@@ -3119,12 +3142,15 @@ it, not that the naming is right.
   and what the rest of its 0x28 bytes hold is unread.
 * **Node type 4.** 44 of the corpus's 2217 nodes, in 21 models, and the only type the
   spawner constructs that nothing here decodes — the other 2173 are props, actors, cameras,
-  emitters and sub-scenes.
-* **The rest of the track dispatch table** at 0x80058B00. Eighteen handlers walk the same
-  object graph; three are decoded (0x8001F0D4 actors, 0x8001EAA4 props, 0x8001EDFC partly).
-  The others — 0x80021238, 0x8002128C, 0x80021330, 0x8002141C, 0x80021604, 0x80021708,
-  0x80021770, 0x80021798, 0x80021940, 0x80021990, 0x80021A1C, 0x8001F4F8, 0x8001F828,
-  0x8001FCDC — are unread, and each implies a track type the object graph can hold.
+  emitters and sub-scenes. Its handler at 0x8001F4F8 resolves the root array at `T(0x4C)`,
+  indexes a root by one field of the node and that root's child array by another, so it
+  **names another node** the way type 5 names another root. What it then does with it is
+  unread.
+* ~~**The rest of the track dispatch table**~~ — the earlier reading of it was wrong and is
+  corrected in §9.11.9: the table holds **16 bytes per node type**, not one handler each, so
+  its "eighteen handlers" are the four columns of six types rather than eighteen kinds of
+  track. Types 6 and 7 are null, and the corpus agrees — 2217 nodes and not one outside
+  0..5. What is unread is three columns of the six rows, not eighteen behaviours.
 * **A cutscene's camera path.** §9.11 settles that it is not in the MDL; where the overlay
   keeps it is not traced. `menu.bin` never writes the camera's position field directly, so
   the cutscene path either copies a block in (as its own screens do, from 0x8005A9A0) or
