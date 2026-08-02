@@ -2982,6 +2982,24 @@ produce subtly broken output.
 
 Stated precisely, with the measurement that bounds each one.
 
+**How much is left, measured.** `tools/coverage.py` marks every byte a structure in this
+document accounts for and prints what nothing claims. Over the 31.8 MB of MDL in the archive
+it reaches **98.77 %**, and the 392 KB it does not is:
+
+| Region | Unclaimed | Spans |
+| --- | --- | --- |
+| the object graph, `T(0x1C)+12n .. T(0x4C)` | 302,228 | 352 |
+| `T(0x18) .. T(0x44)` | 70,508 | 57 |
+| `T(0x4C) .. T(0x18)` | 11,792 | 18 |
+| before the object table | 7,520 | 1 (`cutscene/gamelogo_text.mdl`) |
+
+The graph figure is the one that matters, and it is not unread node *types*: walking every
+root the way the spawner does finds 2217 nodes and only **44** of them — all type 4, in 21
+models — have a constructor this document has not decoded. What is left over is the space
+between nodes the walk reaches, which is either fields past a node's key list or nodes no
+root names. Run the tool after any change here; a byte being claimed says the format names
+it, not that the naming is right.
+
 **MDL file header**
 
 * **0x00** — the stamp encodes *something* (the one file with 0x09160026 is also the one file
@@ -3099,6 +3117,9 @@ Stated precisely, with the measurement that bounds each one.
 * **The type-2 node** (keys at node+0x1C, stride 0x28, handler 0x8001EDFC, id namespace
   0x1000). Twelve in the corpus. It writes a position like the others, but what it drives
   and what the rest of its 0x28 bytes hold is unread.
+* **Node type 4.** 44 of the corpus's 2217 nodes, in 21 models, and the only type the
+  spawner constructs that nothing here decodes — the other 2173 are props, actors, cameras,
+  emitters and sub-scenes.
 * **The rest of the track dispatch table** at 0x80058B00. Eighteen handlers walk the same
   object graph; three are decoded (0x8001F0D4 actors, 0x8001EAA4 props, 0x8001EDFC partly).
   The others — 0x80021238, 0x8002128C, 0x80021330, 0x8002141C, 0x80021604, 0x80021708,
