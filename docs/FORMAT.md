@@ -17,6 +17,15 @@ Every field row carries one of three confidence markers:
 | *likely* | Consistent with everything measured, and the only reading that fits, but with no code site proving it or with a corpus that is too small to be decisive. |
 | ?unknown? | Read but not understood. The distribution is given; the meaning is not. |
 
+**"No reader found" never means "nothing reads it."** A scan proves where a shape is absent,
+not that a routine does not exist, and this document has been wrong that way twice in one
+sitting. It said no `GetClut` arithmetic existed anywhere on the disc — three exhaustive scans
+agreed — and `0x800364FC` is `GetClut`, called rather than inlined (§10.4). It said nothing
+read the sub-object's +0x10 block, and 0x80024B70 does (§8.5). So a negative here is always
+phrased as a failed search, with the search stated, so the next reader can see what was not
+looked for. A positive claim needs assembly; a negative claim needs its own limits written
+down beside it.
+
 ### Corpus
 
 | Quantity | Count |
@@ -213,7 +222,7 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x00 | u32 | `stamp` | 0x0C160029 (399/400) or 0x09160026 (1/400, `models/arena/boss_oxide/chaselevel.mdl`). Neither byte pattern occurs anywhere in the EXE and no code site loads model+0x00. | *likely* (it is a stamp; what it encodes is ?unknown?) |
 | 0x04 | i32 | `count_08` | Always 0 (400/400). Repeated as the first i32 at `T(0x08)`. | **confirmed** |
 | 0x08 | i32 ptr | `ptr_pool_alias` | `T(0x08) == T(0x10)` in 400/400; the first 16 bytes there are zero in 400/400. **No EXE site resolves offset 0x08.** Dead as a pointer — but live as a **layout boundary**: across all 373 models with geometry, no mesh block, colour table or UV table lies past `T(0x08)`, every animation blob starts at or after it (223/223 animated models, gap ≥ 172 bytes), and the file ends exactly 4 bytes past the last blob (223/223). Empirically it is a load boundary too: a rebuilt model whose new geometry sat past it crashed the game, and moving the geometry inside it — blobs lifted off first, the field moved to the new end — was the change that made the same content boot. A writer must keep the invariant even though the reader is unidentified. | **confirmed** (invariant) / ?unknown? (reader) |
-| 0x0C | i32 | `subfile_slots` | Range 0..14. `≥ i32@0x40` in 400/400, equal in 328 of the 373 models that have meshes. No EXE site reads it. Reading it as "allocated slots vs used slots" is a guess. | ?unknown? |
+| 0x0C | i32 | `subfile_slots` | Range 0..14. `≥ i32@0x40` in 400/400, equal in 328 of the 373 models that have meshes. No EXE site found that reads it. Reading it as "allocated slots vs used slots" is a guess. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_pool` | The one field through which the game reaches this block. The game does **not** use the plain self-relative form here — see the note below. | **confirmed** |
 | 0x14 | i32 | `count_18` | 0 in 327/400, 1 in 73/400. Repeated at `[T(0x18)]` in 400/400. Also a layout switch: `T(0x2C) == T(0x3C)` **iff** this is 0, 400/400. | **confirmed** |
 | 0x18 | i32 ptr | `ptr_subobjects` | `[i32 count == i32@0x14]` then `count` self-relative i32 pointers, entry *i* at `T(0x18)+4+4*i`. All 73 entries in the corpus resolve inside the file, and each reaches the **placement list** that stands the level's set up — 2689 records naming an object and the transform to draw it under. See §8.5. | **confirmed** |
@@ -222,15 +231,15 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x24 | i32 ptr | `ptr_uvs` | UV table: 2-byte `(u, v)` records. See §7.2. | **confirmed** |
 | 0x28 | i32 ptr | `ptr_vectors` | Shared 6-byte `(i16 x, y, z)` position pool; the fallback source for animation poses (§9.5). Degenerate (`T(0x28) == T(0x08)`, zero length) in 360/400. See §7.3. | **confirmed** |
 | 0x2C | i32 ptr | `ptr_pool_hi` | `T(0x2C) == T(0x08) + 8` in 400/400. This is the address the game actually computes from field 0x10. **No EXE site resolves the file header's 0x2C** (the single 0x2C site, 0x80015700, is a *mesh* header). The span it opens, up to `T(0x3C)`, holds the object meshes of §8.3 — empty in the 327 models whose `i32@0x14` is 0. | **confirmed** |
-| 0x30 | i32 | — | 0 in 400/400. Never read. | **confirmed** (zero) / ?unknown? (purpose) |
-| 0x34 | i32 | — | 0 in 400/400. Never read. | **confirmed** (zero) / ?unknown? (purpose) |
+| 0x30 | i32 | — | 0 in 400/400. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
+| 0x34 | i32 | — | 0 in 400/400. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x38 | i32 | `count_3C` | 0 in 393/400. The 7 non-zero are `warp_room1..5/level.mdl` and `demo_hub1..2/level.mdl` (5, 6, 8, 7, 6, 3, 3). Repeated at `[T(0x3C)]` 400/400. The block stores **count+1** records. | **confirmed** |
 | 0x3C | i32 ptr | `ptr_chunks` | `[i32 count]` then `count+1` records of 16 bytes. See §8.1. | **confirmed** |
 | 0x40 | i32 | `count_44` | Number of 24-byte clip records. Range 0..14; 0 in 148 of the 373 models with meshes. | **confirmed** |
 | 0x44 | i32 ptr | `ptr_subfiles` | Appended clip directory, 24-byte records: the **animation** table. See §8.2 and §9. | **confirmed** |
 | 0x48 | i32 | `count_4C` | Number of i32 entries in the 0x4C array. Range 0..40. | **confirmed** |
 | 0x4C | i32 ptr | `ptr_ptr_array` | `count_4C` self-relative i32 pointers, stride 4. All 688 corpus entries resolve inside the file and land inside the 0x1C object table at 0, 4 or 8 mod 12 (401 / 163 / 124). | **confirmed** |
-| 0x50 | i32, **base-relative** | `resident_size` | `base + i32@0x50` is the end of the 0x44 directory in 399/400 and ≤ file size in 400/400. Equals the file size exactly for the 141 models with no sub-files; ≤ the first sub-file's start in 225/225. **Not** self-relative. No EXE site reads it. | *likely* |
+| 0x50 | i32, **base-relative** | `resident_size` | `base + i32@0x50` is the end of the 0x44 directory in 399/400 and ≤ file size in 400/400. Equals the file size exactly for the 141 models with no sub-files; ≤ the first sub-file's start in 225/225. **Not** self-relative. No EXE site found that reads it. | *likely* |
 | 0x54 | i32 | `mesh_count` | Number of 0x34-byte mesh headers that follow at 0x58. 0 in 27/400 (legitimately). | **confirmed** |
 
 > **The 0x10 anomaly.** The game does not apply the usual self-relative rule to file-header
@@ -317,7 +326,7 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x00 | u32 | `runtime_slot` | **Not padding.** Zero in the file (5990/5990) because the loader fills it; the mesh-iteration loop dereferences it. | **confirmed** |
 | 0x04 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x08 | i16 | `triangle_count` | Number of triangles. Equals the sum of the strip list's high bytes in **5990/5990**. Not read by any render pass — the runtime derives the count from the strip list. Redundant but exact. | **confirmed** |
-| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader, traced rather than assumed**: all eight halfword loads at this offset in the model region resolve to a stack local, a projected vertex or a GPU quad's corners, never a mesh header (§14). | **confirmed** (never read) / ?unknown? (meaning) |
+| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader found, and the search is stated**: all eight halfword loads at this offset inside 0x80014000–0x8001F000 were traced to their base register and each is a stack local, a projected vertex or a GPU quad's corners, not a mesh header (§14). Outside that range, and through a pointer, nothing was checked. | **confirmed** (the trace) / ?unknown? (meaning) |
 | 0x0C | i16 | — | Non-zero in 344/5990, in small families: 100 (138), 10 (68), 5 (51), 4 (29), 101–103 (22), 20–33 (16), others (20). **No reader found in the executable or in any of the 14 mode overlays.** The 138 meshes carrying 100 are exactly the backdrop domes each cutscene raises without a node (§9.11.6), and of the 342 that a scene could have claimed, **none is owned by a scene node** — correlation over the corpus, not a decoded meaning. | ?unknown? |
 | 0x0E | i16 | — | Non-zero in 162/5990, and only where 0x0C is. Where 0x0C is 100 it is 0 (72) or 1 (65), which is the order the two domes stack — opaque sky, then the additive tint over it. Same status: correlation, no reader found. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_bounds` | 0x14-byte bounds block; the vertex pool starts at `T(0x10) + 0x14`. | **confirmed** |
@@ -1134,7 +1143,7 @@ The resolve, and the four fields of the sub-object the binder reads:
 | --- | --- | --- | --- |
 | +0x00, +0x04, +0x08 | i32 | 0x2000 in 73/73. Not read on this path. | **confirmed** (constant) / ?unknown? (purpose) |
 | +0x0C | i32 ptr | Target is the **end of the record array** in 73/73 — `records + 160*count` to the byte — and is itself `[i32 count]` then `count` self-relative i32 pointers. See below. | **confirmed** |
-| +0x10 | i32 ptr | A second block after that one. | **confirmed** (pointer) / ?unknown? (contents) |
+| +0x10 | i32 ptr | A second block: `[i32 count]` then `count` records of 16 bytes. See below. | **confirmed** |
 | +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart, near the file's end. | ?unknown? |
 | +0x1C | i32 | **Record count.** Read raw into instance +0x18 and used as the loop bound. | **confirmed** |
 | +0x20 | i32 ptr | **The record array**, 0x14 in 73/73 — it always starts at sub-object +0x34. | **confirmed** |
@@ -1188,6 +1197,36 @@ the piece.
 | +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
 | +0x9C, +0x9E | u16 | Copied to two different runtime slots. | ?unknown? |
+
+### The +0x10 block: a count and 16-byte records
+
+Reached as the instance's +0x30, and read at 0x80024B70. An earlier revision said nothing
+read it back; that was a search that had not found one, and the search was too narrow.
+
+```
+80024B70  lw    $v0, 0x30($v1)     ; v1 = the instance -> the block
+80024B78  lw    $v0, ($v0)         ; its first word is a COUNT
+80024BB4  jal   0x80011654         ; allocate...
+80024BB8  sll   $a0, $a0, 2        ;   (count*7) << 2 = 28 bytes each
+80024C20  addiu $a2, $t0, 0x14     ; t1 starts at 4, so the array is block+4
+80024C40  lw    $v0, 0xc($a1)      ; record+0x0C
+80024C48  and   $v0, $v0, -4       ;   masked to a multiple of four
+80024C50  addu  $a0, $a1, $v0      ;   self-relative from +0x0C
+80024C60  andi  $v0, $v0, 0x4000   ; the target's +0x02, bit 14, gates a copy
+80024C7C  sll   $v0, $v0, 3        ;   into 24-byte slots indexed by its +0x04
+80024DBC  addiu $t1, $t1, 0x10     ; the file record is 16 bytes
+80024DC4  addiu $a2, $a2, 0x1c     ;   the runtime one 28
+```
+
+The corpus agrees without exception. The count is 1..27 in 73/73, the array always fits, and
+of the **473 records in the archive every one** has a `+0x0C` that resolves inside its own
+block — none has the low two bits set that the mask would discard. 339 of the 473 targets
+carry the 0x4000 the loop tests for.
+
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
+| +0x00 | i32 | record count | **confirmed** |
+| +0x04.. | 16 bytes × count | records; +0x00..+0x08 is a three-word payload copied out whole, +0x0C a self-relative pointer into the same block | **confirmed** (shape) / ?unknown? (what the payload is) |
 
 ### The block after the records is a searchable list
 
@@ -1558,7 +1597,7 @@ key** — the timeline is pre-baked (§9.7).
 | +0x00 | i32 ptr | `key_a` | Self-relative pointer to a keyframe. Never 0. | **confirmed** |
 | +0x04 | i32 ptr | `key_b` | Second keyframe, or 0 when the frame sits exactly on `key_a`. | **confirmed** |
 | +0x08 | i32 | `weight` | Blend weight, `0x1000` = 1.0, loaded into GTE IR0. 0 exactly when `key_b` is 0 (49,167/49,167 records agree both ways). Observed range 0 and 0x1D..0xFE2 — never 0x1000. | **confirmed** |
-| +0x0C | i32 ptr | `aux` | Self-relative pointer to an auxiliary block, or 0. Non-zero in 5354 of 49,167 records. The draw path never reads it (§9.8). | **confirmed** (that it is a pointer) / ?unknown? (contents) |
+| +0x0C | i32 ptr | `aux` | Self-relative pointer to an auxiliary block, or 0. Non-zero in 5354 of 49,167 records. No read of it was found on the draw path (§9.8). | **confirmed** (that it is a pointer) / ?unknown? (contents) |
 
 ```
 ; 0x80019B1C — the animation branch of the id dispatcher (id namespaces 0x1000 / 0x4000)
@@ -1877,8 +1916,8 @@ That reproduces the gap to the next block (or to the first keyframe) in **4734/4
 Observed `(n0, n1)`: (1,0) ×2837, (3,0) ×682, (0,1) ×349, (2,0) ×192, (4,1) ×105, (52,0) ×104,
 (14,0) ×68, (1,1) ×59.
 
-**The draw path never reads +0x0C.** The only reader in the image is the 0x4000 id namespace,
-which hands the block to script code:
+**No read of +0x0C was found on the draw path.** The only reader found in the image is the
+0x4000 id namespace, which hands the block to script code:
 
 ```
 800156C8  jal   0x80015a78          ; blob + 4 + 16*(id & 0x7F)
@@ -2614,13 +2653,31 @@ Records run back to back from `0x0C + u32@0x0C`, each immediately followed by it
 | +0x02 | i16 | `height` | Rows. | **confirmed** |
 | +0x04 | u8 | — | 0 in 15,160/15,160. | **confirmed** (zero) / ?unknown? (purpose) |
 | +0x05 | u8 | — | 0 in 13,332/15,160; otherwise 1..5 mostly. | ?unknown? |
-| +0x06 | u8 | `used_width` | **≤ `vram_width * 2` (the row's byte count) in 15,160/15,160**, with equality in 11,890. | **confirmed** (the bound) / *likely* (a used-area width) |
-| +0x07 | u8 | `used_height` | **≤ `height` in 15,160/15,160**, with equality in 10,186. | **confirmed** (the bound) / *likely* (a used-area height) |
+| +0x06 | u8 | `used_width` | **≤ `vram_width * 2` (the row's byte count) in 15,160/15,160**, with equality in 11,890. No read of it found — see below for the search. | **confirmed** (the bound) / *likely* (a used-area width) |
+| +0x07 | u8 | `used_height` | **≤ `height` in 15,160/15,160**, with equality in 10,186. No read of it found — see below for the search. | **confirmed** (the bound) / *likely* (a used-area height) |
 | +0x08 | u32 | — | **0 in 15,160/15,160**. `0x80029450` copies it into `descriptor+0x0C`, which nothing then reads — the page lives at descriptor+0x24 and is allocated, not stored (§10.4). | **confirmed** (where it goes) / ?unknown? (what it would mean) |
 | +0x0C | i16 | `palette_field` | Bit 0 = bit depth (0 → 4bpp, 1 → 8bpp; 14,885 / 275). Bits 1–15 = palette index. The value `0x7FFF` means "no palette of my own" — the swatch texture, 355 of 15,160, and `0x80028EE8` compares against exactly that constant before it would look one up. | **confirmed** |
 | +0x0E | i16 | `variants` | 0 (14,985) or 3 (175). **Bit 1 gates a sibling lookup**: `0x80028E24` tests it and, when set, indexes a descriptor `56*n` further on (§10.4). Set only in warp rooms (2 apiece) and the crate object packs (7). | **confirmed** (the gate) / ?unknown? (what the variants are) |
 | +0x10 | u32 | `variant_count` | The bound that lookup compares the selector at `0x8005A640` against. Where +0x0E bit 1 is set it is 2 (134) or 7 (41), and the run of that many descriptors fits inside the pack in **175/175**. Where the flag is clear it is loaded and never used, which is why it takes 19 unrelated values. | **confirmed** (the bound) / ?unknown? (the selector) |
 | +0x14 | u8[] | `pixels` | `vram_width * height * 2` bytes. 4bpp packs two pixels per byte, **low nibble first** (leftmost). | **confirmed** |
+
+**No read of +0x04..+0x07 was found, and this time the search is enumerable rather than
+argued.** The one routine known to walk these records is the descriptor builder of §10.4,
+whose `$s0` strides by `0x14 + 2*w*h`; after it runs nothing else is known to hold a record
+pointer, because the descriptor carries the *pixel* address at its +0x30 instead. Listing
+every load through that walker inside the loop at 0x80029320..0x8002947C gives nineteen
+instructions and six distinct offsets:
+
+```
+80029338 lhu +0x0C   80029348 lw  +0x0C   8002935C lhu +0x0E   80029368 lw  +0x10
+80029374 lhu +0x02   80029390 lhu +0x00   800293C4 lbu +0x00   80029418 lbu +0x02
+80029444 lw  +0x08   ... and ten more, all at +0x00, +0x02, +0x08, +0x0C, +0x0E or +0x10
+```
+
+Not one is at +0x04, +0x05, +0x06 or +0x07. Their bounds against the record's own dimensions
+still hold over the corpus, so the "used sub-rectangle" reading remains the only one that
+fits the numbers. What is settled is that this loop does not consult them; a routine holding
+a record pointer some other way would not appear in the listing above.
 
 Walking `palette_count` palettes then `texture_count` records does **not** land exactly on the
 file size. Where `ptr_animation` is set the residual is the animation block below; where it is
@@ -3111,9 +3168,10 @@ are not only undocumented format; they are also where a reader is quietly skippi
   reader yet, and neither does the key space: 1 is universal, but 203, 204, 101..103,
   111..112 and the rest are unexplained, and only keys 1 and 9 are looked up in the code read
   so far.
-* **The block at sub-object +0x10.** Reaches the instance as +0x30 and no site reads it back.
-  It runs from the end of the +0x0C list to `T(0x14)`'s target, 180 to 780 bytes, always a
-  multiple of 4.
+* ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
+  many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
+  in the archive resolve their +0x0C inside their own block. What the three-word payload
+  means is still open.
 * **What draws the 96 objects no placement record names**, in 13 of the 73 models — 16 in
   each `balls_crash` arena, 6 to 9 in each warp room. Not the scene nodes: over the whole
   corpus no mesh is both named by a node and named by a record (122 have a node, 1861 have a
@@ -3176,10 +3234,12 @@ are not only undocumented format; they are also where a reader is quietly skippi
   identical packs. It is no longer unread, though: `0x8002A62C` carries it into the texture
   context at +0x24 (§10.4). What reads it there is the open half.
 * **Header 0x18** — 0 in 314/400; the 86 non-zero values match no landmark tested.
-* **Record +0x04..+0x07** — 321 distinct patterns. +0x04 is zero in 15,160/15,160 and +0x05 in
-  13,332. The other two are bounded by the record's own dimensions — `+0x06 <= vram_width*2`
-  and `+0x07 <= height`, both 15,160/15,160, with equality in 11,890 and 10,186 — which reads
-  as the used sub-rectangle of a padded block, but no code site was found that consumes them.
+* **Record +0x04..+0x07** — what they *mean* is open; that nothing reads them is now closed.
+  Only the builder of §10.4 walks these records, and every load through its walker is
+  enumerated in §10.3: nineteen instructions at six offsets, none of them these four. Their
+  bounds against the record's own dimensions still hold in 15,160/15,160, so "the used
+  sub-rectangle of a padded block" remains the only reading that fits — it is simply not one
+  the shipped game acts on.
 * ~~**Record +0x0E** and **+0x10**~~ — **closed** as far as the code goes, see §10.3 and
   §10.4: +0x0E bit 1 gates a sibling lookup and +0x10 bounds it. What the variants *are* is
   still open, and so is the selector that picks one.

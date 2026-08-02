@@ -107,8 +107,15 @@ def cover(data: bytes, model, clips) -> tuple[bytearray, Counter]:
             entry_at = listed + 4 + 4 * k
             claim(entry_at + i32(data, entry_at),
                   entry_at + i32(data, entry_at) + 104, "the +0x0C list entries")
-        claim(sub + 0x10 + i32(data, sub + 0x10),
-              sub + 0x14 + i32(data, sub + 0x14), "the +0x10 block")
+        # The +0x10 block (§8.5): a count, then 16-byte records, then the
+        # structures their +0x0C points at -- all inside the block's own span.
+        block = sub + 0x10 + i32(data, sub + 0x10)
+        claim(block, block + 4, "the +0x10 block count")
+        records = i32(data, block) if 0 <= block < len(data) - 4 else 0
+        if 0 < records <= 4096:
+            claim(block + 4, block + 4 + 16 * records, "the +0x10 block records")
+        claim(block, sub + 0x14 + i32(data, sub + 0x14),
+              "the +0x10 block payloads")
 
     # The object graph, walked the way the spawner walks it (§9.11): a root
     # names its children and a node runs to wherever the next one starts. That
