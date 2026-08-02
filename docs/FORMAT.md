@@ -1095,7 +1095,7 @@ The resolve, and the four fields of the sub-object the binder reads:
 | Offset | Type | Meaning | Confidence |
 | --- | --- | --- | --- |
 | +0x00, +0x04, +0x08 | i32 | 0x2000 in 73/73. Not read on this path. | **confirmed** (constant) / ?unknown? (purpose) |
-| +0x0C | i32 ptr | Target is the **end of the record array** in 73/73 — `records + 160*count` to the byte. | **confirmed** |
+| +0x0C | i32 ptr | Target is the **end of the record array** in 73/73 — `records + 160*count` to the byte — and is itself `[i32 count]` then `count` self-relative i32 pointers. See below. | **confirmed** |
 | +0x10 | i32 ptr | A second block after that one. | **confirmed** (pointer) / ?unknown? (contents) |
 | +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart, near the file's end. | ?unknown? |
 | +0x1C | i32 | **Record count.** Read raw into instance +0x18 and used as the loop bound. | **confirmed** |
@@ -1150,6 +1150,39 @@ the piece.
 | +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
 | +0x9C, +0x9E | u16 | Copied to two different runtime slots. | ?unknown? |
+
+### The block after the records is a searchable list
+
+The binder hands the +0x0C target to the instance as +0x28, and the pair of library routines
+that read it settle its shape without settling what it holds. One searches it, the other
+indexes it:
+
+```
+; 0x8001E48C — a0 = the key being looked for; returns an index, or -1
+8001E490  lw    $v1, -0x7530($v0)  ; the current instance, a global at 0x80058AD0
+8001E4A8  lw    $a1, 0x28($v1)     ; -> sub-object +0x0C's target
+8001E4B0  lw    $a2, ($a1)         ; [+0x00] is a COUNT
+8001E4B4  slt   $v0, $v1, $a2      ; loop v1 = 0 .. count-1
+8001E4C0  addiu $a1, $a1, 4        ; (delay slot) step, first turn skipping the count
+8001E4C4  lw    $v0, ($a1)
+8001E4CC  addu  $v0, $a1, $v0      ; self-relative resolve, stride 4
+8001E4D0  lw    $v0, 0xc($v0)      ; the field the search matches on
+8001E4D8  beq   $v0, $a0, ...      ; hit -> return v1
+
+; 0x8001E4FC — the same array by index; instance +0x2C is its first pointer slot
+8001E504  lw    $v0, 0x2c($v0)
+8001E508  sll   $v1, $v1, 2
+8001E510  lw    $v1, ($v0)
+8001E518  addu  $v0, $v0, $v1
+```
+
+Measured: **217 pointers over the 73 models**, every one resolving inside its own file and
+every one landing between `T(0x18)` and `T(0x44)`. The count is 1 in 63 models and 2, 3, 13,
+15, 22 or 52 in the other ten. Consecutive targets sit 104 bytes apart in 124 of the 144
+gaps. `[target+0x00]` is 2 in 194 of 217 and `[target+0x0C]` — the field the search compares
+— takes 1 (73), 203 (19), 0 (18), 204 (18) and a tail of small values. **What a target is,
+is ?unknown?**: nothing else in `SCUS_945.70` reads one, and all three routines above are
+reached through a pointer rather than a call, so their callers are in an overlay.
 
 ### The id is the same id the draw dispatcher takes
 
@@ -2662,9 +2695,21 @@ Stated precisely, with the measurement that bounds each one.
   total extent is not a multiple of 12 (mod 12 = 0 in 279 models, 4 in 70, 8 in 51) and no
   header field explains its length. Internal layout beyond +0x00/+0x04/+0x08 unread.
 * **0x18 sub-object header, the fields the binder does not read** — +0x00/+0x04/+0x08 are
-  0x2000 in 73/73 with no reader, +0x10 points at a block after the records whose contents
-  are unread, +0x14 and +0x18 hold the same value in 73/73 and land 4 bytes apart near the
-  end of the file, +0x24 takes 13 values. The array itself is **closed**, see §8.5.
+  0x2000 in 73/73 with no reader, +0x14 and +0x18 hold the same value in 73/73 and land
+  4 bytes apart near the end of the file, +0x24 takes 13 values. The array itself and the
+  placement records are **closed**, see §8.5.
+* **What the +0x0C list points at.** Its shape is settled — a count and that many
+  self-relative pointers, searched on `[target+0x0C]` at 0x8001E48C — but a target's fields
+  have no reader in `SCUS_945.70`. 217 of them, all between `T(0x18)` and `T(0x44)`, 104
+  bytes apart where they run consecutively. The three routines that touch the list are
+  reached only through a pointer, so the callers are in an overlay; that is where to look.
+* **The block at sub-object +0x10.** Reaches the instance as +0x30 and no site reads it back.
+  It runs from the end of the +0x0C list to `T(0x14)`'s target, 180 to 780 bytes, always a
+  multiple of 4.
+* **What draws the 96 objects no placement record names**, in 13 of the 73 models — 16 in
+  each `balls_crash` arena, 6 to 9 in each warp room. Not the scene nodes: over the whole
+  corpus no mesh is both named by a node and named by a record (122 have a node, 1861 have a
+  record, the sets do not meet).
 * **The unread bytes of a placement record.** The loader at 0x8001E0A8 consumes +0x00,
   +0x04..+0x0C, +0x28..+0x47, +0x74..+0x77, +0x88, +0x9C and +0x9E; the rest of the 160 is
   copied by nothing. That includes the second MATRIX at +0x48 — identical to the first in
