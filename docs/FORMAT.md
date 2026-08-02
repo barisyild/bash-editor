@@ -1705,6 +1705,99 @@ carries it, spanning the shot. In `cutscene/uka/data.mdl` the node with a readab
 20-frame clip over ticks 0..19 while this one plays frames 1..272 over 20..311 — the whole
 performance.
 
+### 9.11.4 A model holds several scenes, not one — **certain**
+
+`model+0x48` is a count and `model+0x4C` an array of self-relative pointers, and each entry is
+a **root**: a whole scene with its own clock, spawned on its own. The spawner takes an index,
+not a model:
+
+```
+8001FF78  lw    $v0, 0x4c($v1)   ; the root array
+8001FF88  sll   $v1, $a1, 2      ; a1 = the root INDEX
+8001FF98  addu  $s3, $v0, $v1    ;   -> the root
+8001FFB4  lhu   $v0, 0xc($s3)    ; root+0x0C, its first tick
+8001FFBC  sh    $v0, 0xe($s1)    ;   -> the context's clock
+8001FFC0  lw    $v0, 8($s3)      ; root+0x08, its last
+8001FFD4  addiu $s2, $s3, 0x1c   ; and only then its children
+```
+
+So a root carries a clock range of its own — `+0x0C` first tick, `+0x08` last — and its
+children's windows are ticks on **that** clock. Reading every root's children as one list puts
+scenes that never coexist on the same timeline.
+
+**Node type 5 is what enters another root.** It is a one-shot trigger: it fires the first time
+the clock reaches its window start, guarded by a flag so it never fires twice, and its id is a
+root index handed to the same spawner:
+
+```
+8001FDA8  lw    $v0, 4($a3)      ; the node's window start, 16.16
+8001FDB4  slt   $v1, $v1, $v0    ;   not yet -> nothing
+8001FDC8  andi  $v0, $v0, 0x8000 ; already fired -> nothing
+8001FDD4  lw    $v0, 0x2c($a3)   ; node+0x2C..0x34 -> the entity's position
+8001FDF8  lhu   $v0, 0x38($a3)   ; node+0x38, 0x3C, 0x40 -> three angles
+8001FE1C  lw    $v0, 0x60($a3)   ; node+0x60..0x68 -> its scale
+8001FE54  lw    $a1, 0x14($a3)   ; node+0x14, the ROOT INDEX
+8001FE58  jal   0x80020cc4       ;   -> spawn it, with a clock of its own
+8001FE68  ori   $v0, $v0, 0x8000 ; and mark it fired
+```
+
+`0x80020CC4` is `0x8001FE80` again for a nested context: same root lookup, same `sw $zero,
+0xc($s2)` then `sh root+0x0C, 0xe($s2)` clock start. So the child's tick *t* shows at parent
+tick `t + trigger.window_start − child_root.start_tick`, and the whole child sits at the
+trigger's own transform.
+
+Measured: 186 models carry a root table and 109 have more than one root. There are exactly 14
+type-5 nodes in the game, ids 1 and 2 only, and every one of them is in a cutscene. Every
+cutscene's root 0 is the shot — and root 0's declared range is the shot's place in the
+cross-file numbering, `crashplain` 0..148, `cortexlab` 149..297, `welcome3` 298..358,
+`welcome2` 359..461, consecutively. Every *extra* root in a cutscene is `[0..19]` with nine
+children, named by a type-5 node whose window is exactly those 20 ticks, unit scale, and one
+non-zero angle — the middle one, a yaw at 4096 to the turn.
+
+In `level_intro_cortexlab` the trigger fires at tick 272, where Cortex shrinks away: the
+sub-scene is the pink sphere that swallows him. Read as literal scene ticks, those nine props
+land at 0..19 — before the shot's own clock even starts — so the effect that ends the scene
+plays over its beginning, or not at all.
+
+The 485 non-zero roots outside cutscenes are named by no trigger; gameplay code enters them
+directly, and nothing in the file says when.
+
+### 9.11.5 Only three node types draw — **certain**
+
+A node's type indexes a table of four function pointers at 0x80058B00 — constructor, per-tick
+update, draw, and one more — and three of the six populated rows have **no draw**:
+
+| type | constructor | per tick | draw | fourth | what it is |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 80021A1C | 8001EAA4 | 80021990 | — | prop |
+| 1 | 80021604 | 8001F828 | 80021330 | 8002141C | (8 nodes, all in `intro_eurocom`) |
+| 2 | 80021940 | 8001EDFC | **null** | — | fills the block at 0x80051640 |
+| 3 | 80021798 | 8001F0D4 | 80021770 | — | actor |
+| 4 | 80021708 | 8001F4F8 | **null** | — | interpolates one value over its window |
+| 5 | 8002128C | 8001FCDC | 80021238 | 8002120C | sub-scene trigger (§9.11.4) |
+
+And what a drawing node draws is one resource, the one its id names — nothing iterates the
+model's mesh list:
+
+```
+80019F44  lhu  $a2, 0x74($s0)   ; entity+0x7C, the id
+80019F7C  beqz $s2, 0x8001a0bc  ;   names nothing -> draws nothing
+80019F8C  andi $v0, $v0, 0x8000 ; and the visibility bit, as ever
+```
+
+So **a mesh no node owns is not in the shot**. `level_intro_crashplain` carries three Crash
+meshes — 0, 3 and 9, all with the same 2.4 × 2.0 × 0.9 extent — and its graph spawns one:
+mesh 3, asleep on the grass at 0.6 scale. Meshes 0 and 9 are stock standing poses that the
+shot never uses, and drawing them as scenery stood a full-size Crash next to the sleeping one.
+Types 2 and 4 are present in that file and own nothing, which is why they cannot be the
+missing owner: they have no draw slot at all.
+
+Across the archive 73% of a cutscene's meshes have a node against 9% of an arena's, because an
+arena's geometry is drawn by the level renderer and its node graph is only the moving parts.
+Nothing in the file distinguishes the two; this editor uses "does the scene cast an actor",
+which is exact over the archive — all 55 shots with a character, none of the 72 arena scenes —
+but it is a guess, not a rule of the format.
+
 | Offset | Type | Meaning |
 | --- | --- | --- |
 | +0x00 | u32 | start tick |

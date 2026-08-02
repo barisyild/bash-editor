@@ -412,14 +412,31 @@ class ModelView(QOpenGLWidget):
     def _scene_positions(self, mesh: Mesh) -> np.ndarray | None:
         """This mesh posed and placed for the current scene tick, or None.
 
-        None means "no node owns this mesh" -- scenery, which stays where the
-        file put it. A mesh that does have a node is visible only while one of
-        its windows is open, the way the game clears the entity's draw bit
-        outside it; off stage it collapses to a point rather than standing at
-        the origin in the middle of the set.
+        A mesh with a node is visible only while one of its windows is open,
+        the way the game clears the entity's draw bit outside it; off stage it
+        collapses to a point rather than standing at the origin in the middle
+        of the set.
+
+        A mesh with *no* node is never drawn by the scene at all: drawing is
+        per entity, and an entity draws one resource, the one its id names --
+
+            80019F44  lhu  $a2, 0x74($s0)   ; entity+0x7C, the id
+            80019F7C  beqz $s2, 0x8001a0bc  ;   nothing named -> nothing drawn
+
+        In a shot that settles it: `level_intro_crashplain` carries three Crash
+        meshes and the shot spawns one, so drawing the others put a full-size
+        Crash beside the scaled one. Elsewhere it does not, because an arena's
+        geometry is drawn by the level renderer and its scene is only the
+        moving parts -- 9% of an arena's meshes have a node against 73% of a
+        cutscene's. Telling the two apart by whether the scene casts an actor
+        is this editor's guess, not something the file states; it happens to be
+        exact over the archive, all 55 shots with a character against all 72
+        arena scenes.
         """
         scene = self._scene
         if mesh.index not in scene.mesh_indices:
+            if scene.actors:
+                return np.zeros((len(mesh.positions), 3), dtype=np.float32)
             return None
         tick = self._scene_tick
         for actor in scene.actors_at(tick):

@@ -12,6 +12,16 @@ kinds, told apart by the type word at node+0x00:
     type 0   a prop: one mesh, named by the 0x2000 id at node+0x14, with a
              transform track at node+0x24, stride 0x50, position at +0x0C,
              quaternion at +0x24 and scale at +0x40
+    type 5   a trigger: fires once when the clock reaches its window start and
+             spawns another root -- a scene of its own, with its own clock,
+             placed at the trigger's transform
+
+**A model holds several scenes, not one.** `model+0x48` counts roots and
+`model+0x4C` points at them, and each is a separate timeline: `root+0x0C` is
+its first tick, `root+0x08` its last, and its children's windows are ticks on
+*that* clock. Root 0 is the shot; the extras are effects a type-5 node fires.
+Flattening them all onto one list dates a 20-tick effect to ticks 0..19 of a
+shot that starts at 149.
 
 Scale is three components in the same 4096 = 1.0 fixed point as the rotation,
 and the handlers interpolate it between keys exactly as they do position: each
@@ -60,7 +70,18 @@ PROP_STRIDE = 0x50
 NODE_TYPE = 0x00
 NODE_TYPE_ACTOR = 3
 NODE_TYPE_PROP = 0
+# A one-shot trigger: at its window start it spawns another root as a scene of
+# its own, placed at its own transform. See _sub_scene.
+NODE_TYPE_SUBSCENE = 5
 MESH_NAMESPACE = 0x2000
+
+ROOT_END_TICK = 0x08
+ROOT_START_TICK = 0x0C
+
+SUB_POSITION = 0x2C
+SUB_ANGLES = 0x38  # three of them, stride 4, only the low halfword read
+SUB_SCALE = 0x60
+ANGLE_TURN = 4096.0  # the game's full circle
 
 # A node's id is not what it plays. The handler adds the play range's first
 # frame to it and stores the sum as the entity's animation id:
@@ -107,6 +128,22 @@ MAX_KEYS = 4096
 
 def _i32(data: bytes, at: int) -> int:
     return struct.unpack_from("<i", data, at)[0]
+
+
+def _u16(data: bytes, at: int) -> int:
+    return struct.unpack_from("<H", data, at)[0]
+
+
+def _multiply(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    """One rotation after the other, both x, y, z, w."""
+    x1, y1, z1, w1 = first
+    x2, y2, z2, w2 = second
+    return np.array([
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    ])
 
 
 def _slerp(first: np.ndarray, second: np.ndarray, weight: float) -> np.ndarray:
@@ -240,14 +277,22 @@ class Prop:
 class Scene:
     actors: list[Actor] = field(default_factory=list)
     props: list[Prop] = field(default_factory=list)
+    # The root's own clock range, which is what the shot runs on. A node window
+    # may fall outside it -- `level_shot8` has one opening at tick 63 in a shot
+    # that runs 295..372 -- and such a node simply never opens.
+    window: tuple[int, int] | None = None
 
     @property
     def start(self) -> int:
+        if self.window:
+            return self.window[0]
         spans = [t.track.start for t in self.actors + self.props]
         return min(spans) if spans else 0
 
     @property
     def end(self) -> int:
+        if self.window:
+            return self.window[1]
         spans = [t.track.end for t in self.actors + self.props]
         return max(spans) if spans else 0
 
@@ -335,13 +380,60 @@ def _clip_index(command_id: int, play_start: int, clips) -> int | None:
     return index if index < len(clips) else None
 
 
-def spawn_order(data: bytes) -> list[int]:
-    """Every node the game spawns, in the order it spawns them.
+def _root_offset(data: bytes, index: int) -> int | None:
+    """Where root `index` sits, or None if the model names no such root.
 
-    Not a search: this is the walk the spawner performs at 0x8001FE80. The
-    model names its roots -- a count at `model+0x48` and self-relative pointers
-    at `model+0x4C` -- and each root states how many children it has at `+0x00`
-    and where their self-relative pointers start at `+0x1C`:
+    The spawner takes a root index, not a model: `a1` selects one entry from
+    the self-relative array at `model+0x4C`, whose length is at `model+0x48`.
+
+        8001FF78  lw    $v0, 0x4c($v1)   ; the root array, self-relative
+        8001FF80  addiu $v0, $v0, 0x4c
+        8001FF84  addu  $v0, $v1, $v0
+        8001FF88  sll   $v1, $a1, 2      ; a1 = the root INDEX
+        8001FF8C  addu  $v0, $v0, $v1
+        8001FF98  addu  $s3, $v0, $v1    ; -> the root
+    """
+    limit = len(data) - 0x40
+    try:
+        count = _i32(data, 0x48)
+        base = 0x4C + _i32(data, 0x4C)
+    except (struct.error, IndexError):
+        return None
+    if not (0 < count < 4096 and 0 <= base <= limit):
+        return None
+    if not 0 <= index < count:
+        return None
+    slot = base + 4 * index
+    if not 0 <= slot <= limit:
+        return None
+    root = slot + _i32(data, slot)
+    return root if 0 <= root <= limit else None
+
+
+def root_span(data: bytes, index: int = 0) -> tuple[int, int] | None:
+    """The first and last tick a root's clock runs, as the root declares them.
+
+    A fresh context starts at the root's own `+0x0C` and ends at its `+0x08`:
+
+        80020D38  lhu   $v0, 0xc($s3)    ; root+0x0C, the starting tick
+        80020D40  sh    $v0, 0xe($s2)    ;   -> context+0x0E
+        80020D44  lw    $v0, 8($s3)      ; root+0x08, the last
+        80020D50  sw    $v0, 0x10($s2)   ;   -> context+0x10
+    """
+    root = _root_offset(data, index)
+    if root is None:
+        return None
+    start = struct.unpack_from("<H", data, root + ROOT_START_TICK)[0]
+    end = _i32(data, root + ROOT_END_TICK)
+    return (start, end) if 0 <= start <= end < MAX_TICK else None
+
+
+def spawn_order(data: bytes, index: int = 0) -> list[int]:
+    """The nodes of one root, in the order the spawner constructs them.
+
+    Not a search: this is the walk performed at 0x8001FE80. A root states how
+    many children it has at `+0x00` and where their self-relative pointers
+    start at `+0x1C`:
 
         8001FFD4  addiu $s2, $s3, 0x1c    ; the child array
         8001FFD8  lw    $v0, ($s3)        ; the child count
@@ -353,52 +445,142 @@ def spawn_order(data: bytes) -> list[int]:
 
     Reading the graph by walking bytes and matching shapes finds most of this
     and misses the rest -- six actors in `level_ending_good_shot3`, where the
-    shape scan saw four.
+    shape scan saw four. Walking every root at once is a different mistake:
+    see `read_scene`.
     """
     limit = len(data) - 0x40
-    try:
-        count = _i32(data, 0x48)
-        base = 0x4C + _i32(data, 0x4C)
-    except (struct.error, IndexError):
+    root = _root_offset(data, index)
+    if root is None:
         return []
-    if not (0 < count < 4096 and 0 <= base <= limit):
+    children = _i32(data, root)
+    array = root + 0x1C
+    if not (0 <= children < 4096 and 0 <= array <= limit):
         return []
 
     nodes: list[int] = []
-    for index in range(count):
-        at = base + 4 * index
-        if not 0 <= at <= limit:
+    for child in range(children):
+        slot = array + 4 * child
+        if not 0 <= slot <= limit:
             break
-        root = at + _i32(data, at)
-        if not 0 <= root <= limit:
-            continue
-        children = _i32(data, root)
-        array = root + 0x1C
-        if not (0 <= children < 4096 and 0 <= array <= limit):
-            continue
-        for child in range(children):
-            slot = array + 4 * child
-            if not 0 <= slot <= limit:
-                break
-            node = slot + _i32(data, slot)
-            if 0 <= node <= limit:
-                nodes.append(node)
+        node = slot + _i32(data, slot)
+        if 0 <= node <= limit:
+            nodes.append(node)
     return nodes
 
 
-def read_scene(data: bytes, model, clips) -> Scene | None:
-    """The scene a model plays, or None if it spawns nothing playable."""
-    scene = Scene()
+@dataclass(frozen=True)
+class Placement:
+    """Where a sub-scene sits in its parent."""
 
-    for node in spawn_order(data):
+    position: np.ndarray
+    rotation: np.ndarray
+    scale: np.ndarray
+
+    def applied(self, key: Key) -> Key:
+        return Key(
+            key.tick, key.duration,
+            self.position + rotation_matrix(self.rotation) @ (self.scale * key.position),
+            _multiply(self.rotation, key.rotation),
+            self.scale * key.scale,
+        )
+
+
+def _sub_scene(data: bytes, node: int, window_start: int) -> tuple[int, Placement]:
+    """The root a trigger spawns, and where it puts it.
+
+    Type 5 is a one-shot: it fires the first time the clock reaches its window
+    start, guarded by a flag bit so it never fires twice, and what it fires is
+    another root of the same model -- its id is a root index, handed straight to
+    the spawner that 0x8001FE80 shares:
+
+        8001FDA8  lw    $v0, 4($a3)     ; the node's window start, 16.16
+        8001FDB4  slt   $v1, $v1, $v0   ;   not yet -> nothing
+        8001FDC8  andi  $v0, $v0, 0x8000; already fired -> nothing
+        8001FDD4  lw    $v0, 0x2c($a3)  ; node+0x2C..0x34 -> the entity's position
+        8001FDF8  lhu   $v0, 0x38($a3)  ; node+0x38, 0x3C, 0x40 -> three angles
+        8001FE1C  lw    $v0, 0x60($a3)  ; node+0x60..0x68 -> its scale
+        8001FE54  lw    $a1, 0x14($a3)  ; node+0x14, the ROOT INDEX
+        8001FE58  jal   0x80020cc4      ;   -> spawn that root, clock from zero
+        8001FE68  ori   $v0, $v0, 0x8000; and mark it fired
+
+    All fourteen in the game carry a unit scale and one non-zero angle, the
+    middle one -- a yaw, 4096 to the turn.
+    """
+    index = _i32(data, node + NODE_COMMAND_ID)
+    position = np.array(
+        [_i32(data, node + SUB_POSITION + 4 * i) for i in range(3)],
+        dtype=np.float64) * GTE_SCALE_SMALL
+    yaw = _u16(data, node + SUB_ANGLES + 4) / ANGLE_TURN * 2.0 * math.pi
+    rotation = np.array([0.0, math.sin(yaw / 2.0), 0.0, math.cos(yaw / 2.0)])
+    scale = np.array(
+        [_i32(data, node + SUB_SCALE + 4 * i) for i in range(3)],
+        dtype=np.float64) / QUATERNION_ONE
+    return index, Placement(position, rotation, scale)
+
+
+def read_scene(data: bytes, model, clips) -> Scene | None:
+    """The scene a model plays, or None if it spawns nothing playable.
+
+    **Only root 0 is the timeline.** The model's other roots are separately
+    spawnable scenes of their own, entered by a type-5 trigger with their clocks
+    restarting -- so their nodes must be shifted onto the parent's clock, not
+    read as if their ticks were already scene ticks.
+
+    Every extra root in a cutscene is one of these, and it is always the same
+    thing: a 20-tick effect that a shot fires once, nine props over ticks 0..19.
+    `level_intro_cortexlab` fires its at tick 272, exactly where Cortex shrinks
+    away, and reading its ticks literally puts the vanishing effect over the
+    opening of the shot instead of over its end.
+    """
+    scene = Scene(window=root_span(data, 0))
+    _read_root(data, model, clips, 0, 0, None, scene, set())
+    if scene.actors or scene.props:
+        return scene
+
+    # Root 0 empty: four arena models put their nodes in later roots that
+    # gameplay code spawns directly, with no trigger naming them. Showing the
+    # first that holds anything is a convenience of this editor, not a claim
+    # about the format -- those roots are separate scenes and share no clock.
+    count = _i32(data, 0x48) if len(data) > 0x50 else 0
+    for index in range(1, min(max(count, 0), 64)):
+        scene = Scene(window=root_span(data, index))
+        _read_root(data, model, clips, index, 0, None, scene, set())
+        if scene.actors or scene.props:
+            return scene
+    return None
+
+
+def _read_root(data: bytes, model, clips, index: int, offset: int,
+               parent: Placement | None, scene: Scene, seen: set[int]) -> None:
+    if index in seen:
+        return
+    seen.add(index)
+
+    for node in spawn_order(data, index):
         kind = _i32(data, node + NODE_TYPE)
-        if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP):
+        if kind not in (NODE_TYPE_ACTOR, NODE_TYPE_PROP, NODE_TYPE_SUBSCENE):
             continue
         window_start = _i32(data, node + NODE_WINDOW_START)
         window_end = _i32(data, node + NODE_WINDOW_END)
         if not (0 <= window_start < window_end < MAX_TICK):
             continue
         command = _i32(data, node + NODE_COMMAND_ID)
+
+        if kind == NODE_TYPE_SUBSCENE:
+            child, placement = _sub_scene(data, node, window_start)
+            span = root_span(data, child)
+            if span is None:
+                continue
+            if parent is not None:
+                placement = Placement(
+                    parent.position + rotation_matrix(parent.rotation)
+                    @ (parent.scale * placement.position),
+                    _multiply(parent.rotation, placement.rotation),
+                    parent.scale * placement.scale,
+                )
+            _read_root(data, model, clips, child,
+                       offset + window_start - span[0], placement, scene, seen)
+            continue
 
         if kind == NODE_TYPE_PROP:
             mesh_index = (command & 0xFFF) - 1
@@ -411,7 +593,8 @@ def read_scene(data: bytes, model, clips) -> Scene | None:
             if not keys:
                 continue
             scene.props.append(Prop(
-                track=Track(node, window_start, window_end, tuple(keys)),
+                track=_onto_parent(node, window_start, window_end, keys,
+                                   offset, parent),
                 mesh_index=mesh_index,
             ))
             continue
@@ -433,7 +616,8 @@ def read_scene(data: bytes, model, clips) -> Scene | None:
         if clip.mesh_index is None or clip.mesh_index >= len(model.meshes):
             continue
         scene.actors.append(Actor(
-            track=Track(node, window_start, window_end, tuple(keys)),
+            track=_onto_parent(node, window_start, window_end, keys,
+                               offset, parent),
             clip_index=index,
             mesh_index=clip.mesh_index,
             play_start=play_start,
@@ -442,7 +626,16 @@ def read_scene(data: bytes, model, clips) -> Scene | None:
             mode=mode,
         ))
 
-    return scene if (scene.actors or scene.props) else None
+
+def _onto_parent(node: int, start: int, end: int, keys: list[Key],
+                 offset: int, parent: Placement | None) -> Track:
+    """A track moved onto the parent's clock and into the parent's frame."""
+    if parent is not None:
+        keys = [parent.applied(key) for key in keys]
+    if offset:
+        keys = [Key(key.tick + offset, key.duration,
+                    key.position, key.rotation, key.scale) for key in keys]
+    return Track(node, start + offset, end + offset, tuple(keys))
 
 
 def field_of_view() -> float:
