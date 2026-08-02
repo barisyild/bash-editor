@@ -3158,15 +3158,24 @@ are not only undocumented format; they are also where a reader is quietly skippi
   that breaks the 0x50 rule), but n = 1 for the alternate value and neither constant appears
   anywhere in the EXE. A date reading (0x0C/0x16/0x29 vs 0x09/0x16/0x26) fits the shape and
   nothing confirms it.
-* **0x0C** — no reader. `>= i32@0x40` in 400/400 and equal in 328/373; "capacity vs used" is
-  a guess. Distribution: 0 (155), 5 (63), 2 (51), 1 (36), 6 (30), 7 (21), 3 (15), 8 (8), …
+* **0x0C** — no reader found, searched disc-wide. A model base is always reached as
+  `[owner+0x0C]`, so a read of this field is the two-step shape `lw model, 0x0C(owner)` then
+  `lw ?, 0x0C(model)`. Over the executable and all 15 overlays that shape occurs **14 times**,
+  and every one is a linked-list walk — 0x800286A4 chains the VRAM allocator's free rects,
+  0x80011CC0 walks a list node — not a model. `>= i32@0x40` in 400/400 and equal in 328/373;
+  "capacity vs used" is a guess. Distribution: 0 (155), 5 (63), 2 (51), 1 (36), 6 (30),
+  7 (21), 3 (15), 8 (8), …
 * **0x30, 0x34** — zero in 400/400, no reader. Padding or fields no retail asset uses.
 * **0x50** — the arithmetic is unambiguous (`base + value` is the resident-image end) but no
   code reads the field, so whether the encoder meant "size" or "pointer to an 80-byte
   trailer" is inference only.
-* **0x1C object table** — 12-byte stride confirmed where the code indexes it, but the block's
-  total extent is not a multiple of 12 (mod 12 = 0 in 279 models, 4 in 70, 8 in 51) and no
-  header field explains its length. Internal layout beyond +0x00/+0x04/+0x08 unread.
+* **0x1C object table** — the mystery here is smaller than this entry used to make it sound.
+  The 12-byte object records are read (§8.3) and what follows them is the node graph, which
+  §9.11 reads and `tools/coverage.py` now accounts for down to 292 bytes of inter-node
+  alignment over the whole archive. What is still unexplained is only the *boundary*: no
+  header field states where the records stop and the graph starts, so a reader finds it by
+  the chunk-descriptor test of §8.3, and the block's total extent is not a multiple of 12
+  (mod 12 = 0 in 279 models, 4 in 70, 8 in 51).
 * **0x18 sub-object header, the fields the binder does not read** — +0x00/+0x04/+0x08 are
   0x2000 in 73/73 with no reader, +0x14 and +0x18 hold the same value in 73/73 and land
   4 bytes apart near the end of the file, +0x24 takes 13 values. The array itself and the
@@ -3252,7 +3261,9 @@ are not only undocumented format; they are also where a reader is quietly skippi
   pointer, not any pixel/palette/record total tested, and it differs between structurally
   identical packs. It is no longer unread, though: `0x8002A62C` carries it into the texture
   context at +0x24 (§10.4). What reads it there is the open half.
-* **Header 0x18** — 0 in 314/400; the 86 non-zero values match no landmark tested.
+* ~~**Header 0x18**~~ — **stale, and closed elsewhere in this document.** §10.1 reads it as
+  `ptr_animation`, an absolute offset to the animation block, and the 86 non-zero values are
+  the end of the palette-plus-texture walk in **86/86**. This entry predates that.
 * **Record +0x04..+0x07** — what they *mean* is open; the search for a reader is now as tight
   as static analysis gets. A record can only be addressed through the pack header's +0x0C,
   and **five sites on the whole disc** resolve a +0x0C self-relatively — four of them belong
@@ -3291,9 +3302,10 @@ are not only undocumented format; they are also where a reader is quietly skippi
   documented joint or parent relationship. Placement itself is no longer missing — §9.11
   reads it, and a node names its own target, a mesh or a clip, rather than depending on an
   outside binding.
-* **The type-2 node** (keys at node+0x1C, stride 0x28, handler 0x8001EDFC, id namespace
-  0x1000). Twelve in the corpus. It writes a position like the others, but what it drives
-  and what the rest of its 0x28 bytes hold is unread.
+* ~~**The type-2 node**~~ — **stale, and closed elsewhere in this document.** §9.11.6 reads
+  it as the shot's camera and §9.11.9's table names it the same way; this entry survived a
+  revision that decoded it. What remains open about a camera is its *values* for a cutscene
+  (below), not the node.
 * ~~**Node type 4**~~ — **closed**, see §9.11.10. It is the fade: a window and two levels in
   1.12, ramped by 0x8001F4F8 into the render context's fade slot. Every node type the spawner
   constructs is now named.
