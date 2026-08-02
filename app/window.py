@@ -27,7 +27,7 @@ from crashbash.archive import (
     find_exe,
     find_exe_near,
 )
-from crashbash import build, iso
+from crashbash import build, iso, scene
 from crashbash.formats import anim, gltf, gltfimport, mdl, sfx, tex
 
 from .glview import ModelView
@@ -84,6 +84,7 @@ class MainWindow(QMainWindow):
         self.pack: tex.TexturePack | None = None
         self.bank: sfx.SoundBank | None = None
         self.animations: list[anim.Animation] = []
+        self.scene: scene.Scene | None = None
 
         self.tree = FileTree()
         self.tree.entry_selected.connect(self.open_entry)
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
 
         self.anim_panel = AnimationPanel()
         self.anim_panel.animation_changed.connect(self._set_animation)
+        self.anim_panel.scene_changed.connect(self._set_scene)
         self.anim_panel.frame_changed.connect(self._set_frame)
 
         model_side = QSplitter(Qt.Vertical)
@@ -373,6 +375,7 @@ class MainWindow(QMainWindow):
         # Stops playback and drops the previous model's clips, whatever the new
         # entry turns out to be.
         self.animations = []
+        self.scene = None
         self.anim_panel.set_animations([])
         self.export_obj_action.setEnabled(False)
         self.export_glb_action.setEnabled(False)
@@ -395,9 +398,10 @@ class MainWindow(QMainWindow):
         if entry.group == "model":
             self.model = mdl.read_model(data)
             self.animations = anim.read_animations(data, self.model)
+            self.scene = scene.read_scene(data, self.model, self.animations)
             self.view3d.set_model(self.model, self._sibling_texture_pack(entry))
             self.mesh_panel.set_model(self.model, header)
-            self.anim_panel.set_animations(self.animations)
+            self.anim_panel.set_animations(self.animations, self.scene)
             self.pages.setCurrentIndex(0)
             self.export_obj_action.setEnabled(bool(self.model.meshes))
             self.export_glb_action.setEnabled(bool(self.model.meshes))
@@ -448,7 +452,22 @@ class MainWindow(QMainWindow):
             )
 
     @guarded
+    def _set_scene(self, playing) -> None:
+        clips = self.animations if playing is not None else []
+        self.view3d.set_scene(playing, clips)
+        if playing is not None:
+            self.statusBar().showMessage(
+                f"Cutscene: ticks {playing.start}..{playing.end}, "
+                f"{len(playing.actors)} actors and {len(playing.props)} prop "
+                f"tracks over {len(playing.mesh_indices)} meshes — each drawn "
+                "only inside its own window"
+            )
+
+    @guarded
     def _set_frame(self, frame: int) -> None:
+        if self.anim_panel.scene_selected() and self.scene is not None:
+            self.view3d.set_scene_tick(self.scene.start + frame)
+            return
         self.view3d.set_frame(frame)
 
     def _set_all_meshes(self, visible: bool) -> None:

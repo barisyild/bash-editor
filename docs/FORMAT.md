@@ -912,7 +912,10 @@ The 0x4C array is `i32@0x48` self-relative i32 pointers, stride 4, ending exactl
 the 0x1C table** at 0, 4 or 8 mod 12 (401 / 163 / 124) — i.e. each names a *field* of a
 12-byte object record. The overall extent `T(0x4C) − T(0x1C)` is not a multiple of 12
 (0 mod 12 in 279 models, 4 in 70, 8 in 51), so the block is a heterogeneous object graph
-rather than a flat array. The internal layout beyond +0x00/+0x04/+0x08 is ?unknown?.
+rather than a flat array. One record kind is now partly readable: the scene **nodes** the
+cutscene player walks, which carry a time window, a **play command** — loop start/end
+frames and mode — at `+0x14`, and placement keys from `+0x30` at stride 0x4C; see the
+looping part of §9.7. The rest of the graph is ?unknown?.
 
 ## 8.4 Mesh attachment block (`mesh + 0x2C`)
 
@@ -1101,29 +1104,54 @@ The hash itself is a plain weighted sum, which is why it collides so freely:
 Three more routines (0x80016274, 0x800164A8, 0x80016584) take a string and scan the table for
 a matching +0x10, so a clip really is addressed by name at runtime.
 
-**The names themselves are not in the MDL, and not in the EXE.** They are string literals in
-the per-minigame code overlays: `BREATHE` occurs in all 14 `overlays/modes/*.bin`.
-Hashing every identifier-shaped string (`[A-Z][A-Z0-9_]{2,19}`, containing a vowel) found in
-the overlays — 1079 distinct candidates — matches 755 of the 1037 clips. That is *not* proof
-for any individual clip: the hash is a sum with only 243 distinct values here, and a control
-that shifts every stored hash by ±1 before matching still "resolves" 431 and 539 clips
-respectively. What survives that control is the concentration on animation vocabulary:
+**The names themselves are not in the MDL, and not in the EXE — they are in the code
+overlays, and each overlay states its own list.** Every `overlays/modes/*.bin` opens with a
+count word and then a table of NUL-terminated names padded to 4-byte alignment, ending where
+a pointer array begins:
+
+```
+warp.bin+0x00  6a 00 00 00                 count
+        +0x04  "BREATHE\0"                 the mode's animation names,
+        +0x0C  "MEDIUM\0\0"                each padded to a 4-byte boundary
+        +0x14  "ATTACK\0\0"
+        +0x1C  "JUMP\0\0\0\0"
+        +0x24  "KICK\0\0\0\0"
+        +0x2C  80 0b 49 c8 ...             pointers: the table has ended
+```
+
+Thirteen tables carry **35 distinct names**, from `crate.bin`'s twelve down to `oxide.bin`'s
+four. This is a far better source than scanning an overlay for identifier-shaped strings,
+which drags in the credits (`WONG`, `PATEL`, `GALLAGHER` all collide with real clip hashes)
+and cannot tell a coincidence from a name. Four further words — `LOSE`, `LOSE_BREATHE`,
+`START`, `WIN_BREATHE` — appear as strings elsewhere in the overlays but in no head table.
+The 39 together name **701 of the 1037 clips**, and only two hashes stay ambiguous:
+`BANK`/`HOLD` and `BARGE`/`SLIDE`, both members of each pair genuinely in the tables.
+
+Words this project previously guessed at and that appear **nowhere** in the game — `BOUNCE`,
+`FLY`, `HOP`, `LAUGH`, `OPEN`, `SINK`, `SLEEP`, `STOP`, `SWING`, `TURN`, `WALK` — have been
+dropped. Dropping `HOP` settles the old `HIT`/`HOP` collision in `HIT`'s favour. The
+distribution over the surviving list still reads like an animation set:
 
 | Word | Clips | Word | Clips | Word | Clips |
 | --- | --- | --- | --- | --- | --- |
-| BREATHE | 114 | PUSH | 21 | WIN_BREATHE | 8 |
-| WIN | 108 | ATTACK | 19 | LOSE | 8 |
-| HIT | 55 | TAUNT | 18 | SKATE | 8 |
-| RUN | 40 | TAUNT_A | 16 | DAZED | 8 |
-| FALL | 34 | PICKUP | 12 | RECOIL | 8 |
-| JUMP | 31 | SWIM | 11 | IDLE1 | 8 |
-| DIE | 25 | HOLD_THROW | 10 | MINE | 8 |
-| BARGE / SLIDE | 23 | HOLD_SLOW | 10 | LOSE_BREATHE | 2 |
+| BREATHE | 114 | ATTACK | 19 | FLIP | 9 |
+| WIN | 108 | TAUNT | 18 | LOSE | 8 |
+| HIT | 55 | BANK / HOLD | 18 | WIN_BREATHE | 8 |
+| RUN | 40 | TAUNT_A | 16 | TRANS | 8 |
+| FALL | 34 | LIGHT | 16 | RECOIL | 8 |
+| JUMP | 31 | PICKUP | 12 | MINE | 8 |
+| MEDIUM | 26 | SWIM | 11 | IDLE1 | 8 |
+| DIE | 25 | HOLD_THROW | 10 | SKATE | 8 |
+| BARGE / SLIDE | 23 | HOLD_SLOW | 10 | TAZING | 8 |
+| PUSH | 21 | IDLE_A | 10 | DAZED | 8 |
 
-`HIT`, `DIE`, `WIN`, `LOSE`, `BARGE`/`SLIDE`, `SWIM` and `MINE` share their hash with at least
-one other overlay string, so they are the *plausible* member of a collision set, not a
-decoded name. Treat the hash as the identity and any word as a hint. **confirmed** that the
-hash is of a name; *likely* for the individual words.
+Against the head tables alone, only `BANK`/`HOLD` and `BARGE`/`SLIDE` collide; every other
+name in the list is the single word in the game that produces its hash. That still does not
+make a name *the* name of a given clip — a mode's table says which names that mode asks for,
+not which clip in which model answers — so keep treating the hash as the identity. But the
+words are now the game's own, not a wordlist this project invented. **confirmed** that the
+hash is of a name and that these 39 words are the ones the game hashes; *likely* for the
+pairing of a particular word with a particular clip.
 
 ## 9.2 The blob
 
@@ -1409,16 +1437,49 @@ and read `record[f+1]` — never runs. It could not safely run on the last frame
 blob reserves a sentinel record, and in the 845 clips that carry no auxiliary block the first
 keyframe begins immediately after the record array, with a zero-byte gap.
 
-**Looping** is a property of the clip's caller, not a flag in the file:
+**Looping** is a property of the clip's caller, not a flag in the clip — and the caller
+can loop a *sub-range*: the wrap runs over `[start, end]`, so a clip can play its intro
+once and then cycle from, say, frame 6 for ever. `t0` below is a **play command**:
 
 ```
-8001F244  lw    $v0, 0x10($t0)      ; per-clip mode word
+8001F244  lw    $v0, 0x10($t0)      ; command +0x10: mode word
 8001F24C  beqz  $v0, 0x8001f288     ;   0 -> loop, else clamp
+8001F254  lw    $a0, 8($t0)         ; command +0x08: end frame
+8001F258  lw    $v1, 4($t0)         ; command +0x04: START frame
 8001F27C  addiu $v0, $a0, -1        ; clamp: hold at (end-1)
-8001F298  addiu $v0, $v0, 1         ; loop: elapsed mod (end - start + 1)
+8001F298  addiu $v0, $v0, 1         ; loop: start + (elapsed mod (end - start + 1))
 8001F2A0  div   $zero, $a2, $v0
 8001F2C8  mfhi  $a1
+8001F2D8  addu  $a1, $a1, $v1
 ```
+
+**Where the command comes from.** For node-driven scenes it is authored **in the model
+file**, inside the object graph of §8.3. The same node update resolves the graph through
+the `model+0x4C` pointer array, selects the node whose time window covers the scene tick,
+and takes the play command embedded in the node record:
+
+```
+8001F134  lw    $v0, 0x4c($v1)      ; the §8.3 pointer array
+8001F144  sll   $v1, $a1, 2         ;   indexed
+8001F184  lw    $v0, 4($v1)         ; node +0x04: window start (ticks)
+8001F198  lw    $v0, 8($v1)         ; node +0x08: window end
+8001F1C8  addiu $t0, $v1, 0x14      ; t0 = node + 0x14  <-- THE PLAY COMMAND
+8001F1CC  addiu $a1, $v1, 0x34      ; placement keys from node + 0x30,
+8001F1FC  addiu $a1, $a1, 0x4c      ;   stride 0x4C (§9.7 key copy)
+```
+
+So, node-relative: `+0x18` loop/play start frame, `+0x1C` end frame, `+0x24` mode
+(0 = loop, else hold at end). Scanning the corpus object graphs for that signature —
+a sane time window at `+0x04/+0x08`, `start <= end < the model's largest frame count`,
+mode ≤ 2, and a plausible first key segment at `+0x30` — finds **262 commands**, all in
+cutscene and arena models. 89 of them start past frame 1: starts of 4 (11), 7 (10),
+8 (21), 9 (19), 10 (10) and a tail to 27, mode 0 (loop) in 248 of 262. The pair that
+answers what a sub-range loop is for: `models/arena/dash_toxic/{arena,crystalarena}.mdl`
+both carry `frames 6..113` of a 119-frame clip — the first six frames are an intro the
+cycle never revisits. Field roles are **confirmed** (the dispatcher above); the in-file
+rows are *likely* individually, being signature-matched rather than parsed from a full
+graph walk. For gameplay characters the same wrap code is fed by the minigame overlays,
+so their loop points live in code, not in the `.mdl`.
 
 The data is authored for it in half the corpus: of the 1029 clips with two or more frames,
 486 end on an interpolated frame, and in **486/486** of those the final record's keyframe B is
@@ -1497,6 +1558,315 @@ simply never draws its own pool while a clip is playing.
   `V = 12` recovered from the 44-byte keyframe stride it tiles exactly, four keyframes at
   0x6104/0x6130/0x615C/0x6188 and a 48-vector pool at 0x61B4. Whether the clip is dead data or
   reaches a different code path is ?unknown?.
+
+## 9.11 Scene nodes: props, actors and visibility
+
+A cutscene is not a pile of meshes at the origin. The object graph of §8.3 carries **nodes**,
+each of which puts one thing on stage for a stretch of scene time, and the same node update
+that §9.7 describes walks them. A node opens with a **type word**, and the type decides where
+its key array begins and how long a key is:
+
+| Type | Keys at | Stride | Id namespace | What it drives |
+| --- | --- | --- | --- | --- |
+| 3 | node+0x30 | 0x4C | 0x4000 / 0x3000 | an **actor**: a clip, the frames to loop (§9.7), and a placement track |
+| 0 | node+0x24 | 0x50 | 0x2000 | a **prop**: one mesh, moved and turned but not posed |
+| 2 | node+0x1C | 0x28 | 0x1000 | 12 in the corpus, contents unread |
+
+Across the corpus, 1530 type-0 nodes, 68 type-3 and 12 type-2 have a key array that opens on
+their window and tiles it to the tick. The handlers are separate functions in the table at
+0x80058B00 — 0x8001F0D4 for type 3, 0x8001EAA4 for type 0, 0x8001EDFC for type 2 — and each
+walks its own stride:
+
+```
+8001EBD8  addiu $a0, $a0, 0x50    ; type 0, keys from node+0x24
+8001EF24  addiu $a0, $a0, 0x28    ; type 2, keys from node+0x1C
+8001F1FC  addiu $a1, $a1, 0x4c    ; type 3, keys from node+0x30
+```
+
+A prop names its mesh outright. The id at node+0x14 sits in the **0x2000** namespace, which
+the dispatcher at 0x80015A48 resolves as `52 * id + 0x24` from the model base — the mesh
+header stride, 1-based — so `0x2000 | n` addresses mesh `n - 1`.
+
+**Every key carries a scale**, three components in the rotation's own 4096 = 1.0 fixed point,
+at `key+0x3C` for an actor and `key+0x40` for a prop, and the handlers interpolate it between
+keys exactly as they do position — each field paired with the same field one stride on:
+
+```
+8001F3B0  lw $a0, 0x3c($s4)     ; this key's scale
+8001F3B4  lw $a1, 0x88($s4)     ;   against the next key's (0x3C + 0x4C)
+8001F454  lw $v0, 0x3c($s4)     ; and the three components land at
+8001F45C  sw $v0, 0x20($s6)     ;   entity+0x28..0x30  (s6 = entity + 8)
+```
+
+Uka Uka swells and shrinks through his own cutscene on nothing but this track, pulsing
+between 0.88 and 1.06 — a scene played without it stands rigid.
+
+**Rotation is slerped, not stepped.** Position and scale go component by component through
+the scalar interpolator at 0x80015304; the quaternion goes whole, through a routine of its
+own that opens on the two quaternions' dot product:
+
+```
+8001F324  addiu $a0, $s4, 0x20    ; this key's quaternion
+8001F328  addiu $a1, $s4, 0x6c    ;   and the next key's, one stride on
+8001F32C  addiu $a2, $s6, 0x10    ; into entity+0x18
+8001F350  jal   0x80020b44        ;   -> 0x80020680: dot product, then slerp
+```
+
+Hold the rotation between keys instead and a character snaps from one facing to the next
+rather than turning through it.
+
+### 9.11.1 A key list ends at a zero duration — **certain**
+
+Nothing else bounds it: not the node's window, not the keys running consecutively. The
+first key's duration is tested before any search, and the search stops at the *next* zero.
+Both handlers say it in the same shape, the actor's here and the prop's at 0x8001EB98:
+
+```
+8001F1B8  addiu $a2, $v1, 0x30    ; the key array
+8001F1BC  lw    $v0, 4($a2)       ; the first key's duration
+8001F1C4  beqz  $v0, 0x8001f210   ;   zero -> no search at all: this key, held
+8001F1FC  addiu $a1, $a1, 0x4c    ; otherwise walk,
+8001F200  lw    $v0, ($a1)        ;   reading the next duration
+8001F208  bnez  $v0, 0x8001f1d0   ;   and stop when it is zero
+8001F210  move  $a1, $a2          ; the chosen key -> $s4, the pose source
+```
+
+So the zero-duration record is a **key**, not a terminator to discard: it is the endpoint the
+previous segment interpolates towards, and the pose the node holds once the tick passes it.
+100 nodes across the game are nothing but one such key — a node standing still for its whole
+window.
+
+Measured on the corpus: 129 scenes, 177 actors, 1790 props, 8393 keys. Requiring a non-zero
+duration instead loses all 100 static nodes and the final pose of every other track. In
+`level_intro_cortexlab` that is the whole of Cortex: the node holding him on stage for ticks
+149..271 is one of the hundred, so he never appears, and the node that carries him off at
+272..287 loses the key he shrinks into — so he grows into the sky instead of dwindling out of
+it.
+
+### 9.11.2 A node's id is biased by its first played frame — **certain**
+
+The id at node+0x14 is not what the node plays. The handler adds the play range's start to it
+and stores the sum as the entity's animation id:
+
+```
+8001F2FC  lhu   $v0, ($t0)        ; t0 = node+0x14, the id, unsigned
+8001F300  lhu   $v1, 4($t0)       ;   + node+0x18, the range's first frame
+8001F308  addu  $v0, $v0, $v1
+8001F30C  sh    $v0, 0x74($s6)    ;   -> entity+0x7C  (s6 = entity + 8)
+```
+
+That is why ids like `0x3FFF`, `0x3FF7` and `0x3F32` look like they name nothing: each is
+biased by its own play start, and the sum lands in the 0x4000 vertex animation namespace,
+where §9.1's decoder splits it — `(id & 0xF80) >> 7` indexes the descriptor table at
+`model+0x44`, bounds-checked against the count at `model+0x40`:
+
+```
+80019B00  addiu $v0, $zero, 0x4000  ; the vertex animation namespace
+80019B1C  andi  $v1, $s2, 0xf80     ; the id's clip field
+80019B20  lw    $v0, 0x40($s1)      ;   against the clip count
+80019B24  sra   $a1, $v1, 7
+80019B34  lw    $v1, 0x44($s1)      ; descriptor[clip], stride 24
+```
+
+Every actor node in the game — 177 of 177 — resolves this way, in namespace and inside the
+count. `level_ending_evil_shot2` carries `0x3F32` and plays 206..423: 0x3F32 + 206 = 0x4000,
+clip 0. `evil_shot3` carries `0x3FF7` and plays 9..205: 0x3FF7 + 9 = 0x4000. Both name the
+same clip index in their own file — the ranges are numbered across a cutscene cut over
+several `.mdl` files, and the bias absorbs exactly that.
+
+This settles what `0x3FFF` is. It is not a camera marker and it does not "name nothing": it is
+an id one short of `0x4000`, carried by a node that starts at frame 1. Reading it as a camera
+put the viewpoint inside the lead's head; reading it as unnamed and guessing the clip from
+range lengths happened to work on the files that were checked, and is now gone.
+
+### 9.11.3 The played frame is zero-based — **certain**
+
+The handler counts from the node's window, not from the play range, and subtracts the range's
+start again before storing:
+
+```
+8001F218  lw    $a0, 0xc($t1)     ; the scene clock, 16.16
+8001F224  subu  $a2, $a0, $v0     ;   - the window's start
+8001F22C  subu  $a2, $a2, $v1     ;   - node+0x20, a start delay
+8001F230  bgez  $a2, 0x8001f244   ; before that -> frame 0
+8001F244  lw    $v0, 0x10($t0)    ; node+0x24: zero loops, anything else once
+8001F2A4  div   $zero, $a2, $v0   ;   looping is a modulo of span+1
+8001F2E8  move  $a1, $a0          ;   and both clamp at span-1
+8001F2F4  subu  $a1, $a1, $v0     ; back to zero-based
+8001F2F8  sw    $a1, 0x70($s6)    ;   -> entity+0x78, 16.16
+```
+
+`span` is `play_end - play_start`. The mode word is tested only against zero (0x8001F24C), so
+`20` and `9` and every other non-zero value mean the same thing: play once and hold the last
+frame. There is no small enum there.
+
+**The untargeted id `0x3FFF` marks the shot's lead, not a camera.** One node per cutscene
+carries it, spanning the shot. In `cutscene/uka/data.mdl` the node with a readable id plays a
+20-frame clip over ticks 0..19 while this one plays frames 1..272 over 20..311 — the whole
+performance.
+
+| Offset | Type | Meaning |
+| --- | --- | --- |
+| +0x00 | u32 | start tick |
+| +0x04 | u32 | duration; consecutive keys tile the node's window |
+| +0x0C..0x14 | 3 × i32 | position, model units |
+| +0x24..0x30 | 4 × i32 | quaternion, 4096 = 1.0 |
+| +0x40..0x48 | 3 × i32 | scale, 4096 = 1.0 |
+
+**A node's window is its mesh's visibility.** Outside it the handler clears bit 15 of the
+entity's flag word, or zeroes the word outright, and the draw path tests that bit:
+
+```
+8001EDBC  lw   $v0, 8($s7)        ; the entity flag word
+8001EDC4  and  $v0, $v0, $v1      ; v1 = 0xFFFF7FFF -- clear bit 15
+8001F4CC  sw   $zero, 8($a0)      ; or drop the word entirely
+80021258  andi $v0, $a2, 0x8000   ; and the draw path asks for it
+```
+
+So a mesh that a node owns is drawn only while one of its windows is open; a mesh no node
+owns is scenery and always drawn. `level_ending_evil_shot4` is the case that makes it plain:
+19 meshes, one actor, and **137 prop tracks** over meshes 1 and 5..17. At tick 1133 six of
+them are open, at 1523 only two. Ignore the tracks and all fourteen props stand on the origin
+at once, which is exactly what the scene looks like when they are missed.
+
+**The type word is a table index.** `0x80058B00` is not a list of handlers but an array of
+**16-byte records**, one per node type, and the spawner indexes it with the node's own type:
+
+```
+8001FFF0  lw    $v0, ($s2)          ; the model+0x4C array, self-relative
+8001FFF8  addu  $a0, $s2, $v0       ;   -> the node
+8001FFFC  lw    $v0, ($a0)          ; node+0x00 : the type word
+80020004  sll   $v0, $v0, 4         ;   16 bytes per record   <-- STRIDE 16
+80020008  addu  $v0, $v0, $s4       ;   s4 = 0x80058B00
+8002001C  jalr  $v0                 ; slot +0x00 : construct the entity
+```
+
+Slot `+0x00` builds the entity, slot `+0x04` is the per-tick update — the handlers above.
+Types 0 to 5 are populated; 6 and 7 are zero.
+
+**The camera struct is decoded.** The frame renderer itself rebuilds the camera's matrix
+every frame, at 0x80018C54 calling 0x80014540, and that function names every source field:
+
+```
+80014554  lw    $v0, 0x38($s0)      ; +0x38 : countdown, decremented to zero
+80014570  addiu $a0, $s0, 0x54      ; +0x54..0x58 : three i16 ANGLES (4096 = a turn)
+80014574  addiu $s1, $s0, 0x74      ; +0x74 : the MATRIX
+80014578  jal   0x8003278c          ;   RotMatrix -- the sine table at 0x80068BD4
+80014580  lbu   $v0, 0x94($s0)      ; +0x94 : byte flag --
+80014590  jal   0x8003264c          ;   apply the SCALE at +0x64..0x6C (0x1000 = 1.0)
+80014598  lw    $v0, ($s0)          ; +0x00..0x08 : three i32, scaled and stored to
+80014608  sw    $t0, 0x88($s0)      ;   the matrix translation at +0x88..0x90
+```
+
+With the draw path (§above) this closes the projection equation:
+
+```
+screen = RotMatrix(angles at +0x54) · (world − eye at +0x0C..0x14)
+         + scale · offset at +0x00..0x08,
+         projected with H at +0x18, centred by OFX/OFY from the viewport
+```
+
+Every term has an instruction: the eye subtraction at 0x8001D920, the compose at 0x8001DA28,
+H into GTE control 26 at 0x80018E94, OFX/OFY from the viewport's rectangle at 0x80018E84.
+The menu is the worked example: it initialises its cameras (0x80014388 — called **from the
+overlay**, at 0x800B37E4), leaves the eye and angles at zero, writes 400 to H and 0x400 or
+0x578 into the +0x08 offset — an identity camera pushing the world 4 to 5.5 units deep,
+which is exactly how menu models, authored around the origin, land on screen.
+
+**A camera is computed, not stored.** Searching every code image for the one signature a
+camera setter must have — two of the three angle halfwords at `+0x54..0x58` written on one
+base — finds eight sites, and `menu.bin`'s at 0x800B5978 writes all three and every other
+field besides. It takes an object and derives the whole camera from it:
+
+```
+800B598C  jal   0x8001e48c        ; find the object with this id
+800B59A0  lw    $v1, 0x58($s0)    ; yaw = atan2(obj+0x58 - obj+0x3C,
+800B59A8  lw    $v0, 0x50($s0)    ;              obj+0x50 - obj+0x34) - 0x400
+800B59B4  jal   0x8001463c        ;   0x8001463C is atan2; 4096 is a full turn
+800B59C4  sh    $v0, 0x54($s1)    ; camera yaw
+800B59C8  sh    $zero, 0x56($s1)  ; pitch and roll are always zero
+800B59D0  lhu   $v0, 0x40($s0)
+800B59E4  sw    $v0, 0x18($s1)    ; H = (i16)(obj+0x40) >> 2 + 0x200
+800B59F0  sw    $v0, 0xc($s1)     ; eye = obj+0x30..0x38
+800B5A14  sw    $zero, ($s1)      ; offset = (0, -(obj+0x34), obj+0x58)
+800B5A1C  sw    $v0, 4($s1)
+800B5A28  sw    $v0, 8($s1)
+```
+
+So there is nothing per-scene to read: the camera is a **function of one object's fields**,
+recomputed every frame. A pitch of zero throughout says these shots are level — the camera
+turns and dollies but never tilts. The object arrives from 0x8001E48C, which walks the
+count-prefixed self-relative array the current context keeps at `+0x28` and returns the entry
+whose `+0x0C` matches the id it is given; `menu.bin`'s only call passes **id 1**. Which object
+that is for a cutscene, and whether the cutscene path uses this setter or one of the other
+seven, is **?unknown?** — the wrapper at 0x800B5A40 is reached neither by a call nor through
+any pointer visible in the images, so its caller is resolved at run time.
+
+**The graph is a tree, not a flat list.** `model+0x48` is 1 for both cutscenes measured, and
+its single `model+0x4C` pointer resolves to the *first* record of the object-graph span —
+`0xCB5C` in `level_ending_good_shot3`, which is `T(0x1C)` itself. The nodes this section
+reads are found by walking the span and matching shape; the game reaches them from that root.
+How the root enumerates its children is **?unknown?**, so a node found by shape is a node the
+game *may* visit, not one it certainly does.
+
+**Cameras are overlay-owned.** Counting calls per overlay: `menu.bin` initialises two
+cameras and renders through three; `warp.bin` initialises one, renders through two, and is
+the one caller of the follow function 0x80013F44, which eases the eye at `+0x0C` and H at
+`+0x18` through its *arguments*. That last point bounds what a static sweep can prove:
+absolute-address sweeps see only pointers formed by `lui/addiu`, and a camera passed in a
+register is written invisibly. Two earlier negatives in this section's history overreached
+exactly there — "nothing fills a MATRIX at +0x74" (0x80014540 does, through a register) and
+"nothing writes through the camera pointer" (the follow function does, through an argument).
+What still holds: no node **entity** can *be* the camera struct — a node entity keeps its
+quaternion at +0x18..0x24 where the camera keeps H — and no node constructor makes one.
+A copy bridge in overlay code, entity fields into camera fields, is not excluded. What is
+excluded is the `0x3FFF` node: that is the shot's lead actor, and reading it as the camera
+put the viewpoint inside his head while hiding him from the rest of his own cutscene.
+
+What does write a camera is overlay code. A gameplay mode builds a target camera on the stack
+and eases the live one toward it: `warp.bin` at 0x800B812C calls 0x80013F44, which closes a
+quarter of the gap in the screen distance at `+0x18` and a fraction of the gap in position
+each tick. The menu initialises its camera at 0x800B37E4, writes `0x190` (400) to `+0x18`,
+and copies a 44-byte transform from the global `0x8005A9A0` into `camera+0xBC`.
+
+An overlay owns **several** cameras, one per view it draws: extracting the second argument at
+every call of the renderer gives `menu.bin` three — `0x800B9538` (seven calls), `0x800B9F1C`
+(one) and one more reached through a register — and `warp.bin` two, `0x8009F734` (five calls,
+and it lies below the overlay's own image) and `0x800BF1A8`. Sweeping each overlay for every
+absolute access to those structs shows the same shape every time: `+0x08` and `+0x18` are
+written, `menu.bin` fills `+0xBC..0xD4` as well, and **not one of them is ever given a
+position at `+0x0C..0x14` or a matrix at `+0x74`**. Those fields are filled through pointers
+the code resolves at run time, which is where a purely static read of this executable stops.
+
+The data agrees with the code. A 33° lens framing `level_ending_good_shot3`'s cast would have
+to stand about 7.5 units back — raw `(-47, -247, 2061)` at tick 200 — and a sweep of every
+int32 triple in that file finds **no position anywhere near it**: nothing in the model stands
+further back than z ≈ 5.5. The camera is not in the file, from either direction.
+
+**How the shot is actually projected.** The frame renderer loads the GTE straight from the
+camera struct, and the matrix at `+0x74` is a full libgte `MATRIX` — rotation *and*
+translation, feeding control registers 0..7:
+
+```
+80018E84  .word cop2               ; control 24, 25 : OFX, OFY -- the screen centre,
+80018E88  .word cop2               ;   computed from the viewport at a0 and divided by 640
+8001E8C   lw    $t3, 0x18($s7)     ; control 26 : H, the projection distance
+80018E94  .word cop2
+80018E98  addiu $v0, $s7, 0x74     ; the camera MATRIX
+80018E9C  lw    $t4, ($v0)         ;   -> control 0..4 (rotation)
+800018EB4 lw    $t6, 0x10($v0)     ;   -> control 5..7 (translation)
+```
+
+So three runtime numbers decide framing: `H` from `camera+0x18`, the screen centre from the
+**viewport** struct the renderer takes as its first argument, and the MATRIX. The menu's own
+source block for that matrix — the 44 bytes at `0x8005A9A0` it copies into the camera — is
+built at 0x800239E4 as **zero position with unit scale**, an identity camera at the origin.
+Reproducing a cutscene's framing therefore needs the values only run time holds. The decoded
+struct says exactly which: break at the entry of 0x80014540 during a cutscene and read the
+camera's `+0x0C..0x14` (eye), `+0x54..0x58` (angles), `+0x00..0x08` (offset) and `+0x18` (H).
+Four numbers, and the shot is reproducible. **confirmed** (the type table, the handlers, the
+id resolution, the scale track, the visibility bit, the camera struct and its rebuild, and
+the negatives as scoped above) / **?unknown?** (the cutscene's camera values).
 
 ---
 
@@ -1901,10 +2271,23 @@ Stated precisely, with the measurement that bounds each one.
 
 **Hierarchy**
 
-* Nothing in this document places one mesh relative to another. Object placement is a separate
-  key track outside the MDL (§9.7) — the transform is written into the runtime instance, not
-  read from the file — so a 33-mesh model still has no documented joint or parent
-  relationship, and where that key track is stored was not traced.
+* Nothing in this document places one mesh relative to another: a 33-mesh model still has no
+  documented joint or parent relationship. Placement itself is no longer missing — §9.11
+  reads it, and a node names its own target, a mesh or a clip, rather than depending on an
+  outside binding.
+* **The type-2 node** (keys at node+0x1C, stride 0x28, handler 0x8001EDFC, id namespace
+  0x1000). Twelve in the corpus. It writes a position like the others, but what it drives
+  and what the rest of its 0x28 bytes hold is unread.
+* **The rest of the track dispatch table** at 0x80058B00. Eighteen handlers walk the same
+  object graph; three are decoded (0x8001F0D4 actors, 0x8001EAA4 props, 0x8001EDFC partly).
+  The others — 0x80021238, 0x8002128C, 0x80021330, 0x8002141C, 0x80021604, 0x80021708,
+  0x80021770, 0x80021798, 0x80021940, 0x80021990, 0x80021A1C, 0x8001F4F8, 0x8001F828,
+  0x8001FCDC — are unread, and each implies a track type the object graph can hold.
+* **A cutscene's camera path.** §9.11 settles that it is not in the MDL; where the overlay
+  keeps it is not traced. `menu.bin` never writes the camera's position field directly, so
+  the cutscene path either copies a block in (as its own screens do, from 0x8005A9A0) or
+  eases toward a target the way `warp.bin` does. Reproducing a shot's framing needs that
+  answer.
 
 **Container**
 
@@ -1915,6 +2298,14 @@ Stated precisely, with the measurement that bounds each one.
   `group.bytes` sizes both the buffer and the CdRead, but the splitter at 0x800126F4 places
   entry *i* at `(sector[i] − sector[first]) * 2048`, which for group 0 reaches sector 6519
   while the buffer holds 6516.
+* The **code overlays** are readable now, which is how §9.1's name tables and §9.11's node
+  handlers were found, but only their entry conditions are mapped. `overlays/modes/*.bin` is
+  raw MIPS with no header stating its link address; the address is recovered by sweeping
+  every candidate base and scoring how many of the overlay's own `jal` targets land exactly
+  on a function prologue. For `warp.bin` and `menu.bin` alike the winner is
+  **0x800B32B4** — 24 of 36 internal calls, against 4 for the runner-up — which also means
+  only one mode overlay is resident at a time. What each overlay does with the resident
+  engine beyond that is unread.
 * The internal structure of the 12 `overlays/text/*.bin` beyond "leading id, then 4-byte
   aligned NUL-terminated strings". They contain absolute 0x800Axxxx pointers, so something
   relocates them at load.

@@ -70,22 +70,33 @@ Vec3 = tuple[float, float, float]
 def name_hash(name: str) -> int:
     """The game's name hash, `sum(name[i] * (i + 1))` with i 1-based (0x8001534C).
 
-    It is a sum, not a mix, so it collides freely -- HIT and HOP both hash to 470.
-    Treat a match as a hint and the hash itself as the identity.
+    It is a sum, not a mix, so it collides freely -- BANK and HOLD both hash to
+    730. Treat a match as a hint and the hash itself as the identity.
     """
     return sum(ord(c) * (i + 1) for i, c in enumerate(name))
 
 
-# Words tried against the 1037 stored hashes. 564 of them match one of these, and
-# the distribution reads like an animation set (BREATHE 114, WIN 108, RUN 40...),
-# which is the only reason to believe any of it: no name table survives in the
-# data, so a "resolved" name is a guess that reproduces the hash, never a fact.
-# The words that matched nothing have been dropped rather than left as decoration.
+# These are the game's own words, not guesses. Each minigame overlay in the DAT
+# (`overlays/modes/*.bin`) opens with a count word and then a table of 4-byte
+# aligned, NUL-padded animation names -- the very strings the loader hands to
+# the hash at 0x8001534C. Thirty-five distinct names come out of the thirteen
+# tables, from `crate.bin`'s twelve (BREATHE, MEDIUM, HIT, DIE, JUMP, ATTACK,
+# PICKUP, HOLD, ...) to `oxide.bin`'s four.
+#
+# Four more (LOSE, LOSE_BREATHE, START, WIN_BREATHE) are not in a head table but
+# do appear as strings elsewhere in the overlays, so they are kept; every other
+# word this list used to guess at -- BOUNCE, FLY, HOP, LAUGH, OPEN, SINK, SLEEP,
+# STOP, SWING, TURN, WALK -- appears nowhere in the game and has been dropped.
+# Dropping HOP settles the old HIT/HOP collision in HIT's favour.
+#
+# Together they name 701 of the 1037 clips, and only two hashes stay ambiguous:
+# BANK/HOLD and BARGE/SLIDE, both pairs genuinely present in the tables.
 _CANDIDATE_NAMES = (
-    "ATTACK", "BARGE", "BOUNCE", "BREATHE", "DIE", "FALL", "FLY", "HIT", "HOP",
-    "JUMP", "LAUGH", "LOSE", "LOSE_BREATHE", "OPEN", "PICKUP", "PUSH", "RUN", "SINK",
-    "SLEEP", "SLIDE", "START", "STOP", "SWIM", "SWING", "TAUNT", "TURN", "WALK",
-    "WIN", "WIN_BREATHE",
+    "ATTACK", "BANK", "BARGE", "BREATHE", "DAZED", "DIE", "FALL", "FIRE1",
+    "FIRE2", "FIRE3", "FLIP", "HIT", "HOLD", "HOLD_SLOW", "HOLD_THROW", "IDLE0",
+    "IDLE1", "IDLE_A", "JUMP", "KICK", "LIGHT", "LOSE", "LOSE_BREATHE", "MEDIUM",
+    "MINE", "PICKUP", "PUSH", "RECOIL", "RUN", "SKATE", "SLIDE", "START", "SWIM",
+    "TAUNT", "TAUNT_A", "TAZING", "TRANS", "WIN", "WIN_BREATHE",
 )
 
 NAME_HASHES: dict[int, tuple[str, ...]] = {}

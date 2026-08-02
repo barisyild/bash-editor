@@ -16,6 +16,7 @@ from OpenGL import GL
 from crashbash.formats.anim import Animation
 from crashbash.formats.mdl import Mesh, Model
 from crashbash.formats.tex import TICKS_PER_SECOND
+from crashbash.scene import Scene, rotation_matrix
 
 from .atlas import Atlas, build as build_atlas
 
@@ -231,6 +232,11 @@ class ModelView(QOpenGLWidget):
         self._dirty = False
         self._animation: Animation | None = None
         self._frame = 0
+        # Scene playback: every actor posed and placed at one scene tick, seen
+        # through the shot's own camera. Mutually exclusive with a single clip.
+        self._scene = None
+        self._scene_clips: list = []
+        self._scene_tick = 0
         # Row spans whose position/normal columns have been rewritten in place
         # and still have to reach the VBO. Drained in paintGL rather than at the
         # call site so the widget's context is guaranteed current.
@@ -274,6 +280,9 @@ class ModelView(QOpenGLWidget):
         self._hidden.clear()
         self._animation = None
         self._frame = 0
+        self._scene = None
+        self._scene_clips = []
+        self._scene_tick = 0
         self._atlas = build_atlas(pack)
         self._atlas_dirty = True
         self._texture_tick = 0.0
@@ -331,6 +340,33 @@ class ModelView(QOpenGLWidget):
         # away the angle the user chose.
         self.frame_model()
 
+    def set_scene(self, scene: Scene | None, clips=None, tick: int | None = None) -> None:
+        """Play the model's whole cutscene rather than one clip.
+
+        A full rebuild, because every actor's mesh changes at once and the
+        placement moves them outside the framing radius the single-clip path
+        assumes.
+        """
+        self._scene = scene
+        self._scene_clips = list(clips or [])
+        if scene is not None:
+            self._animation = None
+            self._scene_tick = scene.start if tick is None else tick
+        self._rebuild()
+        self.frame_model()
+
+    def set_scene_tick(self, tick: int) -> None:
+        """Scrub the scene clock. Every actor reposes; the camera follows."""
+        if self._scene is None or tick == self._scene_tick:
+            return
+        self._scene_tick = int(tick)
+        self._rebuild()
+        self.update()
+
+    @property
+    def scene_tick(self) -> int:
+        return self._scene_tick
+
     def set_frame(self, frame: int) -> None:
         """Scrub to a frame of the current clip. Cheap enough to call per tick."""
         animation = self._animation
@@ -354,16 +390,57 @@ class ModelView(QOpenGLWidget):
         never writes it back into the mesh -- so the animated mesh is the only
         one that differs from the file.
 
+        Under scene playback the mesh is posed by whichever actor is on stage
+        and then moved into place by that actor's track, because a scene keeps
+        its cast at the origin and positions them from the object graph.
+
         The length check is belt and braces: a clip's vertex count matches its
         mesh in every clip that names one, so the fallback should never fire,
         but a short pose would otherwise index out of the array.
         """
+        if self._scene is not None:
+            placed = self._scene_positions(mesh)
+            if placed is not None:
+                return placed
         animation = self._animation
         if animation is not None and animation.mesh_index == mesh.index:
             pose = animation.pose_array(min(self._frame, animation.frame_count - 1))
             if pose.shape[0] >= len(mesh.positions):
                 return pose[: len(mesh.positions)] * AXIS_FLIP
         return np.asarray(mesh.positions, dtype=np.float32) * AXIS_FLIP
+
+    def _scene_positions(self, mesh: Mesh) -> np.ndarray | None:
+        """This mesh posed and placed for the current scene tick, or None.
+
+        None means "no node owns this mesh" -- scenery, which stays where the
+        file put it. A mesh that does have a node is visible only while one of
+        its windows is open, the way the game clears the entity's draw bit
+        outside it; off stage it collapses to a point rather than standing at
+        the origin in the middle of the set.
+        """
+        scene = self._scene
+        if mesh.index not in scene.mesh_indices:
+            return None
+        tick = self._scene_tick
+        for actor in scene.actors_at(tick):
+            if actor.mesh_index != mesh.index:
+                continue
+            clip = self._scene_clips[actor.clip_index]
+            pose = clip.pose_array(actor.frame(tick, clip.frame_count))
+            if pose.shape[0] < len(mesh.positions):
+                break
+            position, rotation, scale = actor.track.at(tick)
+            placed = (pose[: len(mesh.positions)] * scale) \
+                @ rotation_matrix(rotation).T + position
+            return (placed * AXIS_FLIP).astype(np.float32)
+        for prop in scene.props_at(tick):
+            if prop.mesh_index != mesh.index:
+                continue
+            position, rotation, scale = prop.track.at(tick)
+            rest = np.asarray(mesh.positions, dtype=np.float64)
+            placed = (rest * scale) @ rotation_matrix(rotation).T + position
+            return (placed * AXIS_FLIP).astype(np.float32)
+        return np.zeros((len(mesh.positions), 3), dtype=np.float32)
 
     def _repose(self) -> None:
         """Refill the animated mesh's position and normal columns for `_frame`.
@@ -598,7 +675,16 @@ class ModelView(QOpenGLWidget):
         self._dirty = True
 
         bounds = self._model.bounds
-        if bounds is not None:
+        cast = self._cast_extent()
+        if cast is not None:
+            # Watching a scene, frame the cast rather than the set. A cutscene
+            # carries its sky as a mesh 50 units across around actors barely two
+            # tall, so the file's own bounds pull the view back until nobody on
+            # stage is bigger than a speck.
+            lo, hi = cast
+            self._center = ((lo + hi) / 2).astype(np.float32)
+            self._radius = max(float(np.linalg.norm(hi - lo) / 2), 1e-3)
+        elif bounds is not None:
             cx, cy, cz = bounds.center
             self._center = np.array([cx, -cy, -cz], dtype=np.float32)
             self._radius = max(float(bounds.radius), 1e-3)
@@ -608,12 +694,59 @@ class ModelView(QOpenGLWidget):
             self._center = ((lo + hi) / 2).astype(np.float32)
             self._radius = max(float(np.linalg.norm(hi - lo) / 2), 1e-3)
 
-        extent = self._clip_extent()
+        extent = None if cast is not None else self._clip_extent()
         if extent is not None:
             lo = np.minimum(extent[0], self._center - self._radius)
             hi = np.maximum(extent[1], self._center + self._radius)
             self._center = ((lo + hi) / 2).astype(np.float32)
             self._radius = max(float(np.linalg.norm(hi - lo) / 2), 1e-3)
+
+    def _cast_extent(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """Viewport-space box around everything a node puts on stage, over the
+        whole scene, or None when no scene is playing.
+
+        The whole scene rather than the current tick, so the view holds still
+        while it plays instead of breathing with whoever is on screen.
+        """
+        scene, model = self._scene, self._model
+        if scene is None or model is None:
+            return None
+        low: list[np.ndarray] = []
+        high: list[np.ndarray] = []
+        for actor in scene.actors:
+            # Actors are the subject. Props are included only when a scene has
+            # no actors at all: `level_ending_evil_shot4` throws debris twenty
+            # units wide, and framing that pulls the view outside the sky dome,
+            # which then fills the screen with its own back face.
+            mesh = model.meshes[actor.mesh_index]
+            clip = self._scene_clips[actor.clip_index]
+            rest = np.asarray(mesh.positions, dtype=np.float64)
+            for key in actor.track.keys:
+                placed = (rest * key.scale) @ rotation_matrix(key.rotation).T \
+                    + key.position
+                low.append(placed.min(axis=0))
+                high.append(placed.max(axis=0))
+            # A clip can carry a limb well outside the rest pose, so let the
+            # extremes of the animation widen the box too.
+            span = clip.pose_array(0)
+            if span.shape[0] >= len(mesh.positions):
+                low.append(span[: len(mesh.positions)].min(axis=0))
+                high.append(span[: len(mesh.positions)].max(axis=0))
+        if not low:
+            for prop in scene.props:
+                rest = np.asarray(model.meshes[prop.mesh_index].positions,
+                                  dtype=np.float64)
+                if not len(rest):
+                    continue
+                for key in prop.track.keys:
+                    placed = (rest * key.scale) @ rotation_matrix(key.rotation).T \
+                        + key.position
+                    low.append(placed.min(axis=0))
+                    high.append(placed.max(axis=0))
+        if not low:
+            return None
+        return (np.minimum.reduce(low) * AXIS_FLIP,
+                np.maximum.reduce(high) * AXIS_FLIP)
 
     def _clip_extent(self) -> tuple[np.ndarray, np.ndarray] | None:
         """Viewport-space box covering every keyframe of the current clip.
@@ -645,7 +778,34 @@ class ModelView(QOpenGLWidget):
         """Pull back far enough to see everything, leaving the orbit angles be."""
         self._pan = np.zeros(3, dtype=np.float32)
         self.distance = self._radius * 2.8
+        # A scene's backdrop is a mesh wrapped around the whole set, so backing
+        # out past it turns the view into a solid ball of its own outside face.
+        # Stay inside whatever encloses the shot.
+        enclosing = self._enclosing_radius()
+        if enclosing is not None:
+            self.distance = min(self.distance, enclosing * 0.85)
         self.update()
+
+    def _enclosing_radius(self) -> float | None:
+        """Distance from the framed centre to the nearest mesh that wraps it.
+
+        Only meaningful while a scene is playing; scenery a node never places
+        stays where the file put it, so the test is against its own extent.
+        """
+        if self._scene is None or self._model is None:
+            return None
+        owned = self._scene.mesh_indices
+        radii = []
+        for mesh in self._model.meshes:
+            if mesh.index in owned or not mesh.positions:
+                continue
+            points = np.asarray(mesh.positions, dtype=np.float64) * AXIS_FLIP
+            lo, hi = points.min(axis=0), points.max(axis=0)
+            if not ((lo < self._center) & (self._center < hi)).all():
+                continue  # does not wrap the shot -- it is set dressing
+            radii.append(float(np.abs(np.concatenate(
+                [hi - self._center, self._center - lo])).min()))
+        return min(radii) if radii else None
 
     def reset_view(self) -> None:
         self.yaw = math.radians(35.0)
@@ -789,12 +949,13 @@ class ModelView(QOpenGLWidget):
         if not self._vertex_data.size:
             return
 
+        aspect = self.width() / max(self.height(), 1)
         eye = self._eye()
         target = self._center + self._pan
-        view = _look_at(eye, target, np.array([0.0, 1.0, 0.0], dtype=np.float32))
-        aspect = self.width() / max(self.height(), 1)
+        up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         near = max(self._radius * 0.01, 1e-3)
         far = max(self.distance + self._radius * 6.0, near * 10)
+        view = _look_at(eye, target, up)
         mvp = _perspective(45.0, aspect, near, far) @ view
 
         self._program.bind()

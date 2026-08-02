@@ -319,11 +319,13 @@ class AnimationPanel(QWidget):
     """
 
     animation_changed = Signal(object)  # anim.Animation | None
+    scene_changed = Signal(object)  # scene.Scene | None
     frame_changed = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._animations: list[anim.Animation] = []
+        self._scene = None
         self._playing = False
 
         self.list = QListWidget()
@@ -361,13 +363,33 @@ class AnimationPanel(QWidget):
 
     # -- contents --------------------------------------------------------
 
-    def set_animations(self, animations: list[anim.Animation]) -> None:
-        """Show the clips of a newly opened model, stopping whatever was playing."""
+    def set_animations(self, animations: list[anim.Animation], scene=None) -> None:
+        """Show the clips of a newly opened model, stopping whatever was playing.
+
+        A model that carries a cutscene gets a row of its own above the clips:
+        one clip poses one mesh, but a scene poses the whole cast at once, on
+        its own clock and through its own camera.
+        """
         self.stop()
         self._animations = animations
+        self._scene = scene
         self._loading = True
         self.list.clear()
         self.list.addItem(QListWidgetItem("—  static pose"))
+        if scene is not None:
+            owned = len(scene.mesh_indices)
+            item = QListWidgetItem(
+                f"▣  scene  —  {scene.end - scene.start + 1} ticks, {owned} meshes"
+            )
+            item.setToolTip(
+                f"The whole cutscene over ticks {scene.start}..{scene.end}: "
+                f"{len(scene.actors)} actors playing clips and {len(scene.props)} "
+                f"prop tracks, over meshes {sorted(scene.mesh_indices)}.\n"
+                "A mesh a node owns is drawn only while one of its windows is "
+                "open, as the game does; meshes no node owns are the set and "
+                "stay put. The shot's own camera is not in the file, so orbit."
+            )
+            self.list.addItem(item)
         for clip in animations:
             item = QListWidgetItem(f"{_clip_name(clip)}  —  {clip.frame_count} frames")
             item.setToolTip(self._describe(clip))
@@ -403,10 +425,18 @@ class AnimationPanel(QWidget):
         lines += clip.warnings
         return "\n".join(lines)
 
+    @property
+    def _clip_offset(self) -> int:
+        """Row of the first clip: after the static pose, and the scene if any."""
+        return 2 if self._scene is not None else 1
+
+    def scene_selected(self) -> bool:
+        return self._scene is not None and self.list.currentRow() == 1
+
     def current(self) -> anim.Animation | None:
-        row = self.list.currentRow()
-        if 1 <= row <= len(self._animations):
-            return self._animations[row - 1]
+        row = self.list.currentRow() - self._clip_offset
+        if 0 <= row < len(self._animations):
+            return self._animations[row]
         return None
 
     # -- transport -------------------------------------------------------
@@ -416,13 +446,18 @@ class AnimationPanel(QWidget):
         self.slider.setEnabled(enabled)
 
     def _sync_transport(self, clip: anim.Animation | None) -> None:
+        scene = self._scene if self.scene_selected() else None
         self._loading = True
-        last = max(0, (clip.frame_count - 1) if clip else 0)
+        if scene is not None:
+            last = max(0, scene.end - scene.start)
+        else:
+            last = max(0, (clip.frame_count - 1) if clip else 0)
         self.slider.setMaximum(last)
         self.slider.setValue(0)
         self._loading = False
-        self._set_enabled(clip is not None and clip.frame_count > 1)
-        self.frame_label.setText(f"0 / {last}" if clip else "—")
+        playable = scene is not None or (clip is not None and clip.frame_count > 1)
+        self._set_enabled(playable)
+        self.frame_label.setText(f"0 / {last}" if playable else "—")
 
     @guarded
     def _on_row_changed(self, _row: int) -> None:
@@ -431,10 +466,20 @@ class AnimationPanel(QWidget):
         self.stop()
         clip = self.current()
         self._sync_transport(clip)
+        if self.scene_selected():
+            scene = self._scene
+            self.info.setText(
+                f"Cutscene: ticks {scene.start}..{scene.end}, "
+                f"{len(scene.actors)} actors, {len(scene.props)} prop tracks"
+            )
+            self.scene_changed.emit(scene)
+            return
         if clip is not None:
             self.info.setText(self._describe(clip).replace("\n", " · "))
         elif self._animations:
             self.info.setText(f"{len(self._animations)} clips")
+        if self._scene is not None:
+            self.scene_changed.emit(None)
         self.animation_changed.emit(clip)
 
     @guarded
@@ -449,7 +494,7 @@ class AnimationPanel(QWidget):
         self.stop() if self._playing else self.play()
 
     def play(self) -> None:
-        if self.current() is None:
+        if self.current() is None and not self.scene_selected():
             return
         self._playing = True
         self.play_button.setText("❚❚  Pause")
