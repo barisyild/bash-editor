@@ -766,12 +766,18 @@ class MainWindow(QMainWindow):
             return
         pack = self._sibling_texture_pack(self.entry)
         Path(path).write_bytes(
-            gltf.export_glb(self.model, pack, self.animations, name=stem)
+            gltf.export_glb(self.model, pack, self.animations, name=stem,
+                            scene=self.scene)
         )
         self.settings.setValue("last_export", str(Path(path).parent))
+        shot = ""
+        if self.scene is not None:
+            shot = (f", the shot with {len(self.scene.actors)} actors, "
+                    f"{len(self.scene.props)} props and "
+                    f"{len(self.scene.cameras)} cameras")
         self.statusBar().showMessage(
             f"Wrote {path} — {len(self.model.meshes)} meshes, "
-            f"{len(self.animations)} clips"
+            f"{len(self.animations)} clips{shot}"
         )
 
     def export_textures(self) -> None:

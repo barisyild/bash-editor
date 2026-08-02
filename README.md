@@ -214,6 +214,21 @@ the positions are stored in. The gap is the game's rounding, not a mismatch.
 All 373 models with geometry export, carrying 1037 clips, and an independent glTF
 library reads them all back.
 
+**A cutscene exports as the shot, not just the cast.** Every actor and prop moves
+along its own track, an actor's clip plays on the shot's clock rather than its own,
+and the camera is a real glTF camera carrying the field of view the file names — so
+`level_intro` opens in Blender already framed the way the game frames it, and
+playing the timeline plays the scene. A level exports the same way where it has a
+scene of its own. Everything is sampled once per tick over the shot's window: a
+node's frame mapping is a step function the game recomputes every tick and a camera
+cut is a hard change between two nodes, and neither survives being handed to an
+interpolating exporter as sparse keys.
+
+Two things do not go out. glTF has no visibility track, so a node off stage is
+scaled to zero — the usual convention, and every importer understands it. And a
+particle emitter is a simulation rather than a set of keys, so the sprays are left
+behind; they are still there in the viewport.
+
 In Blender the morph targets arrive as shape keys with the clips driving them, so a
 character can be retargeted with the tools that already exist there.
 
@@ -227,6 +242,14 @@ export** — Blender resamples animation onto its scene's frame grid, and at its
 default 24 fps the clips come back audibly off-beat and measurably off-pose. At
 30 fps the full round trip — export, Blender save, import — reproduces every pose
 exactly, verified against Blender 5.2.
+
+The import does **not** read a shot back. Meshes, clips and textures come home; the
+tracks, the camera and the placement list do not. That is a deliberate stop rather
+than an oversight: those live in the object graph at `T(0x1C)..T(0x4C)`, a region
+the writers have never touched and whose layout is only partly read — the record
+kinds beyond the nodes are still unknown (see `docs/FORMAT.md` §8.3). Rebuilding it
+from a modelling tool's idea of a scene is how you get a disc that boots into a
+crash, so moving a camera in Blender changes the export you look at, not the game.
 
 Colours need one word, because the console uses them at two scales: on a textured
 triangle the colour is a *multiplier* — the blend is `texel * colour / 128`, above
@@ -392,7 +415,7 @@ crashbash/            format library, no GUI dependency
   formats/mdlwrite.py stripping, mesh install and transplant, table sharing
   formats/animwrite.py clip blobs: frame records, keyframes, shared pool
   formats/texwrite.py pixels and palettes replaced inside their slots
-  formats/gltf.py     glTF 2.0 export: geometry, textures, morph animation
+  formats/gltf.py     glTF 2.0 export: geometry, textures, morph animation, shots
   formats/gltfread.py poses back out of a .glb, matched by rest position
   formats/gltfimport.py the import path the GUI drives: mesh, clips, textures
   retarget.py         animation between characters of different proportions

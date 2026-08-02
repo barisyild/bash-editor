@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import struct
 import zlib
 from dataclasses import dataclass, field
@@ -75,23 +76,45 @@ MODE_TRIANGLES = 4
 # PS1 is Y-down with Z into the screen; glTF is Y-up, right-handed, -Z forward.
 AXIS_FLIP = np.array([1.0, -1.0, -1.0], dtype=np.float32)
 
-_IDENTITY_MATRIX = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
-                    0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-
-
-def _node_matrix(rotation, translation) -> list[float]:
-    """A placement record as glTF's column-major 4x4, in the exporter's axes.
+def _node_trs(rotation, translation) -> dict:
+    """A placement record as glTF translation and rotation, in the exporter's axes.
 
     Positions are written out flipped by `AXIS_FLIP`, so the model-space
     transform is conjugated by that flip: the flip is diagonal and its own
     inverse, which makes `F(Rp + t)` into `(F R F)(Fp) + Ft`.
+
+    TRS rather than a `matrix` because glTF forbids a node from carrying a
+    matrix *and* being animated, and a placed mesh can be: `dash_splash/arena`
+    places the very mesh its own clip drives. The rotations are orthonormal to
+    one part in a thousand over all 2689 records, so a quaternion loses nothing.
     """
     flip = AXIS_FLIP.astype(np.float64)
     basis = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
-    matrix = np.eye(4)
-    matrix[:3, :3] = basis * flip[:, None] * flip[None, :]
-    matrix[:3, 3] = np.asarray(translation, dtype=np.float64) * flip
-    return matrix.T.reshape(-1).tolist()
+    basis = basis * flip[:, None] * flip[None, :]
+    out = {}
+    offset = np.asarray(translation, dtype=np.float64) * flip
+    if offset.any():
+        out["translation"] = [float(v) for v in offset]
+    quaternion = _quaternion(basis)
+    if not np.allclose(quaternion, [0.0, 0.0, 0.0, 1.0]):
+        out["rotation"] = [float(v) for v in quaternion]
+    return out
+
+
+def _quaternion(m: np.ndarray) -> np.ndarray:
+    """The (x, y, z, w) quaternion of an orthonormal 3x3 rotation."""
+    trace = float(m[0, 0] + m[1, 1] + m[2, 2])
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        q = [(m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s,
+             (m[1, 0] - m[0, 1]) / s, 0.25 * s]
+    else:
+        i = int(np.argmax([m[0, 0], m[1, 1], m[2, 2]]))
+        j, k = (i + 1) % 3, (i + 2) % 3
+        s = math.sqrt(1.0 + m[i, i] - m[j, j] - m[k, k]) * 2.0
+        q = [0.0, 0.0, 0.0, (m[k, j] - m[j, k]) / s]
+        q[i], q[j], q[k] = 0.25 * s, (m[j, i] + m[i, j]) / s, (m[k, i] + m[i, k]) / s
+    return np.asarray(q, dtype=np.float64)
 
 # The game bakes one animation record per tick. Nothing in the executable states
 # the tick rate, so this is the viewer's assumption carried over -- see the
@@ -282,8 +305,16 @@ def export_glb(
     pack: "tex_module.TexturePack | None" = None,
     animations: list | None = None,
     name: str = "model",
+    scene: "object | None" = None,
 ) -> bytes:
-    """Build a single-file glTF binary holding geometry, textures and clips."""
+    """Build a single-file glTF binary holding geometry, textures and clips.
+
+    Given a `scene` (§9.11) the shot goes out with it: every actor and prop
+    moves along its own track, the camera is a real glTF camera with the field
+    of view the node names, and each actor's clip plays on the shot's clock
+    rather than its own. Without one the file is what it always was -- the
+    meshes at the origin, each clip its own glTF animation.
+    """
     animations = animations or []
     buffer = _Buffer()
 
@@ -337,6 +368,9 @@ def export_glb(
     # Where each mesh ended up, so the placement pass below can hang extra nodes
     # off the one glTF mesh instead of writing its geometry again.
     mesh_nodes: dict[int, tuple[int, int]] = {}
+    # And which morph target each (clip, keyframe) became, so the scene pass can
+    # drive the same targets off the shot's clock instead of the clip's.
+    mesh_targets: dict[int, tuple[list, dict]] = {}
 
     for mesh in model.drawn_meshes:
         groups = _group_triangles(model, mesh, pack)
@@ -396,6 +430,7 @@ def export_glb(
         nodes.append({"mesh": len(meshes) - 1, "name": entry["name"]})
         node_index = len(nodes) - 1
         mesh_nodes[mesh.index] = (node_index, len(meshes) - 1)
+        mesh_targets[mesh.index] = (target_order, target_lookup)
 
         for clip in clips:
             times = np.arange(clip.frame_count, dtype=np.float32) / FRAMES_PER_SECOND
@@ -430,25 +465,37 @@ def export_glb(
     # geometry once per copy would bloat the file for nothing. The first record
     # moves the mesh's own node so the animation channels above keep pointing at
     # a node that is really in the scene.
+    # A mesh a scene node owns is put where its track says, exactly as the
+    # viewport does it, so its placement record is left off -- and a node may
+    # not carry both a matrix and animation channels anyway. Two arenas need
+    # this: `dash_splash/arena` and its crystal twin place a mesh their scene
+    # also drives.
+    scene_meshes = set(getattr(scene, "mesh_indices", ()) or ())
     seen: set[int] = set()
     for instance in model.instances:
         if instance.mesh is None or not instance.is_drawn:
+            continue
+        if instance.mesh.index in scene_meshes:
             continue
         placement = mesh_nodes.get(instance.mesh.index)
         if placement is None:
             continue
         node_index, gltf_mesh = placement
-        matrix = _node_matrix(instance.rotation, instance.translation)
+        trs = _node_trs(instance.rotation, instance.translation)
         if instance.mesh.index in seen:
             nodes.append({
                 "mesh": gltf_mesh,
                 "name": f"{mesh_names[instance.mesh.index]}_copy{instance.index:03d}",
-                "matrix": matrix,
+                **trs,
             })
         else:
             seen.add(instance.mesh.index)
-            if matrix != _IDENTITY_MATRIX:
-                nodes[node_index]["matrix"] = matrix
+            nodes[node_index].update(trs)
+
+    gltf_cameras: list[dict] = []
+    if scene is not None:
+        _export_scene(scene, animations, buffer, nodes, gltf_animations,
+                      gltf_cameras, mesh_nodes, mesh_targets, name)
 
     document = {
         "asset": {"version": "2.0", "generator": "Bash Editor"},
@@ -469,8 +516,166 @@ def export_glb(
         document["samplers"] = [{"magFilter": 9728, "minFilter": 9728}]
     if gltf_animations:
         document["animations"] = gltf_animations
+    if gltf_cameras:
+        document["cameras"] = gltf_cameras
 
     return _pack_glb(document, bytes(buffer.data))
+
+
+def _clip_weight_row(clip, frame_index: int, lookup: dict, width: int) -> np.ndarray:
+    """The morph weights that pose `clip` at one of its own frames.
+
+    The same blend the clip's own animation writes, sampled one frame at a time
+    so a scene can drive it off the shot's clock instead.
+    """
+    row = np.zeros(width, dtype=np.float32)
+    if not 0 <= frame_index < len(clip.frames):
+        return row
+    frame = clip.frames[frame_index]
+    blend = frame.weight / 4096.0
+    row[lookup[(clip.index, frame.key_a)]] = 1.0 - blend
+    if frame.weight:
+        row[lookup[(clip.index, frame.key_b)]] = blend
+    return row
+
+
+def _sampler(buffer: "_Buffer", times: np.ndarray, values: np.ndarray,
+             kind: str) -> dict:
+    """One animation sampler. `kind` is the glTF accessor type, named rather
+    than guessed from the shape -- a morph target list three or four long would
+    otherwise be mistaken for a vector."""
+    return {
+        "input": buffer.scalar(times, minmax=True),
+        "output": (buffer.scalar(values.reshape(-1)) if kind == "SCALAR"
+                   else buffer.vec(values, kind)),
+        "interpolation": "LINEAR",
+    }
+
+
+def _export_scene(scene, animations, buffer, nodes, gltf_animations, gltf_cameras,
+                  mesh_nodes, mesh_targets, name: str) -> None:
+    """Put the shot into the file: the cast on their tracks and the camera.
+
+    Everything is sampled once per tick over the scene's own window rather than
+    written as the file's keys. A track's keys are already one per tick where it
+    matters, the actor's frame mapping is a step function the game recomputes
+    every tick (§9.11.2), and a camera cut is a hard change between two nodes --
+    none of that survives being handed to an interpolating exporter as sparse
+    keys, and a tick is the finest the game itself runs at.
+
+    Visibility is the one thing glTF has no track for. A node off stage is
+    scaled to zero, which is what every exporter does and what every importer
+    understands.
+    """
+    start, end = scene.start, scene.end
+    if end < start:
+        return
+    ticks = np.arange(start, end + 1)
+    times = ((ticks - start) / FRAMES_PER_SECOND).astype(np.float32)
+    clips = {clip.index: clip for clip in (animations or [])}
+    channels: list[dict] = []
+    samplers: list[dict] = []
+
+    kinds = {"translation": "VEC3", "scale": "VEC3", "rotation": "VEC4",
+             "weights": "SCALAR"}
+
+    def add(node_index: int, path: str, values: np.ndarray) -> None:
+        samplers.append(_sampler(buffer, times, values, kinds[path]))
+        channels.append({"sampler": len(samplers) - 1,
+                         "target": {"node": node_index, "path": path}})
+
+    used: set[int] = set()
+    for kind, entries in (("actor", scene.actors), ("prop", scene.props)):
+        for order, entry in enumerate(entries):
+            placement = mesh_nodes.get(entry.mesh_index)
+            if placement is None:
+                continue
+            node_index, gltf_mesh = placement
+            # The `_meshNN` suffix stays at the end: the importer keys a node
+            # back to its mesh off that pattern, anchored, so the role goes in
+            # front of it rather than in its place.
+            label = f"{name}_{kind}{order:02d}_mesh{entry.mesh_index:02d}"
+            if node_index in used:
+                # Two nodes on one mesh: the second gets a node of its own.
+                nodes.append({"mesh": gltf_mesh, "name": label})
+                node_index = len(nodes) - 1
+            used.add(node_index)
+            nodes[node_index]["name"] = label
+
+            translation = np.zeros((len(ticks), 3), dtype=np.float32)
+            rotation = np.zeros((len(ticks), 4), dtype=np.float32)
+            scale = np.zeros((len(ticks), 3), dtype=np.float32)
+            for row, tick in enumerate(ticks):
+                on = entry.track.start <= tick <= entry.track.end
+                position, quaternion, factor = entry.track.at(int(tick))
+                translation[row] = position * AXIS_FLIP
+                # The track's quaternion is (x, y, z, w) and so is glTF's, but
+                # the axis flip negates the two axes it turns around.
+                rotation[row] = (quaternion * np.array([1.0, -1.0, -1.0, 1.0])
+                                 if on else np.array([0.0, 0.0, 0.0, 1.0]))
+                scale[row] = factor if on else 0.0
+            add(node_index, "translation", translation)
+            add(node_index, "rotation", rotation)
+            add(node_index, "scale", scale)
+
+            targets = mesh_targets.get(entry.mesh_index)
+            clip = clips.get(getattr(entry, "clip_index", -1))
+            if targets and clip is not None and targets[0]:
+                order_list, lookup = targets
+                weights = np.stack([
+                    _clip_weight_row(clip, entry.frame(int(tick), clip.frame_count),
+                                     lookup, len(order_list))
+                    for tick in ticks
+                ])
+                add(node_index, "weights", weights)
+
+    # The camera. A shot may cut between several, and they do not overlap, so
+    # one glTF camera per node and the ones not filming are scaled away.
+    for order, camera in enumerate(scene.cameras):
+        gltf_cameras.append({
+            "type": "perspective",
+            "perspective": {"yfov": math.radians(camera.field_of_view),
+                            "znear": 0.05},
+            "name": f"{name}_camera{order:02d}",
+        })
+        nodes.append({"camera": len(gltf_cameras) - 1,
+                      "name": f"{name}_camera{order:02d}"})
+        node_index = len(nodes) - 1
+        translation = np.zeros((len(ticks), 3), dtype=np.float32)
+        rotation = np.zeros((len(ticks), 4), dtype=np.float32)
+        scale = np.zeros((len(ticks), 3), dtype=np.float32)
+        for row, tick in enumerate(ticks):
+            eye, target = camera.at(int(tick))
+            translation[row] = eye * AXIS_FLIP
+            rotation[row] = _look_at(eye * AXIS_FLIP, target * AXIS_FLIP)
+            scale[row] = 1.0 if camera.start <= tick <= camera.end else 0.0
+        add(node_index, "translation", translation)
+        add(node_index, "rotation", rotation)
+        add(node_index, "scale", scale)
+
+    if channels:
+        gltf_animations.append({"name": f"{name}_scene",
+                                "samplers": samplers, "channels": channels})
+
+
+def _look_at(eye: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """A glTF camera rotation, as the quaternion (x, y, z, w).
+
+    glTF points a camera down its own -Z with +Y up, so the basis is built from
+    the eye-to-target direction and turned into a quaternion.
+    """
+    forward = target - eye
+    length = float(np.linalg.norm(forward))
+    if length < 1e-6:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    forward = forward / length
+    up = np.array([0.0, 1.0, 0.0])
+    if abs(float(np.dot(forward, up))) > 0.999:
+        up = np.array([0.0, 0.0, 1.0])
+    right = np.cross(up, -forward)
+    right /= max(float(np.linalg.norm(right)), 1e-9)
+    true_up = np.cross(-forward, right)
+    return _quaternion(np.stack([right, true_up, -forward], axis=1)).astype(np.float32)
 
 
 def _pack_glb(document: dict, binary: bytes) -> bytes:
