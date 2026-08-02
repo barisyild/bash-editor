@@ -277,6 +277,8 @@ class MeshPanel(QWidget):
             item = QListWidgetItem(
                 f"{flag} {names[mesh.index]} — {mesh.vertex_count} verts, "
                 f"{mesh.face_count} tris, {len(mesh.strips)} strips"
+                + (f", {len(mesh.volumes)} volume"
+                   + ("s" if len(mesh.volumes) != 1 else "") if mesh.volumes else "")
             )
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
@@ -966,6 +968,14 @@ class ViewOptions(QWidget):
         self.solid = QCheckBox("Solid", checked=True)
         self.wireframe = QCheckBox("Wireframe")
         self.points = QCheckBox("Points")
+        self.volumes = QCheckBox("Volumes")
+        self.volumes.setToolTip(
+            "The gameplay volume a mesh carries at +0x2C, drawn as a cylinder. "
+            "For a playable character this is its collision body -- Crash stands "
+            "in a 128-unit radius, and his spin mesh widens it to 307. Only 812 "
+            "of the archive's meshes have one, and on the rest of that family "
+            "the volume serves some other purpose than collision."
+        )
         self.textures = QCheckBox("Textures", checked=True)
         self.vertex_colours = QCheckBox("Vertex colours", checked=True)
         self.vertex_colours.setToolTip(
@@ -987,6 +997,7 @@ class ViewOptions(QWidget):
             self.solid,
             self.wireframe,
             self.points,
+            self.volumes,
             self.textures,
             self.vertex_colours,
             self.texture_animation,

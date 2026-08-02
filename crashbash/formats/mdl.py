@@ -105,6 +105,13 @@ TEXTURE_FLAG_ALTERNATE = TEXTURE_FLAG_SWATCH  # old name
 # Low byte of a strip's list entry.
 STRIP_FLAG_UNTEXTURED = 0x01
 
+# The attachment block at mesh+0x2C (§8.4): a u16 of flags, a u16 record count,
+# then that many 16-byte records read as eight i16.
+ATTACHMENT_COUNT = 0x02
+ATTACHMENT_FIRST = 0x04
+ATTACHMENT_STRIDE = 16
+ATTACHMENT_FIELDS = 8
+
 Vec3 = tuple[float, float, float]
 
 
@@ -114,6 +121,29 @@ class Bounds:
     max: Vec3
     center: Vec3
     radius: float
+
+
+@dataclass
+class Volume:
+    """One record of a mesh's attachment block (§8.4).
+
+    For a playable character this is the collision cylinder, and that reading is
+    behavioural in both directions: a replacement whose block was zeroed walked
+    through the crates, and carrying the original's block through the same swap
+    brought the collision back. For the rest of the 1717 records in the archive
+    it is a volume of some other purpose -- `height` matches the mesh's own
+    standing height in only 41 % of them -- so a reader should show it, not
+    trust it.
+
+    `offset`, `radius` and `height` are in world units like a vertex; `height`
+    is negative in 1708/1717, running from the base toward the model's -Y.
+    """
+
+    offset: Vec3
+    radius: float
+    height: float
+    unknown: int  # field 6; 64 for Crash standing, 1360 for his spin body
+    flags: int  # field 7; carries 0x4000 in 1356 of 1717
 
     @property
     def size(self) -> Vec3:
@@ -178,6 +208,8 @@ class Mesh:
     face_texture: list[int] = field(default_factory=list)
     # The owning strip's flag byte, repeated for each of its triangles.
     face_strip_flags: list[int] = field(default_factory=list)
+    # The records of the attachment block at +0x2C, when it has one.
+    volumes: list["Volume"] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -925,9 +957,36 @@ def read_mesh(reader: Reader, index: int, scale: float = GTE_SCALE_SMALL) -> Mes
     mesh.face_texture = decode_texture_runs(
         reader.data, mesh.ptr_texture, max(0, face_count_header)
     )
+    _read_volumes(reader, mesh, scale)
 
     reader.seek(header_end)
     return mesh
+
+
+def _read_volumes(reader: Reader, mesh: Mesh, scale: float) -> None:
+    """Open the attachment block at mesh+0x2C into `mesh.volumes` (§8.4)."""
+    at = mesh.ptr_attachment
+    if not at or at + ATTACHMENT_FIRST > len(reader):
+        return
+    reader.seek(at + ATTACHMENT_COUNT)
+    count = reader.u16()
+    if not 0 < count <= 64:
+        if count:
+            mesh.warnings.append(f"attachment block claims {count} records")
+        return
+    if at + ATTACHMENT_FIRST + ATTACHMENT_STRIDE * count > len(reader):
+        mesh.warnings.append("attachment block runs past the end of the file")
+        return
+    reader.seek(at + ATTACHMENT_FIRST)
+    for _ in range(count):
+        f = reader.array_i16(ATTACHMENT_FIELDS)
+        mesh.volumes.append(Volume(
+            offset=(f[0] * scale, f[1] * scale, f[2] * scale),
+            radius=f[3] * scale,
+            height=f[4] * scale,
+            unknown=f[6],
+            flags=f[7],
+        ))
 
 
 def read_model(data: bytes | Reader, max_meshes: int = 4096) -> Model:

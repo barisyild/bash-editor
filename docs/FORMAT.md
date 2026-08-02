@@ -2738,6 +2738,12 @@ keeps its set — 1971 meshes and 96,232 triangles the reader used to walk strai
 They live in `Model.objects`, apart from `Model.meshes`, because the two arrays are addressed
 differently and `install_mesh` / `transplant_mesh` index the numbered one.
 
+`read_mesh` also opens the attachment block at mesh+0x2C into `Mesh.volumes` — 1717 records
+over 812 meshes, read with no warning anywhere in the corpus — and the viewport draws them as
+cylinders behind a **Volumes** toggle. `mdlwrite` still carries the block as opaque bytes,
+which is right: a writer must move it unchanged, not rebuild it from a decoded reading that
+holds for characters and not for the rest of the family.
+
 Reading the object table was only half of it: the objects still stood where their own vertices
 put them, which piled a level's set on the origin. `read_model` now also reads the placement
 list of §8.5 into `Model.instances`, and `Model.draw_list()` pairs every mesh with the

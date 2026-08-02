@@ -253,6 +253,7 @@ class MainWindow(QMainWindow):
             ("Solid", "solid"),
             ("Wireframe", "wireframe"),
             ("Points", "points"),
+            ("Volumes", "volumes"),
         ):
             checkbox = getattr(self.view_options, attr)
             action = QAction(label, self, checkable=True, checked=checkbox.isChecked())
@@ -480,6 +481,7 @@ class MainWindow(QMainWindow):
         self.view3d.show_solid = options.solid.isChecked()
         self.view3d.show_wireframe = options.wireframe.isChecked()
         self.view3d.show_points = options.points.isChecked()
+        self.view3d.show_volumes = options.volumes.isChecked()
         self.view3d.set_vertex_colours(options.vertex_colours.isChecked())
         self.view3d.set_textured(options.textures.isChecked())
         self.view3d.set_texture_animation(options.texture_animation.isChecked())
