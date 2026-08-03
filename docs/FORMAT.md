@@ -466,8 +466,20 @@ no idiom filter: 385 sites, of which 15 carry model-shaped context. All are acco
 the two packet-fillers already read (`0x80017998`, `0x80017F30`), two EXE false positives
 (`0x8001F438` is a struct copy, `0x8003AD50` a `longjmp`-style register restore), and eleven
 in mode overlays, none of which drives a warp room. **No further reader exists to find by
-static means**, and the mechanism stays **?unknown?** — but the writer's rule is now exact and
-minimal: **`0x24` must not move; `0x20` must not move (crash); `0x28`, `0x08`, `0x44`, `0x50`
+static means.**
+
+**But the uv-move probes shared an untested variable, and it is one this document already
+names as a law.** None of the three grew `model+0x08` — §2.1's *layout boundary*, whose span
+every mesh block and every shared table sits inside, 400/400 including `T(0x24) ≤ T(0x28) ≤
+T(0x08)`. `safeadd2`, the counterpart that works, grows it: `install_mesh` moves the boundary
+over the blocks it appends. So the contrast that looked like "mesh-relative pointers relocate,
+model-relative ones do not" may simply be "material inside the boundary is read, material
+outside it is not" — a rule the corpus states and the shipped writer already honours.
+**uvmove4** tests exactly that: `uvmove`'s copy and pointers with `0x08` (and `0x50`) grown to
+cover it, `0x20` and `0x44` untouched. Textures intact → the boundary is the mechanism, and
+the whole ladder resolves into §2.1's own invariant; still scrambled → the boundary joins
+`0x50` in exoneration and `0x24` is pinned for a reason still unfound. Until then the writer's
+rule stands as measured: **`0x20` and `0x24` must not move; `0x28`, `0x08`, `0x44`, `0x50`
 may.** The far-boundary disc's texture
 state would confirm `0x28`'s side of that line and is still the one unreported observation. A mesh
 drawn through this path would follow a relocated colour table without complaint.
