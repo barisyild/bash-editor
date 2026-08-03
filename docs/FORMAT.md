@@ -309,6 +309,12 @@ The complete minimal model is `fonts/font1.mdl`, 120 bytes: header 0x58, zero me
 (`[0]` + 1 record = 20 bytes) ending at 0x74 `== T(0x1C) == T(0x4C) == T(0x18)`, the 0x18
 count word, and `T(0x44) == base + i32@0x50 == 0x78 == 120`.
 
+One model carries its geometry twice. `cutscene/gamelogo_text.mdl` has two mesh headers, both
+pointing at the same data block, and a **byte-for-byte duplicate of that block** sitting
+unreferenced between the headers and it — 7520 of 7520 bytes identical, same 86 strips, same
+494 triangles, same bounds. A reader that walks headers never sees it; a byte-coverage walk
+does. It is the only model in the archive with a span nothing points at.
+
 Twenty-seven models declare **zero** meshes and are valid: `fonts/font1..22.mdl` (120 bytes
 each), `models/arena/test/objects.mdl`, `models/arena/medieval_ring/arena.mdl`,
 `models/arena/tank_jungle/arena.mdl`, `models/arena/tank_jungle/crystalarena.mdl`,
@@ -3186,16 +3192,18 @@ document accounts for and prints what nothing claims. Over the 31.8 MB of MDL in
 it reaches **99.98 %**, and **398 of the 400 models are accounted for to the byte**. What is
 left is two files:
 
-* `cutscene/gamelogo_text.mdl` — 7780 bytes, in two pieces. The larger is 0xC0..0x1E20,
-  between the mesh headers and the strip list, in a file whose **two mesh headers point at
-  the same geometry block**. That orphaned span opens with the same `01 02 01 02` a strip
-  list opens with, holds 152 `0xFF` terminator bytes, and its halfwords carry the negative
-  high bytes vertex coordinates have — so it reads as a **mesh data block no header names**.
-  Nothing in the file points at it. What put it there, I could not establish; a duplicated
-  mesh whose original block was left behind is the reading that fits.
+* `cutscene/gamelogo_text.mdl` — 7520 bytes at 0xC0..0x1E20, and they are **identified**: the
+  file carries the same mesh data block **twice**, and the span is a byte-for-byte duplicate
+  of the one both mesh headers point at. Same 86 strips and 494 triangles, same bounds block,
+  and **7520 of 7520 bytes identical**. Both headers name the second copy; nothing names the
+  first. Written down as a fact about the file, not as a purpose — what made the exporter
+  emit it twice is not something the data can say. (Its other 260 bytes are the tail below.)
 * `cutscene/intro_eurocom.mdl` — 160 bytes from `T(0x18)+4` to `T(0x44)`, in a model whose
-  sub-object count is zero, so nothing in the header describes the span at all. It is not
-  zeros: it opens `00 00 08 40` and repeats that word 20 bytes later. Unidentified.
+  sub-object count is zero, so nothing in the header describes the span. Its layout is
+  regular: **8 records of 20 bytes**, the last 14 bytes of each zero. The first two fields
+  read `(0x40080000, 0..3)` four times, `(0x40000000, 10)` and `(0x40000000, 11)`, then
+  `(4, 12)` and `(4, 2)` — and 0x4000 is the animation id namespace of §8.2, in a model that
+  declares no clips at all.
 
 Neither is a claim that those bytes are unused — only that **I could not validate what
 reads them**.
