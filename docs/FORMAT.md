@@ -638,8 +638,13 @@ references finds **no call that receives a door-struct address within 18 instruc
 base register's derivations never reach `a0..a3` before a `jal`. What does leave the classifier
 is a different write: `sw $s4, 84($s2)` puts something into the **instance's** `+84` as each
 kind-3 preview placement is registered, so the index may travel with the instance rather than
-the door struct. That write's source register and its readers are the remaining thread; beyond
-it, this question needs cross-reference tooling or the emulator. The behavioural facts stand
+the door struct. The prologue loads `$s4` with `0x800BBBA4`, but that address is the middle of
+a screen-bounds tracker, not a function head, and the register may be reassigned across the
+dispatch before the store — so what the write actually carries is **unverified**, and the +84
+field's readers number 65 in `warp.bin` and 67 in `gameeng.bin`: a haystack for cross-reference
+tooling, not for hand reading. The prologue did yield one solid cross-check on the way: it
+zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
+101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
 the live header.
 
