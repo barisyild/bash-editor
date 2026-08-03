@@ -4311,8 +4311,11 @@ are not only undocumented format; they are also where a reader is quietly skippi
   read** in `0x8001E41C` (`andi 8192` → record skipped): the short class's single segment is
   skipped by the walker, leaving no active segment — a **static preview shot** holding the
   initialiser's view — while the long class's segment is live and the camera pans its position
-  over the track's ticks. What remains of this item: key 99's single entry and key 3's
-  consumer — the *machinery* is traced end to end.
+  over the track's ticks. Key 99 is closed too: it is **`boss_oxide/arena.mdl`'s single door-shaped entry**, and its
+  consumer is a **twelfth lookup call site** the earlier sweep missed — `oxide.bin` at
+  `0x800BB188` loads the literal 99 and calls the lookup at `0x8001E48C` directly, feeding the
+  boss arena's state struct. What remains of this item: key 3's consumer alone — the
+  *machinery* is traced end to end.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
