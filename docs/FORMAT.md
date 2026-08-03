@@ -475,10 +475,33 @@ fetch addressed from the table's end is as consistent with the scramble as one a
 *loading*; nobody looked at its textures. Whether the scramble belongs to `0x24` or `0x28` is
 **?unknown?** until that one observation is made.
 
-The pinning consumer has survived every read. Every link of the level draw chain read so far
-resolves the model through the live header; the code that behaves otherwise — proven to exist
-by the uv-move probe — has not been found. The unread remainder is `0x80019094`, `0x8001AF2C`,
-`0x80029D28` and `0x8002F254`. Not found is not absent; the probes show it is there. The in-file runtime-slot pattern also names a
+**The packet builders are read now, and they settle the base-register question the site table
+could not.** `0x800184F0` pops a packet from the global pool at `0x80056850` (an empty pool
+returns null and the mesh is silently skipped — exhaustion is invisible, not fatal) and runs
+`0x80017EE8` then `0x80017D90` into it **once**; the cache in `mesh+0x00` reuses those packets
+every later frame. And `0x80017EE8`'s prologue resolves all five mesh-header pointers
+mesh-relative, takes its swatch descriptors from `owner+0x10`, and at `0x80017F30` reads
+**`model+0x24` with the model reached live as `[[0x80056998]+0x0C]`** — the reader §2.1's table
+could not attribute is attributed: it is the model, resolved fresh at packet build.
+
+**Which forces the explanation the probes had been circling.** Build-once packets, fed by a
+live resolve of a byte-identical copy, must produce identical pixels — and the uv-move screen
+was garbled. The one way both can be true is that **the copy was never in RAM: the game does
+not load the whole file.** A load that stops at `T(0x44)` fits every probe run: colour or UV
+pointers aimed past it read unloaded garbage — packets built from garbage colours crash, from
+garbage UVs scramble; appended data nothing points at is invisible, which is why the grow and
+junk probes load; and the far-boundary probe's relocated `0x08`/`0x28` targets are past the
+boundary but nothing reads them in a clipless model, so it loads — with the **testable
+prediction that its textures are intact**. The §9.2 blob loader fetching every animation blob
+from past this boundary by explicit byte range is the same picture from the other side: past
+`T(0x44)` is disc territory, fetched on request, not resident.
+
+One probe keeps a residual: the relocated-block probe moved `0x44`, `0x50` and the §8.6 block
+together, sector-aligned, and still crashed — under this hypothesis its tables were loaded and
+consistent, so its crash wants the §8.6 *streamer* reading the block from an offset it did not
+take from the moved header. Where that offset comes from is **?unknown?**, and that streamer is
+§8.6's unfound reader itself. The hypothesis is behavioural — no loader code computing a
+`T(0x44)`-bounded read has been traced — and it is marked as such. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
