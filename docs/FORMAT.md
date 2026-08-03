@@ -4544,8 +4544,16 @@ are not only undocumented format; they are also where a reader is quietly skippi
   and on success the door simply raises the instance's drawn bit and ramps the fade counter;
   `0x800B56D0` releases when it ramps back down. **Nothing in that path parses the sub-block
   or builds a packet from it.** So the buffer is filled by the loader and consumed by
-  something that finds it through the descriptor row rather than through a callback, and that
-  reader is the one piece of this chain still missing. The
+  something that finds it through the descriptor row rather than through a callback.
+
+  Searching for that consumer by its addressing idiom — `sll rX, n, 4` then `+4`, the only way
+  to reach a 16-byte row past the count word — returns **five sites disc-wide and no more**:
+  the request, the poll, the release, `0x80015A98` (a *keyframe* row accessor, masked to 127
+  and reached through a blob rather than a model), and `0x80019B9C` (§9.10's keyframe walk).
+  **Nothing outside the three known functions addresses a §8.6 descriptor row.** The reader
+  that consumes the streamed buffer either reaches it some other way entirely or lives where
+  no idiom this document knows can find it. Searched to the limit of static analysis and not
+  found — which, as everywhere in this section, is not evidence that it does not exist. The
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
