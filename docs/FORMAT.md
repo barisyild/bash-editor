@@ -4489,12 +4489,20 @@ are not only undocumented format; they are also where a reader is quietly skippi
   moving `0x20` corrupts the same span from the other end and crashes outright, and
   `safeadd2` — which never touches either pointer — is fine.
 
+  The corpus supports it before the probe even runs. Across the 378 models with a colour
+  table, the span `T(0x20)..T(0x24)` equals `4 × (highest colour index + 3)` **exactly in
+  371** — the table is sized to its last real entry, so its length is meaningful data and not
+  incidental padding. The seven exceptions are **the seven §8.6 carriers**, every one of them,
+  each carrying 2,048 to 12,304 bytes of colour table that no triangle in the numbered meshes
+  reaches. Something else consumes those entries in exactly the files where moving `0x24`
+  does damage — the strongest circumstantial support the span reading could have, and a
+  pointer at who the unfound consumer serves.
+
   **tables2** tests it directly: colour and UV copied *together* to EOF with both spans
   preserved to the byte, `0x08`, `0x44` and `0x50` untouched. Correct textures → the length
   is the mechanism and the pin becomes "the spans must stay intact", which a writer can
-  satisfy while relocating; still scrambled → the span survives as the last standing
-  explanation only if something else about position matters, and the hunt returns to dynamic
-  observation. The
+  satisfy while relocating; still scrambled → something about position itself matters and the
+  hunt returns to dynamic observation. The
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
