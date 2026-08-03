@@ -501,7 +501,16 @@ together, sector-aligned, and still crashed — under this hypothesis its tables
 consistent, so its crash wants the §8.6 *streamer* reading the block from an offset it did not
 take from the moved header. Where that offset comes from is **?unknown?**, and that streamer is
 §8.6's unfound reader itself. The hypothesis is behavioural — no loader code computing a
-`T(0x44)`-bounded read has been traced — and it is marked as such. The in-file runtime-slot pattern also names a
+`T(0x44)`-bounded read has been traced — and it is marked as such.
+
+The trace toward that loader reached the IO layer and stopped one link short. `0x80013034` —
+the function the model-init wrappers hand their callback to — is an **async request enqueuer**:
+it pops a node from the free list at `[0x80050F3C]`, fills seven fields (handle, three
+arguments, and three more from the caller's stack, one of them the callback), and links it into
+the queue at `0x80050628+0x0C/+0x10`; `0x8001316C` is the matching dequeuer. The read length is
+not in this code — it travels inside the request for the **queue worker** to use, and that
+worker is the next unread link. Until it is read, how much of an entry the game loads is
+established behaviourally, not from the instructions that do it. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
