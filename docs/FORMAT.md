@@ -1771,76 +1771,68 @@ model §2.1 already records as rounding its 0x50 up.
 ### The block is a sequence, not one structure
 
 The header below is the **first of several**. The same 0x34 bytes recur inside the block, always
-on a 4096-byte boundary, and the signature that finds them is specific enough to be worth
-stating: `u16@+0x0A == 4`, `u16@+0x0C == 4`, `i32@+0x14 == 32`, and four ascending offsets
-`p0 < p1 ≤ p2 < p3` whose first and last gaps are *exactly* equal.
+on a **2048-byte** boundary, and the signature that finds them is `i32@+0x00 == 0`,
+`i32@+0x04 == 0`, `u16@+0x0A == 4`, `u16@+0x0C == 4`, `i32@+0x14 == 32`, and four ascending
+offsets `p0 < p1 ≤ p2 < p3` that land inside the block.
 
-A sub-block's own extent is what its header declares: from its page-aligned start to
+> **The alignment was 4096 here until it was measured.** An earlier revision of this section
+> looked for sub-blocks only at 4096-byte boundaries because the first several happened to sit
+> there. That found 27 of them and left up to 36,864 bytes per model apparently unreachable, and
+> the section went on to explain that leftover as material the four header offsets merely
+> prefixed. Scanning every 4-byte offset instead finds **38**, every one still starting on a
+> multiple of 2048 — the eleven that were missed sit at *odd* multiples, which a 4096 scan can
+> never land on. The unreachable material was sub-blocks all along.
+
+The index at `+0x0E` is what makes that check possible, and it is the reason to trust the new
+count rather than the old one: it runs **1..N with no gaps in every one of the seven files**.
+Under the 4096 scan it read 1, 6, 8 in `warp_room4` and 1, 2, 5, 6 in `warp_room5` — the gaps
+were the missing sub-blocks announcing themselves, and they line up exactly with which files had
+bytes left over. The three files whose index sequence was already complete were precisely the
+three with nothing unreached.
+
+A sub-block's own extent is what its header declares: from its 2048-aligned start to
 `p3 + (p3 − p2)`, the end of its last array. Everything else in the block is one of two other
-things — the run from that end to the next page boundary, or a region no sub-block reaches at
-all. All three columns are byte counts and the three add up to the block exactly, 7/7. Whether
-that middle column is padding is a separate question, answered below: in three models it is, in
-four it is not.
+things — the run from that end to the next 2048 boundary, or a region no sub-block reaches at
+all. All three columns are byte counts and the three add up to the block exactly, 7/7.
 
-| Model | Block | Sub-blocks | Their `+0x08` counts | Inside a sub-block | Slack to the next page | Reached by none |
+| Model | Block | Sub-blocks | Indices at `+0x0E` | Inside a sub-block | Slack | Reached by none |
 | --- | --- | --- | --- | --- | --- | --- |
-| `demo_hub1` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) | 1,136 | **0** |
-| `demo_hub2` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) | 1,136 | **0** |
-| `warp_room1` | 28,600 | 5 | 289, 206, 167, 258, 236 | 27,068 (95 %) | 1,532 | **0** |
-| `warp_room2` | 31,564 | 4 | 236, 336, 186, 205 | 20,064 (64 %) | 4,512 | 6,988 |
-| `warp_room3` | 54,144 | 5 | 437, 262, 400, 235, 307 | 39,188 (72 %) | 5,868 | 9,088 |
-| `warp_room4` | 67,324 | 3 | 360, 355, 943 | 25,732 (38 %) | 4,728 | 36,864 |
-| `warp_room5` | 35,260 | 4 | 183, 253, 387, 232 | 21,568 (61 %) | 5,500 | 8,192 |
+| `demo_hub1` | 12,932 | 3 | 1–3 | 11,796 | 1,136 | **0** |
+| `demo_hub2` | 12,932 | 3 | 1–3 | 11,796 | 1,136 | **0** |
+| `warp_room1` | 28,600 | 5 | 1–5 | 27,068 | 1,532 | **0** |
+| `warp_room2` | 31,564 | 6 | 1–6 | 27,988 | 3,576 | **0** |
+| `warp_room3` | 54,144 | 7 | 1–7 | 50,996 | 3,148 | **0** |
+| `warp_room4` | 67,324 | 8 | 1–8 | 65,092 | 2,232 | **0** |
+| `warp_room5` | 35,260 | 6 | 1–6 | 31,564 | 3,696 | **0** |
 
-**27 sub-blocks in all**, and in `demo_hub1`, `demo_hub2` and `warp_room1` they account for the
-block completely: every byte is either inside one or slack before the next page. The other four
-leave 6,988 to 36,864 bytes that no sub-block reaches — `warp_room4`'s share is nine whole
-pages. Of the 63 page boundaries, 27 start a sub-block, 20 fall inside one, and 16 are neither.
+**38 sub-blocks in all, and the block is fully accounted in 7 of 7**: every byte of all 242 KB is
+either inside a sub-block or slack before the next 2048 boundary. Nothing is unreached, and no
+two extents overlap — the 748-byte overlap an earlier revision reported in `warp_room3` was an
+artifact of the same 4096 assumption, which mis-sited that file's sub-blocks entirely.
 
-`warp_room3` is the one model where two extents **overlap**, by 748 bytes, so the length rule
-`p3 + (p3 − p2)` cannot be right for both of the sub-blocks involved. Its 72 % is the marked
-figure; summing the declared lengths there would double-count and give 74 %.
+The slack is genuine zero padding in five of the seven — 1,136, 1,136, 1,532, 3,576 and 3,696
+bytes, every one of them zero. In `warp_room4` and `warp_room3` it is not: **5,158 bytes are
+non-zero**, and they sit behind exactly four sub-blocks — `warp_room4` indices 4 and 5,
+`warp_room3` indices 1 and 5. For those four the length rule `p3 + (p3 − p2)` under-reads and
+their true extent is ?unknown?; for the other 34 it lands on padding and is consistent with
+being right. The four are not distinguished by the header: all four have equal first and last
+gaps, and two of them have `+0x28` and `+0x2C` zero like the rest.
 
-**Only in those same three models is the leftover padding.** Reading everything from a
-sub-block's declared end to the next sub-block as 8-byte groups and separating the all-zero ones
-from the rest:
-
-| Model | 8-byte groups past `p3` | all zero | vertex-shaped | neither |
-| --- | --- | --- | --- | --- |
-| `demo_hub1` | 142 | **142** | 0 | 0 |
-| `demo_hub2` | 142 | **142** | 0 | 0 |
-| `warp_room1` | 191 | **191** | 0 | 0 |
-| `warp_room2` | 1436 | 595 | 664 | 177 |
-| `warp_room3` | 1869 | 488 | 36 | 1345 |
-| `warp_room4` | 5198 | 748 | 2117 | 2333 |
-| `warp_room5` | 1710 | 623 | 64 | 1023 |
-
-So `demo_hub1`, `demo_hub2` and `warp_room1` really are complete: sub-blocks, then zeros to the
-next page. In the other four the material past `p3` is **not** padding — `warp_room4`'s nine
-"unreached" pages open `2130, −190, 2334, 1` then `2111, 105, 2648, 0`, the same 8-byte shape as
-the vertex run — so there the four offsets describe a prefix of the sub-block and its true
-length is ?unknown?. "Vertex-shaped" here means a non-zero group whose fourth i16 is in −3..3,
-which is the flag range the run before `p0` keeps; it is a shape test and not a decoding.
-
-Counts recur across models — 167 and 206 each appear in three of the seven — but **no two of the
-27 are byte-identical**, so what repeats is the size of the thing, not the thing.
-
-Taking the sub-block length as `p3 + (p3 − p2)` and stepping to the next page walks
-`demo_hub1`, `demo_hub2` and `warp_room1` from end to end — the same three the table shows
-nothing left over in — and stops short on the other four. So that length rule is right for some
-sub-blocks and not general. It is written here as the rule that was tried, not as the layout.
+Counts recur across models — 167 and 206 each appear in three of the seven — but **no two
+sub-blocks are byte-identical**, so what repeats is the size of the thing, not the thing.
 
 Its first header, and the shape every one of the 27 shares:
 
 | Offset | Type | Measured |
 | --- | --- | --- |
 | +0x00, +0x04 | i32 | 0 in 7/7 |
-| +0x08 | u16 | a count, 167..943 over the 27 sub-blocks. It counts the **index** entries, not the vertices: the equal arrays hold `[+0x08] − 1` or `− 2` u16 each, while the number of 8-byte slots between the vertex start and `p0` minus `[+0x08]` takes **21 different values across the 27** — so it is unrelated to the vertex array's length. |
-| +0x0A, +0x0C, +0x0E | u16 | **4, 4, 1 in 7/7** |
+| +0x08 | u16 | a count, 167..943 over the sub-blocks. It counts the **index** entries, not the vertices: the equal arrays hold `[+0x08] − 1` or `− 2` u16 each, while the number of 8-byte slots between the vertex start and `p0` minus `[+0x08]` takes **21 different values across the 27** measured before the count rose to 38 — so it is unrelated to the vertex array's length. |
+| +0x0A, +0x0C | u16 | **4 and 4 in 38/38.** They are the high halves of the i32 at +0x08 and +0x0C, so the words read `(4 << 16) \| count` and `(index << 16) \| 4`. |
+| +0x0E | u16 | **The sub-block's number within its file**, running 1..N with no gaps in 7/7 — 1–3, 1–3, 1–5, 1–6, 1–7, 1–8, 1–6. This is the field that catches a missed sub-block: a gap in the sequence is one the scan did not find, and finding all 38 closed every gap and every unreached byte at once. |
 | +0x10 | i32 | **Where the vertex array starts, biased by 0x24.** Across all 27 sub-blocks the 8-byte group at `[+0x10] + 0x24` is vertex-shaped and the group before it is not — **27/27** — and `p0 − ([+0x10] + 0x24)` is a multiple of 8 in **27/27**, so the array runs from there in whole records. Values 104..300. |
 | +0x14 | i32 | **32 in 7/7** |
-| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7. **The first and last gaps are equal in 7/7** — `p3 − p2 == p1 − p0` exactly, 332/364/716/872/468/576 bytes — so a sub-block holds two arrays of the same size with a smaller one between them. Both are even, and dividing by 2 gives `[+0x08] − 1` in five of the seven and `[+0x08] − 2` in the other two (`warp_room4`, `warp_room2`) — measured now rather than fitted, and the one-or-two shortfall is itself unexplained. |
-| +0x28..+0x30 | i32 | 0 in 7/7 |
+| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 38/38. **The first and last gaps are equal in 36 of the 38** — `p3 − p2 == p1 − p0` exactly — so a sub-block holds two arrays of the same size with a smaller one between them. The two exceptions are `warp_room4` index 7 (992 against 1028) and `warp_room2` index 6 (332 against 464), and they matter: the equality was part of the search signature until they were found, which is why both of those sub-blocks were invisible and their files looked incomplete. Dividing an equal gap by 2 gives `[+0x08] − 1` or `− 2`, and the one-or-two shortfall is unexplained. |
+| +0x28..+0x30 | i32 | Zero in most sub-blocks. `+0x28` is non-zero in **10 of the 38** — 2044 three times, then 2384, 2752, 2844, 3156, 3160, 4836, 5096 — and `+0x2C` in **2** (2712, 8744). Every value lands inside its own sub-block. An earlier revision recorded these as "0 in 7/7", which was true only of the first sub-block of each file. ?unknown? |
 
 What the offsets reach has the **shape** of geometry, which is as far as measurement goes.
 The first is 8-byte records laid out like a vertex record (§4.2) — `demo_hub1` opens
