@@ -622,7 +622,10 @@ the next haystack after `warp.bin`'s remaining clusters. The first delegate is r
 identified: `0x80095A04(n)` indexes a **156-byte per-slot array at `0x800A0E78`**, frees the
 slot's instance list through `0x8001D334([slot+108])` and clears bit 15 of its `+12` flags — a
 viewport shutdown, the door flow closing screens on entry. Not the locator; one more named
-piece of the engine's slot machinery.
+piece of the engine's slot machinery. The `0x800B6Axx` cluster is read and excluded too — door
+state and lock flow (a key-type-5 test against the entry at `[door+20]`, the `[door+32]` flag,
+HUD branches), with `+36` unread throughout. The remaining unread candidates are the
+`0x800B7Axx` cluster and `gameeng.bin`'s seven other owner-global sites.
 
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
