@@ -1426,11 +1426,24 @@ records have the bit clear and all 789 have a zero there, 1900 have it set and a
 a non-zero. So the bit is not a mode, it is a "this record states its own threshold" marker,
 and the loader's copy to runtime +0x68 is what the compare reads.
 
-What the number measures is ?unknown? — `[ctx+0x46]` has no writer this document has found,
-and the values (256 ×419, 512 ×215, 51 ×144, 384 ×127, 128 ×104, and 93 records holding
-0xFFB4, which `lh` sign-extends into a value `sltu` can never find smaller) are not obviously
-a distance or a frame count. What is settled is the mechanism: a placement that fails this
-compare draws nothing.
+What it is compared *against* is now traced. 0x80018EFC writes `ctx+0x46`, in the run that
+fills the rest of the context — its +0x14 fade slot, +0x30, +0x40 and +0x44 — and it writes
+
+```
+80018EF0  lhu   $v0, 0x1c($s1)
+80018EF8  addiu $v0, $v0, -1
+80018EFC  sh    $v0, 0x46($s3)     ; ctx+0x46 = [s1+0x1C] - 1
+```
+
+so the threshold is **a count, minus one** — the last valid index of whatever `[s1+0x1C]`
+sizes. That makes the `sltu` at 0x80019EBC read as a bounds check rather than a distance
+test, which is the more useful shape to know even without the units.
+
+The units are still ?unknown?. The values are 256 ×419, 512 ×215, 51 ×144, 384 ×127,
+128 ×104, and 93 records holding 0xFFB4 — which `lh` sign-extends into something `sltu` can
+never find smaller, so those 93 placements fail the check outright. What `[s1+0x1C]` counts is
+not traced. What is settled is the mechanism: a placement that fails this compare draws
+nothing.
 
 ### The id is the same id the draw dispatcher takes
 
