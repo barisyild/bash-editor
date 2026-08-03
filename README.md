@@ -255,6 +255,19 @@ default 24 fps the clips come back audibly off-beat and measurably off-pose. At
 30 fps the full round trip — export, Blender save, import — reproduces every pose
 exactly, verified against Blender 5.2.
 
+**Warp rooms and hubs import too, on a path of their own.** Those seven files pin two
+things the rest do not: their shared colour and UV tables cannot be repointed — moving
+the colour pointer crashes the room, moving the UV pointer alone scrambles every
+textured surface — and their §8.6 block cannot change file offset, because each door's
+object record indexes a table of *file* offsets that the game streams the block from.
+Fourteen hardware probes fix those limits; why the tables are pinned is still unknown
+and `docs/FORMAT.md` §14 carries the search. The importer does not need to be told any
+of this: a carrier announces itself in its own header, and the pinned **graft layout**
+engages automatically — the file stays byte-identical through its old end except the
+rebuilt mesh's header and two fields, new geometry lands after the §8.6 block, and new
+colours map to the nearest entry already in the palette. Adding a prop to a warp room
+is a normal Blender edit; it has been done and run on hardware, previews intact.
+
 **The import reads the shot back too.** Rebuilding the object graph at
 `T(0x1C)..T(0x4C)` is still out of reach — the writers have never touched it and the
 record kinds past the nodes are unread (`docs/FORMAT.md` §8.3), so adding a node or
