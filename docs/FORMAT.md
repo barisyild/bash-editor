@@ -1777,8 +1777,10 @@ stating: `u16@+0x0A == 4`, `u16@+0x0C == 4`, `i32@+0x14 == 32`, and four ascendi
 
 A sub-block's own extent is what its header declares: from its page-aligned start to
 `p3 + (p3 − p2)`, the end of its last array. Everything else in the block is one of two other
-things — the slack from that end to the next page boundary, or a region no sub-block reaches at
-all. All three columns are byte counts and the three add up to the block exactly, 7/7.
+things — the run from that end to the next page boundary, or a region no sub-block reaches at
+all. All three columns are byte counts and the three add up to the block exactly, 7/7. Whether
+that middle column is padding is a separate question, answered below: in three models it is, in
+four it is not.
 
 | Model | Block | Sub-blocks | Their `+0x08` counts | Inside a sub-block | Slack to the next page | Reached by none |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -1798,6 +1800,27 @@ pages. Of the 63 page boundaries, 27 start a sub-block, 20 fall inside one, and 
 `warp_room3` is the one model where two extents **overlap**, by 748 bytes, so the length rule
 `p3 + (p3 − p2)` cannot be right for both of the sub-blocks involved. Its 72 % is the marked
 figure; summing the declared lengths there would double-count and give 74 %.
+
+**Only in those same three models is the leftover padding.** Reading everything from a
+sub-block's declared end to the next sub-block as 8-byte groups and separating the all-zero ones
+from the rest:
+
+| Model | 8-byte groups past `p3` | all zero | vertex-shaped | neither |
+| --- | --- | --- | --- | --- |
+| `demo_hub1` | 142 | **142** | 0 | 0 |
+| `demo_hub2` | 142 | **142** | 0 | 0 |
+| `warp_room1` | 191 | **191** | 0 | 0 |
+| `warp_room2` | 1436 | 595 | 664 | 177 |
+| `warp_room3` | 1869 | 488 | 36 | 1345 |
+| `warp_room4` | 5198 | 748 | 2117 | 2333 |
+| `warp_room5` | 1710 | 623 | 64 | 1023 |
+
+So `demo_hub1`, `demo_hub2` and `warp_room1` really are complete: sub-blocks, then zeros to the
+next page. In the other four the material past `p3` is **not** padding — `warp_room4`'s nine
+"unreached" pages open `2130, −190, 2334, 1` then `2111, 105, 2648, 0`, the same 8-byte shape as
+the vertex run — so there the four offsets describe a prefix of the sub-block and its true
+length is ?unknown?. "Vertex-shaped" here means a non-zero group whose fourth i16 is in −3..3,
+which is the flag range the run before `p0` keeps; it is a shape test and not a decoding.
 
 Counts recur across models — 167 and 206 each appear in three of the seven — but **no two of the
 27 are byte-identical**, so what repeats is the size of the thing, not the thing.
