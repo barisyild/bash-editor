@@ -629,7 +629,15 @@ accessor helpers — current door's key type from `[door+20]+2`, the `[door+32]`
 two-viewport shutdown pair. **All 27 of `warp.bin`'s door-array references are now classified
 — classifier, interaction, state, getters, shutdown — and not one reads `+36` back.** The
 index the classifier stores is consumed outside the overlay: the door struct escapes through
-calls, and the one remaining haystack is `gameeng.bin`'s seven other owner-global sites.
+calls. `gameeng.bin`'s eight owner-global sites are triaged and none is it either — four are
+**fade writers** into the owner's `+0x14` slot (`0x8008FB84`, `0x80094EE4` with its `4096 − x`
+arithmetic, `0x80093088/158`), confirming §9.11.10's fade plumbing from the engine side; two
+clear the billboard parameter pair at `+40/+44`; one is a 24-stride render loop and one the
+viewport driver. So the locator hides behind a **pointer escape**: some call receives the door
+struct's address and reads `+36` through a register this scan cannot see. Following the door
+struct's escape sites is the remaining avenue, and the behavioural fact stands regardless:
+sub-blocks are selected by the in-file index, located by something that ignores the live
+header.
 
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
