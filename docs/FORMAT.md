@@ -359,7 +359,7 @@ equivalent formula `model + 52*id + 0x24`:
 | 0x1C | i32 ptr | `ptr_texture_runs` | Run-length texture list (§6.2). | **confirmed** |
 | 0x20 | i32 ptr | `ptr_colour_index` | One u16 per triangle (§6.3). | **confirmed** |
 | 0x24 | i32 ptr | `ptr_end` | End of the mesh's own data. The word **at** that address is zero in **7961/7961** meshes, object meshes included — a byte-coverage walk over the archive leaves 6983 four-byte holes and every one is this word. That is a measurement and nothing more: no site has been found that reads it, and `mdlwrite` has never emitted one deliberately on discs that boot, so whether a writer *must* is untested. | **confirmed** (the pointer, and that the word is zero) / ?unknown? (whether anything needs it) |
-| 0x28 | i32 ptr | `ptr_normals` | **Non-zero in exactly 300/5990.** When set, `T(0x28) == vertex_pool + 8*vertex_count` in 300/300 and a second 8-byte-per-vertex array of unit normals follows. When zero there are no normals. | **confirmed** (structure) / *likely* (that they are normals) |
+| 0x28 | i32 ptr | `ptr_normals` | **Non-zero in exactly 300/5990**, and 283 of those meshes are under `models/arena/`. When set, `T(0x28) == vertex_pool + 8*vertex_count` in 300/300 and a second 8-byte-per-vertex array follows. **One reader traced**, 0x800B6EA0 in `dash.bin`, where a zero here skips the routine outright — see below. | **confirmed** (structure, and that it gates that routine) / *likely* (that they are normals) |
 | 0x2C | i32 ptr | `ptr_attachments` | Non-zero in 777/5990. Live, id-addressed block (§8.4). | **confirmed** |
 | 0x30 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 
@@ -378,6 +378,43 @@ Mesh iteration, and the proof that +0x00 is a live pointer slot:
 
 The identical loop appears again at 0x8001702C. A writer must leave +0x00 zero on disk, not
 treat it as reserved space.
+
+### What reads `+0x28`: a per-triangle query, gated on the pointer
+
+`dash.bin` takes an object's resource id, resolves it to a mesh, and **abandons the whole
+routine when `mesh+0x28` is zero**:
+
+```
+800B6E48  lhu  $a0, 0x74($s4)     ; the object's resource id (§9.11.8)
+800B6E4C  jal  0x80015a18         ;   -> the mesh header
+800B6E64  lw   $v0, 0x28($a0)     ; the normals pointer
+800B6E6C  beqz $v0, 0x800b711c    ;   zero -> skip everything below
+800B6E8C  lw   $v0, 0x14($a0)     ; the strip list
+800B6E90  lw   $v1, 0x10($a0)     ;   and the bounds block
+800B6EAC  addu $s2, $a0, $v0      ; s2 = T(0x28)
+800B6EB0  lbu  $s3, 1($s6)        ; strip 0's triangle count, §5's high byte
+800B6EB8  beq  $s3, 0xff, ...     ;   0xFF ends the list
+```
+
+What follows is a **rejection test against a point**. `$s1` is the vertex pool and `$s0` is
+`$s1 + 0x10`, so the three reads at `($s1)`, `-8($s0)`, `($s0)` are one component of three
+vertices at the 8-byte stride, and `-0xc($s0)`, `-4($s0)`, `4($s0)` are the component at +0x04.
+Each is compared against a coordinate ± `$s5`, and a triangle with all three outside is
+skipped; a survivor goes to 0x800B66C4 with the point and the vertex triple. Two components
+and a radius is a horizontal query — finding which triangle a point is over.
+
+Two other candidates were checked and **rejected**, which is why the count above says one:
+
+* 0x80019C08 in the executable resolves `+0x28` self-relatively, but `$s1` there is
+  `move $s1, $a1` at 0x80019A70 and the same register resolves `+0x40` and `+0x44` — fields a
+  0x34-byte mesh header does not have. It is the **model** base, so this is `model+0x28`.
+* 0x800B4F28 in `tank.bin` builds its base as `0x800DADB0 + 164*index`, a table of its own, and
+  the `addu` that matched the pointer-resolution shape is an address computation.
+
+The search was for a base register that resolves two or more self-relative pointers, so a
+routine that took a mesh header and read **only** `+0x28` would not appear in it. Within that
+shape, `dash.bin` is the only consumer in the executable, `gameeng.bin` and all 14 mode
+overlays.
 
 ---
 
