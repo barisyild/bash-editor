@@ -3299,9 +3299,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   in the archive resolve their +0x0C inside their own block. What the three-word payload
   means is still open.
 * **What draws the 96 objects no placement record names**, in 13 of the 73 models — 16 in
-  each `balls_crash` arena, 6 to 9 in each warp room. Not the scene nodes: over the whole
-  corpus no mesh is both named by a node and named by a record (122 have a node, 1861 have a
-  record, the sets do not meet).
+  each `balls_crash` arena, 6 to 9 in each warp room. Two hypotheses have been tested and
+  both fail. **Not the scene nodes**: over the whole corpus no mesh is both named by a node
+  and named by a record (122 have a node, 1861 have a record, the sets do not meet). **Not a
+  sibling model's list either**: an object entry can point into a neighbouring file (§8.3),
+  so a level next door could in principle place them — checked every object entry in every
+  model against every other model's placement list, and **0 of the 96** are claimed that way.
+  I could not validate what draws them, and that is not evidence nothing does.
 * **The unread bytes of a placement record.** The loader at 0x8001E0A8 consumes +0x00,
   +0x04..+0x0C, +0x28..+0x47, +0x74..+0x77, +0x88, +0x9C and +0x9E; the rest of the 160 is
   copied by nothing. That includes the second MATRIX at +0x48 — identical to the first in
