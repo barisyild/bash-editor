@@ -4496,7 +4496,11 @@ are not only undocumented format; they are also where a reader is quietly skippi
   each carrying 2,048 to 12,304 bytes of colour table that no triangle in the numbered meshes
   reaches. Something else consumes those entries in exactly the files where moving `0x24`
   does damage — the strongest circumstantial support the span reading could have, and a
-  pointer at who the unfound consumer serves.
+  pointer at who the unfound consumer serves. §8.6's own arrays were the obvious candidate
+  and they are **not** it: their values reach 33,944 to 65,408 across the seven, one to two
+  orders of magnitude past the 2,213–6,314 colour entries and the 854–3,710 UV entries those
+  files hold, so whatever those u16 index, it is not either shared table. The spare colour
+  entries stay unclaimed.
 
   **tables2** tests it directly: colour and UV copied *together* to EOF with both spans
   preserved to the byte, `0x08`, `0x44` and `0x50` untouched. Correct textures → the length
