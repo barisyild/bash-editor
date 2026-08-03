@@ -524,7 +524,21 @@ both empty. Linked but apparently unreached; by this document's own rule that is
 evidence found", not "unused". The live route is the **asynchronous** one: the model-init
 wrapper calls `0x80013034` directly with a callback and `a2 = [owner+0x24]`, so the model's load
 length is whatever fills `owner+0x24` — and **who fills it, with the file's full size or its
-resident size, is the single untraced hop left.** Full size means the game loads everything and
+resident size, is the single untraced hop left.**
+
+The table readers themselves are located and the derivation rule is instruction-level. The
+file table lives at `0x8004E110` in the executable image — `(sector, byte_size)` per entry,
+eight bytes each, exactly the rows §1.1 describes — and **eleven sites in the band
+`0x80012600..0x80012D00` address it** through `addiu rX, $v0, -7920`. The group preloader among
+them computes each entry's load length as **`(sector[i+1] − sector[i]) << 11`** — the
+whole-sector span to the next entry, not the byte size — and hands the byte size at `row+4` to
+a registrar (`0x80011498`) separately. Two consequences follow and are worth stating: lengths
+derived from *sector differences* mean the loader's spans include each entry's inter-entry
+padding, and a repacker that moves entries closer together (this project's packs tight) changes
+those spans — harmless if nothing assumes slack, and the shipped gaps do carry stray non-zero
+bytes (58 to 925 per gap behind the seven carriers, measured), so nothing about the gaps is
+load-bearing on the shipped disc. Whether the model's own `owner+0x24` gets the sector-span or
+the `row+4` byte size is the remaining read. Full size means the game loads everything and
 frees the tail after init, which the compactor then moves live data over; resident size means a
 short read. Either way the probes' garbage is explained; which mechanism it is stays
 **?unknown?** until that provenance is read.
