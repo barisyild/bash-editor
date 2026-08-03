@@ -577,10 +577,19 @@ untraced), stale caches (build-once but post-load), non-live pointer resolves (t
 incoherent rebuilt tables (audited), a clobbered temp region (allocators identical). The
 scramble is real, reproducible, and **unexplained at the end of static reading** — the next
 instrument is dynamic: a RAM watch on the loaded model while the emulator runs the probe, which
-is an observation this project's tooling cannot make on its own. Full size means the game loads everything and
-frees the tail after init, which the compactor then moves live data over; resident size means a
-short read. Either way the probes' garbage is explained; which mechanism it is stays
-**?unknown?** until that provenance is read.
+is an observation this project's tooling cannot make on its own.
+
+Two late negatives and one filled hole close this account for now. **No overlay touches the
+file table**: the `0x8004E110` scans, immediate pairs and literals both, come back empty across
+all 16 — a §8.6 streamer, if it exists, goes through the executable's services rather than its
+own table walk. And the probe matrix had a hole worth naming: **every probe that moved the §8.6
+block also moved `0x20`/`0x24`**, so "the block cannot move" was never established
+independently — it was an artifact of a theory since refuted. The block-shift probe fills the
+hole: the block moved 2048 bytes with byte-identical content, `0x44` and `0x50` bumped to
+follow, and exactly **two bytes** of the file below the cut differ — the second byte of each of
+those words. Loads → the block is freely movable and the fixed-offset-streamer story dies;
+crashes → the block's position matters to something, and that something is §8.6's reader
+showing itself behaviourally. Result pending.
 
 The same page of code answered a question the residency hypothesis had left open. `0x800131B0`
 is the allocator's pre-check, and on a failed fit it calls `0x80017640` — a scavenger that
@@ -588,12 +597,7 @@ frees packet caches — and then **`0x80011D28`, a heap compactor**, before retr
 compacting heap is the missing mechanism: a discarded file tail is not merely stale, it is
 **moved over** as live allocations slide — which is why every pointer aimed past the resident
 boundary read garbage immediately rather than old bytes. Behavioural attribution of the
-compactor's role, instruction-level attribution of its existence. The in-file runtime-slot pattern also names a
-candidate mechanism for both symptoms: if slots reached through one route are written by the
-loader while the draw path reads them through another, a byte-identical relocated copy holds
-zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
-tpage/clut on the `0x24` route. That is a **hypothesis**, stated as one; the two facts are the
-caching pattern and the in-file slot, both read from the instructions above.
+compactor's role, instruction-level attribution of its existence.
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
