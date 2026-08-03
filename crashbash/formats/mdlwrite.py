@@ -20,7 +20,8 @@ still unknown (docs/FORMAT.md §10.1, `+0x14`).
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -226,6 +227,36 @@ class NewMesh:
     colours: np.ndarray  # (T, 3, 3) uint8 RGB, per corner
     textures: np.ndarray | None = None  # (T,) pack texture index
     uvs: np.ndarray | None = None  # (T, 3, 2) uint8 texel coordinates
+    # What an untextured mesh still has to name. See `_swatch_entry`.
+    swatch: int = 0
+
+
+def _swatch_entry(data: bytes, mesh: Mesh) -> int:
+    """The `0x8000 | palette` a mesh's own texture list names, or 0.
+
+    An untextured mesh is not one whose texture entries are zero. Of the 897
+    shipped meshes whose every strip flag says untextured, **not one** writes a
+    zero list: 227 name a swatch palette throughout and the other 670 mix swatch
+    entries with texture ones. Zero means *texture slot 0*, not "no texture", so
+    a writer that fills the list with zeros points every triangle at a real slot
+    with no palette behind it -- which is how a rebuilt cutscene came to draw the
+    previous screen's VRAM as its background.
+
+    The run structure cannot be carried across a rebuild, because re-striping
+    reorders the triangles it counts. The palette can: this takes the entry the
+    mesh's own list uses most and gives every triangle that one. For
+    `warp_room1`'s mesh 1 that is `0x8000 | 152`, which is what 662 of its 663
+    triangles already carried.
+    """
+    if not mesh.ptr_texture or mesh.ptr_colour_index <= mesh.ptr_texture:
+        return 0
+    count = (mesh.ptr_colour_index - mesh.ptr_texture) // 2
+    seen: Counter = Counter()
+    for i in range(count):
+        entry = struct.unpack_from("<H", data, mesh.ptr_texture + 2 * i)[0]
+        if entry & TEXTURE_FLAG_SWATCH:
+            seen[entry & (TEXTURE_FLAG_SWATCH | TEXTURE_INDEX_MASK)] += 1
+    return seen.most_common(1)[0][0] if seen else 0
 
 
 def build_blocks(mesh: NewMesh) -> dict:
@@ -316,7 +347,8 @@ def build_blocks(mesh: NewMesh) -> dict:
             .tobytes()
         )
     else:
-        texture = struct.pack(f"<{len(plan)}H", *([0] * len(plan)))
+        # Not zeros: zero is texture slot 0. See `_swatch_entry`.
+        texture = struct.pack(f"<{len(plan)}H", *([mesh.swatch] * len(plan)))
         uvs = b""
 
     return {
@@ -468,6 +500,8 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     if not 0 <= dest_index < len(dest.meshes):
         raise ValueError(f"the model has no mesh {dest_index}")
     target = dest.meshes[dest_index]
+    if mesh.textures is None and not mesh.swatch:
+        mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
     blocks = build_blocks(mesh)
     faces = blocks["faces"]
 
