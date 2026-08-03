@@ -4497,10 +4497,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   reaches. Something else consumes those entries in exactly the files where moving `0x24`
   does damage — the strongest circumstantial support the span reading could have, and a
   pointer at who the unfound consumer serves. §8.6's own arrays were the obvious candidate
-  and they are **not** it: their values reach 33,944 to 65,408 across the seven, one to two
-  orders of magnitude past the 2,213–6,314 colour entries and the 854–3,710 UV entries those
-  files hold, so whatever those u16 index, it is not either shared table. The spare colour
-  entries stay unclaimed.
+  and they are **not** it, tried two ways. Raw, their values reach 33,944 to 65,408 across the
+  seven — one to two orders of magnitude past the 2,213–6,314 colour entries and 854–3,710 UV
+  entries those files hold. Masked to 13 bits, the way a mesh's colour index is (§5.2), they
+  land in a tight band of **7,711–8,064 in all seven** regardless of how big that file's
+  colour table is: above every table (largest is 6,314) and clustered far too narrowly to be
+  indices into tables that differ by a factor of three. Whatever those u16 encode, it is
+  neither shared table, and the spare colour entries stay unclaimed.
 
   **tables2** tests it directly: colour and UV copied *together* to EOF with both spans
   preserved to the byte, `0x08`, `0x44` and `0x50` untouched. Correct textures → the length
