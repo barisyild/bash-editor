@@ -17,14 +17,29 @@ Every field row carries one of three confidence markers:
 | *likely* | Consistent with everything measured, and the only reading that fits, but with no code site proving it or with a corpus that is too small to be decisive. |
 | ?unknown? | Read but not understood. The distribution is given; the meaning is not. |
 
-**"No reader found" never means "nothing reads it."** A scan proves where a shape is absent,
-not that a routine does not exist, and this document has been wrong that way twice in one
-sitting. It said no `GetClut` arithmetic existed anywhere on the disc — three exhaustive scans
-agreed — and `0x800364FC` is `GetClut`, called rather than inlined (§10.4). It said nothing
-read the sub-object's +0x10 block, and 0x80024B70 does (§8.5). So a negative here is always
-phrased as a failed search, with the search stated, so the next reader can see what was not
-looked for. A positive claim needs assembly; a negative claim needs its own limits written
-down beside it.
+### What a negative means here
+
+**"No reader found" never means "nothing reads it."** A scan shows where a *shape* is absent.
+It cannot show that a routine does not exist, and this document has been wrong that way twice:
+it said no `GetClut` arithmetic existed anywhere on the disc — three exhaustive scans agreed —
+and `0x800364FC` is `GetClut`, **called** rather than inlined (§10.4); it said nothing read
+the sub-object's +0x10 block, and 0x80024B70 does (§8.5). Both were a search that had not
+found something, written up as a fact.
+
+So these phrases are all shorthand for the same thing, and none of them is a claim that a
+field is unused:
+
+| Written | Means |
+| --- | --- |
+| "no reader found" | a search was run and found none; the search is stated where it matters |
+| "unread", "not read on this path" | this document has not decoded it, or that particular routine does not touch it |
+| "not read by any render pass" | the pass was read instruction by instruction and it is not there |
+
+A **positive** claim needs a disassembled instruction sequence or a corpus measurement with
+no exceptions. A **negative** claim is only ever "I could not validate that anything reads
+this", and carries the limits of the search that failed — the region scanned, the instruction
+shape looked for, and what would have escaped it. Every negative in §14 is written that way
+on purpose.
 
 ### Corpus
 
@@ -3165,7 +3180,9 @@ are not only undocumented format; they are also where a reader is quietly skippi
   0x80011CC0 walks a list node — not a model. `>= i32@0x40` in 400/400 and equal in 328/373;
   "capacity vs used" is a guess. Distribution: 0 (155), 5 (63), 2 (51), 1 (36), 6 (30),
   7 (21), 3 (15), 8 (8), …
-* **0x30, 0x34** — zero in 400/400, no reader. Padding or fields no retail asset uses.
+* **0x30, 0x34** — zero in 400/400; no reader found. Being zero everywhere, a reader could
+  exist and never show its hand, so "padding" is the reading that fits and not a validated
+  one.
 * **0x50** — the arithmetic is unambiguous (`base + value` is the resident-image end) but no
   code reads the field, so whether the encoder meant "size" or "pointer to an 80-byte
   trailer" is inference only.
@@ -3230,20 +3247,33 @@ are not only undocumented format; they are also where a reader is quietly skippi
   more than 24 instructions earlier would not appear — but the shape it looked for is the
   only one the game uses to reach a header. That is what makes the `0x0C == 100` correlation
   of §9.11.6 a description of the backdrop domes rather than a cause of them.
-* **0x04, 0x30** — zero in 5990/5990, no reader.
-* **0x2C block contents** — the 16-byte records are unread. The `u16` at +0x00 is 0 (769),
-  2 (6) or 5 (2).
-* **Whether the +0x28 normals are consumed at all** — no site dereferences mesh+0x28, and the
-  game issues no GTE lighting instruction anywhere (3 COP2 lighting-family hits in the entire
-  image, all in libgpu). They may be dead data, or consumed by software the tracing missed.
+* **0x04, 0x30** — zero in 5990/5990; no reader found. Same caveat as the header's 0x30/0x34:
+  a field that is zero in every shipped asset would look identical whether it is read or not.
+* **0x2C block contents** — the 16-byte records are decoded for characters (§8.4) and not for
+  the rest of the family. The `u16` at +0x00 is 0 (769), 2 (6) or 5 (2), and no reader was
+  found for the block's fields beyond the pointer itself — but the collision case is proven
+  behaviourally, so something does consume them.
+* **Whether the +0x28 normals are consumed at all** — no dereference of mesh+0x28 was found,
+  and the game issues no GTE lighting instruction anywhere (3 COP2 lighting-family hits in the
+  entire image, all in libgpu). **I could not validate that anything reads them, which is not
+  the same as their being dead.** Software shading needs no GTE opcode, and 300 meshes carry
+  a normal per vertex, which is an expensive thing for an exporter to emit for nothing.
 
 **Per-triangle flags**
 
-* **Strip flag bit 3** (24,151/81,045 strips) — no reader. Exhaustive scan for `andi` with
-  immediates 8/9/0x0C/0x0E/0x0F over 0x80016000–0x8001E000 returns nothing.
-* **Vertex flag bits 2 and 8** (130 and 28 vertices) — no reader in the render path. The two
-  `lui 4 / and` sites in the model region (0x80019824, 0x80019A14) operate on an instance
-  mode word, not on vertex flags.
+* **Strip flag bit 3** (24,151/81,045 strips) — no reader found, and the search is wider than
+  it was. The old one covered 0x80016000–0x8001E000 only, which turns out to have cut off a
+  candidate: **0x8001E7EC** is an `andi` of 8 four bytes past the old upper bound. Re-run over
+  every code blob on the disc, masks 8/9/0x0C/0x0E/0x0F/0x18/0x38/0x78/0xF8, it finds **127**
+  sites, one of them in the model region. That one was read: `[s0+0x0C] & 8` where `s0` is a
+  runtime instance, so it tests an instance flag word and not a strip's flag byte. **I could
+  not validate that anything reads bit 3; that is not evidence it is unused.** A test done on
+  a byte already loaded into a register, or through a mask this list does not contain, would
+  not appear.
+* **Vertex flag bits 2 and 8** (130 and 28 vertices) — no reader found, searched the same way.
+  Masks 4/5/6/7/0x100/0x104/0x300/0x700 over every code blob give **139** sites, three of them
+  in the model region: 0x8001C4D0 and 0x8001C5F8 mask the global at 0x8005B690, and 0x8001E8CC
+  masks an instance's `+0x0C`. None reads a vertex's fourth `i16`. Same caveat as above.
 
 **TEX**
 
