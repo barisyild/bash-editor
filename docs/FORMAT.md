@@ -662,7 +662,15 @@ from `level.tex`'s flipbook machinery (§10.7), not from the §8.6 block at all.
 the picture into two halves: **§8.6 sub-blocks are the preview sign geometry** — vertex and
 index arrays parsed once at init, by the position-anchored reader the block-shift probe
 exposed — and the animated content on the signs is TEX flipbook data selected per door. What
-the block-shift probe broke was the signs themselves. The prologue did yield one solid cross-check on the way: it
+the block-shift probe broke was the signs themselves.
+
+The init parser — the one unread function — has a candidate list now. A signature scan for
+code reading all four `p0..p3` words plus the index or count off one base narrows `warp.bin`
+to **six sites**, and two sit exactly where the two halves of the story predict:
+`0x800B56F0` in the mode-boot region (the parse must run before the classifier registers
+doors) and `0x800BBDFC` inside the sign-draw band (the consumer of the parsed runtime copy).
+The other four are `0x800B64A8`, `0x800B7A58`, `0x800B8568`, `0x800B8A84`. Reading `0x800B56F0`
+first is the named next step. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
 101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
