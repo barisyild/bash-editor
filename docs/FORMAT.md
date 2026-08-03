@@ -669,7 +669,9 @@ code reading all four `p0..p3` words plus the index or count off one base narrow
 to **six sites**, and two sit exactly where the two halves of the story predict:
 `0x800B56F0` in the mode-boot region (the parse must run before the classifier registers
 doors) and `0x800BBDFC` inside the sign-draw band (the consumer of the parsed runtime copy).
-The other four are `0x800B64A8`, `0x800B7A58`, `0x800B8568`, `0x800B8A84`.
+Two of the six — `0x800B64A8` and `0x800B7A58` — turned out to be **scanner false positives**:
+function epilogues, whose `lw $ra/$s4/$s3/$s2` restores off `$sp` match the +36/+32/+28/+24
+load pattern. The real candidate list was four, and all four are read.
 
 Two of those are read. `0x800B56F0`'s function (`0x800B551C`) is the per-door frame update —
 it is where `[door+36]` feeds the stream request, read in §14's solve. And the sign-draw band's
