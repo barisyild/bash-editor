@@ -20,11 +20,14 @@ Every field row carries one of three confidence markers:
 ### What a negative means here
 
 **"No reader found" never means "nothing reads it."** A scan shows where a *shape* is absent.
-It cannot show that a routine does not exist, and this document has been wrong that way twice:
-it said no `GetClut` arithmetic existed anywhere on the disc — three exhaustive scans agreed —
-and `0x800364FC` is `GetClut`, **called** rather than inlined (§10.4); it said nothing read
-the sub-object's +0x10 block, and 0x80024B70 does (§8.5). Both were a search that had not
-found something, written up as a fact.
+It cannot show that a routine does not exist, and this document has been wrong that way three
+times: it said no `GetClut` arithmetic existed anywhere on the disc — three exhaustive scans
+agreed — and `0x800364FC` is `GetClut`, **called** rather than inlined (§10.4); it said
+nothing read the sub-object's +0x10 block, and 0x80024B70 does (§8.5); and it generalised
+from `warp.bin` that no mode overlay ever holds a raw model base, which `crate.bin` disproves
+at 0x800B4BDC by reading a model's stamp, mesh count and first header (§14). The first two
+were searches that had not found something; the third was a single sample generalised. All
+three were written up as facts.
 
 So these phrases are all shorthand for the same thing, and none of them is a claim that a
 field is unused:
@@ -1513,9 +1516,13 @@ So: **I could not validate that anything reads it, and that is not evidence it i
 242 KB in seven files, with a header identical in 7/7 down to its constants and two
 equal-sized arrays inside it, is not what dead space looks like. The tempting reading — §8.4
 shows a level carries no collision volumes, so a floor must be described somewhere, and this
-is room-shaped data in the only files that are rooms — remains **untested**. With `warp.bin`
-ruled out, whatever reads it would have to be `gameeng.bin` or the executable, and both have
-already been scanned for all three address routes above.
+is room-shaped data in the only files that are rooms — remains **untested**.
+
+Ruling `warp.bin` out does **not** narrow the search to the engine, either. The obvious next
+step was to say a mode overlay never sees a raw model, and §14 records why that is false:
+`crate.bin` at 0x800B4BDC reads a model's stamp, mesh count and first header directly. Ten
+sites across the fourteen overlays read a model-only offset, and none of them has been
+followed.
 
 ---
 
@@ -3469,13 +3476,17 @@ are not only undocumented format; they are also where a reader is quietly skippi
   `group.bytes` sizes both the buffer and the CdRead, but the splitter at 0x800126F4 places
   entry *i* at `(sector[i] − sector[first]) * 2048`, which for group 0 reaches sector 6519
   while the buffer holds 6516.
-* **What a mode overlay can even see.** `warp.bin` was read far enough to answer one
-  structural question, and the answer generalises: it **never holds a raw model base**.
-  Everything it knows about a level arrives through the engine's runtime records — it
-  resolves an object once, draws once, and asks the +0x0C list six times. If that is how the
-  mode overlays work generally, then no unread field of an MDL can have a mode overlay as its
-  reader, and the search for one narrows to `gameeng.bin` and the executable. Only `warp.bin`
-  was checked; the other thirteen were not.
+* **What a mode overlay can see — and the generalisation that does not hold.** `warp.bin`
+  never holds a raw model base: eleven of its sites load a `[owner+0x0C]`, three touch an
+  offset an MDL header uses, and all three turn out to be runtime structs or a pointer handed
+  straight back to the engine. It was tempting to generalise that to the other thirteen, and
+  **that generalisation is false.** Running the same test over all fourteen finds ten sites
+  reading a model-only offset, and two of them settle it: `crate.bin` at 0x800B4BDC loads
+  `[owner+0x0C]` and then reads `[model+0x00]`, `[model+0x54]` and `[model+0x58]` — the
+  stamp, the mesh count and the first header. `papu.bin` 0x800B5130 and `mallet.bin`
+  0x800B5ECC do the same kind of thing. So a mode overlay **can** read an MDL directly, the
+  search space for an unread field's reader is the whole disc rather than two files, and what
+  those ten sites do with what they read is unread.
 * The **code overlays** are readable now, which is how §9.1's name tables and §9.11's node
   handlers were found, but only their entry conditions are mapped. `overlays/modes/*.bin` is
   raw MIPS with no header stating its link address; the address is recovered by sweeping
