@@ -349,8 +349,8 @@ equivalent formula `model + 52*id + 0x24`:
 | --- | --- | --- | --- | --- |
 | 0x00 | u32 | `runtime_slot` | **Not padding.** Zero in the file (5990/5990) because the loader fills it; the mesh-iteration loop dereferences it. | **confirmed** |
 | 0x04 | u32 | — | Zero in 5990/5990. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
-| 0x08 | i16 | `triangle_count` | Number of triangles. Equals the sum of the strip list's high bytes in **5990/5990**. Not read by any render pass — the runtime derives the count from the strip list. Redundant but exact. | **confirmed** |
-| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader found, over every code blob on the disc**: 132 halfword loads at this offset, each base register traced, and not one arrives through the `addiu 0x58 / 0x34 / 0x24` a mesh address is built with. See §14 for the search and its limits. | **confirmed** (the trace) / ?unknown? (meaning) |
+| 0x08 | i16 | `triangle_count` | Number of triangles. Equals the sum of the strip list's high bytes in **5990/5990**. No render pass reads it — they derive the count from the strip list — but 0x8001C3F8 does, as a **dispatch gate** that never opens on shipped data. See below. | **confirmed** |
+| 0x0A | i16 | `format` | Values: 4 (3112), 6 (2620), 7 (255), 5 (2), 2 (1). **No reader found, over every code blob on the disc**: 132 halfword loads at this offset, each base register traced, and not one arrives through the `addiu 0x58 / 0x34 / 0x24` a mesh address is built with. A **second, independent route** was searched since: all eight call sites of the id resolver 0x80015A18, following the mesh it returns, and they read only 0x08, 0x10, 0x14 and 0x28. See §14 for the searches and their limits. | **confirmed** (the trace) / ?unknown? (meaning) |
 | 0x0C | i16 | — | Non-zero in 344/5990, in small families: 100 (138), 10 (68), 5 (51), 4 (29), 101–103 (22), 20–33 (16), others (20). **No reader found in the executable or in any of the 14 mode overlays.** The 138 meshes carrying 100 are exactly the backdrop domes each cutscene raises without a node (§9.11.6), and of the 342 that a scene could have claimed, **none is owned by a scene node** — correlation over the corpus, not a decoded meaning. | ?unknown? |
 | 0x0E | i16 | — | Non-zero in 162/5990, and only where 0x0C is. Where 0x0C is 100 it is 0 (72) or 1 (65), which is the order the two domes stack — opaque sky, then the additive tint over it. Same status: correlation, no reader found. | ?unknown? |
 | 0x10 | i32 ptr | `ptr_bounds` | 0x14-byte bounds block; the vertex pool starts at `T(0x10) + 0x14`. | **confirmed** |
@@ -378,6 +378,33 @@ Mesh iteration, and the proof that +0x00 is a live pointer slot:
 
 The identical loop appears again at 0x8001702C. A writer must leave +0x00 zero on disk, not
 treat it as reserved space.
+
+### What reads `+0x08`: a two-triangle special case that never fires
+
+Meshes are reached by id as well as by iteration. 0x80015A18 is the resolver: for an id whose
+`& 0x7000` is 0x2000 it computes `$a1 + 0x34*(id & 0xFFF) + 0x24`, which for the 1-based ids of
+§8.2 is exactly `model+0x58` at id 1 — the first mesh header. Eight sites across the executable
+and the overlays call it, and one of them reads the triangle count:
+
+```
+8001C3E8  lw    $a1, 0xc($v0)    ; the object's model base
+8001C3EC  jal   0x80015a18       ;   id at +0x74 -> the mesh header
+8001C3F8  lhu   $a0, 8($v1)      ; the TRIANGLE COUNT
+8001C400  bne   $a0, $v0, out    ;   leave unless it is exactly 2
+8001C408  lw    $v0, 0x14($v1)   ; the strip list
+8001C414  lbu   $v0, 0x15($v0)   ;   its byte at +0x15
+8001C41C  bne   $v0, $a0, out    ;   leave unless that is 2 as well
+8001C428  sw    $v0, 0x54($s0)   ; install 0x8001AA48 as the object's draw (§9.11.8)
+8001C434  sw    $v0, 0x58($s0)   ;   and 0x8001C378 alongside it
+```
+
+So `+0x08` is not inert: it selects a specialised draw for a two-triangle mesh. **The gate never
+opens on the shipped corpus.** 2267 of the 5990 meshes do carry a triangle count of exactly 2,
+but the byte at `T(0x14)+0x15` is 0 in 2197 of them, 255 in 65 and 171 in 5 — **never 2**, so
+not one mesh in the archive passes both tests and 0x8001AA48 is never installed by this route.
+
+That is measured on this disc only. A path that no shipped asset exercises is still a path, and
+a writer that changed a mesh's triangle count or its strip list could open it.
 
 ### What reads `+0x28`: a per-triangle query, gated on the pointer
 
