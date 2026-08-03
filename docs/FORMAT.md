@@ -257,7 +257,7 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x44 | i32 ptr | `ptr_subfiles` | Appended clip directory, 24-byte records: the **animation** table. See §8.2 and §9. | **confirmed** |
 | 0x48 | i32 | `count_4C` | Number of i32 entries in the 0x4C array. Range 0..40. | **confirmed** |
 | 0x4C | i32 ptr | `ptr_ptr_array` | `count_4C` self-relative i32 pointers, stride 4. All 688 corpus entries resolve inside the file and land inside the 0x1C object table at 0, 4 or 8 mod 12 (401 / 163 / 124). | **confirmed** |
-| 0x50 | i32, **base-relative** | `resident_size` | `base + i32@0x50` is the end of the 0x44 directory in 399/400 and ≤ file size in 400/400. Equals the file size exactly for the 141 models with no sub-files; ≤ the first sub-file's start in 225/225. **Not** self-relative. No EXE site found that reads it. | *likely* |
+| 0x50 | i32, **base-relative** | `resident_size` | `base + i32@0x50` is the end of the 0x44 directory in 399/400 and ≤ file size in 400/400. Equals the file size exactly for the 141 models with no sub-files; ≤ the first sub-file's start in 225/225. **Not** self-relative. No EXE site found that reads it. It is a multiple of 0x800 in **exactly 8 models**, and those eight are the seven hub/warp rooms — where it equals `T(0x44)` and a 242 KB block begins there (§8.6) — plus `chaselevel.mdl`, the one file where it is rounded up. A field that is sector-aligned precisely where an unloaded tail starts is behaving like a resident-image size. | *likely* (strengthened: the alignment is exactly where a second `CdRead` would begin) |
 | 0x54 | i32 | `mesh_count` | Number of 0x34-byte mesh headers that follow at 0x58. 0 in 27/400 (legitimately). | **confirmed** |
 
 > **The 0x10 anomaly.** The game does not apply the usual self-relative rule to file-header
@@ -1467,8 +1467,20 @@ something past `T(0x44)` with **no clips at all**, so the payload that would be 
 blob in any other file is this instead: `demo_hub1`, `demo_hub2` and `warp_room1..5`, 242 KB
 between them, and nothing else in the archive has one.
 
-It starts where `base + i32@0x50` says the resident image ends, and its header is the same in
-all seven:
+**It starts outside the resident image, on a CD sector boundary — and that is measured, not
+inferred.** `i32@0x50` is a multiple of 0x800 in exactly **8 of the 400 models**. Seven are
+these; in all seven `i32@0x50 == T(0x44)` exactly, and the block's start is 0x800-aligned both
+inside the file and at its absolute offset in the DAT. The eighth is
+`arena/boss_oxide/chaselevel.mdl`, the one model §2.1 already records as rounding its 0x50 up
+(to 0x26000, +1740 past the directory).
+
+So the block is not something the resident image forgot to reach; **it is past where the
+resident image ends**, beginning on the sector boundary a separate `CdRead` would start at.
+That is consistent with everything the searches below found — three address routes and every
+mode overlay come up empty because the data was never part of what loads with the model.
+What performs that second read, and when, is not traced.
+
+Its header is the same in all seven:
 
 | Offset | Type | Measured |
 | --- | --- | --- |
@@ -3291,9 +3303,12 @@ are not only undocumented format; they are also where a reader is quietly skippi
 * **0x30, 0x34** — zero in 400/400; no reader found. Being zero everywhere, a reader could
   exist and never show its hand, so "padding" is the reading that fits and not a validated
   one.
-* **0x50** — the arithmetic is unambiguous (`base + value` is the resident-image end) but no
-  code reads the field, so whether the encoder meant "size" or "pointer to an 80-byte
-  trailer" is inference only.
+* **0x50** — the arithmetic is unambiguous (`base + value` is the resident-image end) and no
+  code reading it has been found, so "size" versus "pointer to a trailer" is still inference.
+  It is better-supported inference than it was: the field is a multiple of 0x800 in exactly 8
+  of 400 models, and seven of those are the hub/warp rooms where it equals `T(0x44)` and the
+  unexplained block of §8.6 begins on that very sector boundary. A "pointer to a trailer"
+  would have no reason to be sector-aligned in those eight and nowhere else.
 * **0x1C object table** — the mystery here is smaller than this entry used to make it sound.
   The 12-byte object records are read (§8.3) and what follows them is the node graph, which
   §9.11 reads and `tools/coverage.py` now accounts for down to 292 bytes of inter-node
