@@ -2615,11 +2615,34 @@ installing the draw. And the context is filled straight from the model:
 8001DE9C  ctx+0x18 = [record+0x1C]                   ; how many
 ```
 
-So `model+0x18` is the section that feeds it. **It is empty in every model but one.**
-`intro_eurocom` carries 164 bytes there, eight 20-byte records shaped `(0, flags, mesh index,
-0, 0)`, and the two flagged `0x40000000` name exactly its two backdrop domes — meshes 10 and
-11, the pair `mesh+0x0C == 100` marks. Those two ids appear nowhere else in that file, so the
-raw index in this table is the only reference to them.
+So `model+0x18` is the section that feeds it. **It is empty in all but two models.** Of the 327
+models that declare no sub-objects, **325 leave exactly zero bytes** between the count word and
+`T(0x44)`; `intro_eurocom` leaves 160 there and `cutscene/gamelogo_text.mdl` leaves 260.
+
+The stride is 20 and that is measured, not assumed: of the strides that divide both lengths,
+only 20 makes the leading word settle into runs — **three distinct values in three contiguous
+runs in both files**, against 11 values in 41 runs at stride 4, and 5 in 6 at stride 16. The
+record is `(flags, index, value, 0, 0)`; an earlier revision wrote it as `(0, flags, mesh
+index, 0, 0)`, which fits the first record only and slips by one word from the second on.
+
+| | records | flags seen | second field | third field |
+| --- | --- | --- | --- | --- |
+| `intro_eurocom` | 8 | `0x40080000` ×4, `0x40000000` ×2, `4` ×2 | 0,1,2,3,10,11,12,2 | 0 throughout |
+| `gamelogo_text` | 13 | `0x40000000` ×4, `1` ×5, `2` ×4 | 0,1,2,3,0,1,11,10,2,0,1,2,3 | 3584, 512, 1536, 2560 |
+
+**The second file refutes reading the second field as a mesh index.** It is in range for 8 of 8
+in `intro_eurocom`, whose 28 meshes cover every value used — but `gamelogo_text` has **two**
+meshes and indexes up to 11, so only 6 of its 13 are in range. The `0x40000000` correspondence
+is likewise a single-file observation: in `intro_eurocom` those two records do name meshes 10
+and 11, but `mesh+0x0C` is exactly 100 on mesh 10 alone — mesh 11 holds 0x10064, the same 100
+in its low half — and in `gamelogo_text` no mesh carries 100 at all while four records still
+flag `0x40000000`. What the fields mean is therefore ?unknown?; the reader at 0x8001DE90 is
+traced, the field meanings are not.
+
+`gamelogo_text`'s third field is the one place a value looks like anything: 3584, 512, 1536 and
+2560 are 315°, 45°, 135° and 225° on the 4096-to-the-turn scale used everywhere else in the
+format (§9.11.7). That is a coincidence worth recording and not a decoding — nothing traced
+reads the field.
 
 What is **not** settled is where the other 64 cutscenes get their object list, since their
 `model+0x18` is empty. Nor is `mesh+0x0C` read anywhere: the immediate 100 appears 9 times in
@@ -3448,20 +3471,23 @@ left is two files:
   of the one both mesh headers point at. Same 86 strips and 494 triangles, same bounds block,
   and **7520 of 7520 bytes identical**. Both headers name the second copy; nothing names the
   first. Written down as a fact about the file, not as a purpose — what made the exporter
-  emit it twice is not something the data can say. (Its other 260 bytes are the tail below.)
-* `cutscene/intro_eurocom.mdl` — 160 bytes from `T(0x18)+4` to `T(0x44)`, in a model whose
-  sub-object count is zero, so nothing in the header describes the span. Its layout is
-  regular: **8 records of 20 bytes**, the last 14 bytes of each zero. The first two fields
-  read `(0x40080000, 0..3)` four times, `(0x40000000, 10)` and `(0x40000000, 11)`, then
-  `(4, 12)` and `(4, 2)` — and 0x4000 is the animation id namespace of §8.2, in a model that
-  declares no clips at all.
+  emit it twice is not something the data can say.
+* The **object-list source arrays** of §9.11.8 — 260 bytes in `gamelogo_text` and 160 in
+  `intro_eurocom`, both running from `T(0x18)+4` to `T(0x44)` in a model whose sub-object
+  count is zero, so nothing in the header sizes the span. 325 of the 327 sub-object-less
+  models leave that span empty; these two do not. The records are 20 bytes and the stride is
+  measured rather than assumed. 0x8001DE90 reads this section, so unlike the duplicate above
+  it is not orphaned — what the fields inside a record mean is what is missing, and §9.11.8
+  says which single-file readings the second file refutes.
 
 Neither is a claim that those bytes are unused — only that **I could not validate what
-reads them**.
+reads them**, and for the second one only what reads them *field by field*.
 
-The tool walks the **TEX** corpus too, and there it reaches **99.98 %** of 15.2 MB. Every one
-of the 2892 bytes it leaves is at the end of a file and zero — 4 bytes in 44 packs, 8 in 263,
-12 in 51 — so a pack is padding and nothing else past its last structure.
+The tool walks the **TEX** corpus too, and there it now reaches **100.00 %** of 15.2 MB. The
+last 2892 bytes were the zero tail of §10.6: every pack's length is a multiple of 8 in 400/400,
+and the run of zeros that gets it there is 4 bytes in 44 packs, 8 in 263 and 12 in 51, never
+more than 12 and entirely zero in 358/358. The walker claims it by testing the bytes, never by
+position, so a structure at the end of a future file would still surface as a hole.
 
 The audit is worth running for what it catches rather than for the number. It found the mesh
 terminator of §3, the padding rule of §2.1 and the hub block of §8.6 — and then it found a
