@@ -1474,7 +1474,7 @@ all seven:
 | +0x0A, +0x0C, +0x0E | u16 | **4, 4, 1 in 7/7** |
 | +0x10 | i32 | 104, 120, 124, 128, 132, 212 |
 | +0x14 | i32 | **32 in 7/7** |
-| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7 |
+| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7. **The first and last gaps are equal in 7/7** — `p3 − p2 == p1 − p0` exactly, 332/364/716/872/468/576 bytes — so the block holds two arrays of the same size with a smaller one between them. Both are even and both are within two bytes of `2 × [+0x08]`, which is consistent with u16 entries and one or two short of the count; that last part is a fit, not a measurement. |
 | +0x28..+0x30 | i32 | 0 in 7/7 |
 
 What the offsets reach has the **shape** of geometry, which is as far as measurement goes.
