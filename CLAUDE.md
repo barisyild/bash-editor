@@ -83,6 +83,17 @@ They are not style preferences.
   resolve that a byte-identical copy would satisfy, and a disc-wide sweep of all
   385 loads at that offset accounts for every one. Searched and not found is not
   the same as absent.
+- **A mesh in the file is not a mesh on screen.** A level draws what its
+  placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
+  counts 160-byte records and `+0x20` points at them, each record naming an
+  object id the object table binds to a mesh. In `warp_room1` **none of the 42
+  meshes in `model.meshes` is named by any object record or any of the 81
+  placements** — the room the player walks in is object-pool meshes, whose
+  headers start at `0x111f8`, immediately past the boundary, and which the
+  reader numbers 42 upward. Geometry added to a plain mesh there is written
+  correctly, verifies clean and never appears. Check reachability before
+  editing a level mesh; a model whose meshes draw without any placement (the
+  menu) is the other case, not the general one.
 - **Import needs the model's sibling `.tex`.** Without it no material resolves
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
