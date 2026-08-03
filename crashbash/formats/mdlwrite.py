@@ -842,6 +842,11 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                           for f in range(faces)]),
         )
 
+    layout = None if pin_tables else _geometry_region(dest_data, dest)
+    if layout is not None:
+        return _rewrite_region(dest_data, dest, layout, prepared, per_mesh,
+                               colours, uvs)
+
     if pin_tables:
         out = bytearray(dest_data)
     else:
@@ -894,6 +899,136 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                 f"mesh {index}'s header is not where the layout implies")
         _finish_header(out, header, faces, target.format, target.unk13,
                        target.unk14, geo, strips, uvi, tex, ci, end)
+    return bytes(out)
+
+
+# Header fields whose targets sit past the geometry boundary and so move with
+# it. `0x50` is a plain length from the base; the rest are self-relative.
+_SHIFTS_WITH_BOUNDARY = (0x1C, 0x2C, 0x3C, PTR_CLIP_TABLE, 0x4C)
+
+
+def _resolve(data: bytes, field: int) -> int:
+    """`T(field)` — the self-relative resolve every MDL header pointer uses."""
+    return field + struct.unpack_from("<i", data, field)[0]
+
+
+def _geometry_region(data: bytes, model) -> tuple[int, int, int, int] | None:
+    """`(start, colour, uv, end)` when the region is laid out as expected.
+
+    Appending rebuilt blocks and abandoning the originals leaves the old blocks,
+    tables and vector pool unreachable -- 121,308 bytes of a 528,604-byte
+    `mainmenu/models` import, 23 % of the file. They can be reclaimed only if
+    nothing else lives in the span, and in `models.mdl` nothing does: the 22
+    mesh blocks run contiguously from 0x4D0 with 4-byte gaps, the colour table
+    starts at the byte after the last one, then the UV table, then the pool
+    ending exactly at `T(0x08)`, and the object table at `T(0x1C)` sits *past*
+    the boundary. This returns the span only when that shape holds, so a model
+    laid out differently falls back to appending rather than being rearranged
+    on an assumption.
+    """
+    if not model.meshes:
+        return None
+    colour, uv, pool, end = (_resolve(data,PTR_COLOUR_TABLE),
+                             _resolve(data,PTR_UV_TABLE),
+                             _resolve(data,0x28), _resolve(data,PTR_MODEL_END))
+    spans = []
+    for mesh in model.meshes:
+        low = min(mesh.ptr_bounds, mesh.ptr_strips, mesh.ptr_uv_index,
+                  mesh.ptr_texture, mesh.ptr_colour_index)
+        if not 0 < low < mesh.ptr_end:
+            return None
+        spans.append((low, mesh.ptr_end))
+    start = spans[0][0]
+    for (lo, hi), (nlo, _) in zip(spans, spans[1:]):
+        if not lo < hi <= nlo <= hi + 4:
+            return None          # not contiguous in index order
+    if not (spans[-1][1] <= colour < uv <= pool <= end):
+        return None
+    if colour - spans[-1][1] > 4:
+        return None              # something between the blocks and the tables
+    for field in _SHIFTS_WITH_BOUNDARY:
+        if _resolve(data,field) < end:
+            return None          # a header field points inside the span
+    return start, colour, uv, end
+
+
+def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
+    """Lay the whole geometry region out again with no unreachable bytes."""
+    start, old_colour, old_uv, old_end = layout
+    out = bytearray(dest_data[:start])
+
+    def append(block: bytes) -> int:
+        at = len(out)
+        out.extend(block)
+        if len(out) % 4:
+            out.extend(b"\x00" * (4 - len(out) % 4))
+        return at
+
+    placed = {}
+    shifted = {}
+    for index, mesh in enumerate(dest.meshes):
+        if index in prepared:
+            target, blocks = prepared[index]
+            colour_index, uv_index = per_mesh[index]
+            strips = append(blocks["strips"])
+            geometry = append(blocks["geometry"])
+            uvi = append(uv_index)
+            tex = append(blocks["texture"])
+            ci = append(colour_index)
+            placed[index] = (blocks["faces"], geometry, strips, uvi, tex, ci,
+                             len(out))
+        else:
+            low = min(mesh.ptr_bounds, mesh.ptr_strips, mesh.ptr_uv_index,
+                      mesh.ptr_texture, mesh.ptr_colour_index)
+            # Copied verbatim, so only the six pointers move. Rebuilding the
+            # header instead loses whatever it holds that a reader does not
+            # reconstruct -- it cost nine triangles the first time.
+            shifted[index] = append(dest_data[low:mesh.ptr_end]) - low
+
+    new_colour = len(out)
+    out.extend(colours)
+    new_uv = len(out)
+    out.extend(uvs)
+    if len(out) % 4:
+        out.extend(b"\x00" * (4 - len(out) % 4))
+    new_pool = len(out)
+    out.extend(dest_data[_resolve(dest_data, 0x28):old_end])
+    boundary = len(out)
+
+    delta = boundary - old_end
+    if struct.unpack_from("<i", dest_data, RESIDENT_SIZE)[0] % SECTOR == 0:
+        out.extend(b"\x00" * (-delta % SECTOR))
+        boundary = len(out)
+        delta = boundary - old_end
+    out.extend(dest_data[old_end:])
+
+    struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour - PTR_COLOUR_TABLE)
+    struct.pack_into("<i", out, PTR_UV_TABLE, new_uv - PTR_UV_TABLE)
+    struct.pack_into("<i", out, 0x28, new_pool - 0x28)
+    struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
+    for field in _SHIFTS_WITH_BOUNDARY:
+        struct.pack_into("<i", out, field,
+                         struct.unpack_from("<i", out, field)[0] + delta)
+    struct.pack_into("<i", out, RESIDENT_SIZE,
+                     struct.unpack_from("<i", out, RESIDENT_SIZE)[0] + delta)
+
+    for index, mesh in enumerate(dest.meshes):
+        header = MESH_HEADER_START + MESH_HEADER_SIZE * index
+        if index in placed:
+            faces, geo, strips, uvi, tex, ci, end = placed[index]
+            target = prepared[index][0]
+            _finish_header(out, header, faces, target.format, target.unk13,
+                           target.unk14, geo, strips, uvi, tex, ci, end)
+            continue
+        shift = shifted[index]
+        for field, was in ((FIELD_BOUNDS, mesh.ptr_bounds),
+                           (FIELD_STRIPS, mesh.ptr_strips),
+                           (FIELD_UV_INDEX, mesh.ptr_uv_index),
+                           (FIELD_TEXTURE, mesh.ptr_texture),
+                           (FIELD_COLOUR_INDEX, mesh.ptr_colour_index),
+                           (FIELD_END, mesh.ptr_end)):
+            at = header + field
+            struct.pack_into("<i", out, at, was + shift - at)
     return bytes(out)
 
 
