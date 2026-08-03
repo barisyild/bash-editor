@@ -11,21 +11,23 @@ before `mdlwrite` installs a mesh and moves the layout boundary. Patch first,
 then rebuild geometry: the offsets in `extras` were recorded against the file as
 it was exported.
 
-Two things it will not write, and the reason is the same for both. The scene
-reader moves a sub-scene's keys onto the parent's clock and into the parent's
-frame (`_onto_parent`), and `extras` records `shift` and `parented` but not the
-parent's own placement. Subtracting `shift` undoes the clock; nothing in the
-file's own `extras` undoes the frame. So a parented track or camera is reported
-as skipped rather than written wrong -- see `Patched.skipped`.
+A sub-scene is the hard case. The reader moves its keys onto the parent's clock
+and into the parent's frame (`_onto_parent`), so both have to be run backwards:
+`shift` undoes the clock and the parent placement `extras` carries undoes the
+frame, through `_Frame`. A file exported before that placement was carried gets
+its parented keys reported as skipped rather than written wrong -- see
+`Patched.skipped`.
 """
 from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from ..binreader import GTE_SCALE_SMALL
 from ..scene import (CAMERA_EYE, CAMERA_TARGET, PLACEMENT_STRIDE, PROP_STRIDE,
-                     QUATERNION_ONE)
+                     QUATERNION_ONE, _multiply, rotation_matrix)
 from .mdl import (PLACEMENT_FLAGS, PLACEMENT_ID, PLACEMENT_MATRIX,
                   PLACEMENT_TRANSLATION)
 
@@ -58,6 +60,40 @@ class Patched:
 def _fixed(value: float, one: float) -> int:
     """A float back to the fixed-point integer the file stores."""
     return int(round(float(value) * one))
+
+
+class _Frame:
+    """The inverse of `Placement.applied` -- a parent's frame, undone.
+
+    The reader puts a sub-scene's keys into its parent's frame with
+    `p + R(q) @ (s * v)` for a point and `q * r` for an orientation. Writing one
+    back means running that backwards, so a key lands in the record as the file
+    stated it rather than as the shot displays it.
+    """
+
+    def __init__(self, placement: dict) -> None:
+        self.position = np.asarray(placement["position"], dtype=np.float64)
+        self.rotation = np.asarray(placement["rotation"], dtype=np.float64)
+        self.scale = np.asarray(placement["scale"], dtype=np.float64)
+        self.basis = rotation_matrix(self.rotation).T
+        # A zero component would divide by zero; all fourteen sub-scenes in the
+        # game carry a unit scale, so this only guards the pathological file.
+        self.safe_scale = np.where(np.abs(self.scale) < 1e-9, 1.0, self.scale)
+
+    def point(self, world) -> np.ndarray:
+        return (self.basis @ (np.asarray(world, dtype=np.float64)
+                              - self.position)) / self.safe_scale
+
+    def orientation(self, world) -> np.ndarray:
+        x, y, z, w = self.rotation
+        norm = float(np.dot(self.rotation, self.rotation))
+        if norm < 1e-9:
+            return np.asarray(world, dtype=np.float64)
+        inverse = np.array([-x, -y, -z, w], dtype=np.float64) / norm
+        return _multiply(inverse, np.asarray(world, dtype=np.float64))
+
+    def factor(self, world) -> np.ndarray:
+        return np.asarray(world, dtype=np.float64) / self.safe_scale
 
 
 def _put_i32(data: bytearray, at: int, value: int) -> None:
@@ -98,11 +134,14 @@ def _patch_placement(data: bytearray, entry: dict, report: Patched) -> None:
 def _patch_track(data: bytearray, track: dict, what: str,
                  report: Patched) -> None:
     """A node's keys, each written where the reader found it."""
+    frame = None
     if track.get("parented"):
-        report.skipped.append(
-            f"{what} at 0x{int(track['node']):X}: its keys are in a parent's "
-            f"frame, which `extras` cannot undo")
-        return
+        if not track.get("parent"):
+            report.skipped.append(
+                f"{what} at 0x{int(track['node']):X}: its keys are in a "
+                f"parent's frame and `extras` names no parent to undo it with")
+            return
+        frame = _Frame(track["parent"])
     stride = int(track["stride"])
     layout = KEY_LAYOUT.get(stride)
     if layout is None:
@@ -116,15 +155,22 @@ def _patch_track(data: bytearray, track: dict, what: str,
         if not _fits(data, at, stride):
             report.skipped.append(f"{what}: key at 0x{at:X} is outside the file")
             continue
+        position, rotation = key["position"][:3], key["rotation"][:4]
+        scale = key["scale"][:3]
+        if frame is not None:
+            position = frame.point(position)
+            rotation = frame.orientation(rotation)
+            scale = frame.factor(scale)
+
         _put_i32(data, at + KEY_TICK, int(key["tick"]) - shift)
         _put_i32(data, at + KEY_DURATION, int(key["duration"]))
-        for i, value in enumerate(key["position"][:3]):
+        for i, value in enumerate(position):
             _put_i32(data, at + position_at + 4 * i,
                      _fixed(value, 1.0 / GTE_SCALE_SMALL))
-        for i, value in enumerate(key["rotation"][:4]):
+        for i, value in enumerate(rotation):
             _put_i32(data, at + rotation_at + 4 * i,
                      _fixed(value, QUATERNION_ONE))
-        for i, value in enumerate(key["scale"][:3]):
+        for i, value in enumerate(scale):
             _put_i32(data, at + scale_at + 4 * i, _fixed(value, QUATERNION_ONE))
         report.keys += 1
 
@@ -132,23 +178,30 @@ def _patch_track(data: bytearray, track: dict, what: str,
 def _patch_camera(data: bytearray, camera: dict, report: Patched) -> None:
     """A camera node's keys: tick, duration, and the two points it looks along."""
     node = int(camera["node"])
+    frame = None
     if camera.get("parented"):
-        report.skipped.append(
-            f"camera at 0x{node:X}: its keys are in a parent's frame, which "
-            f"`extras` cannot undo")
-        return
+        if not camera.get("parent"):
+            report.skipped.append(
+                f"camera at 0x{node:X}: its keys are in a parent's frame and "
+                f"`extras` names no parent to undo it with")
+            return
+        frame = _Frame(camera["parent"])
     shift = int(camera.get("shift") or 0)
     for key in camera["keys"]:
         at = int(key["at"])
         if not _fits(data, at, CAMERA_EYE + 12):
             report.skipped.append(f"camera key at 0x{at:X} is outside the file")
             continue
+        target, eye = key["target"][:3], key["eye"][:3]
+        if frame is not None:
+            target, eye = frame.point(target), frame.point(eye)
+
         _put_i32(data, at + KEY_TICK, int(key["tick"]) - shift)
         _put_i32(data, at + KEY_DURATION, int(key["duration"]))
-        for i, value in enumerate(key["target"][:3]):
+        for i, value in enumerate(target):
             _put_i32(data, at + CAMERA_TARGET + 4 * i,
                      _fixed(value, 1.0 / GTE_SCALE_SMALL))
-        for i, value in enumerate(key["eye"][:3]):
+        for i, value in enumerate(eye):
             _put_i32(data, at + CAMERA_EYE + 4 * i,
                      _fixed(value, 1.0 / GTE_SCALE_SMALL))
         report.camera_keys += 1

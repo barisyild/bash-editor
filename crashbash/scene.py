@@ -256,6 +256,8 @@ class Track:
     # writing a key back to `node` has to undo both or it corrupts the record.
     shift: int = 0
     parented: bool = False
+    # The placement `parented` was applied with, kept so a writer can invert it.
+    parent: "Placement | None" = None
 
     def at(self, tick: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Position, rotation and scale at `tick`, interpolated within its key.
@@ -543,9 +545,10 @@ class Camera:
     screen_distance: float
     keys: tuple[CameraKey, ...]
     # What `_read_camera_keys` already did to these keys, so a writer can undo
-    # it -- the same pair `Track` carries, and for the same reason.
+    # it -- the same fields `Track` carries, and for the same reason.
     shift: int = 0
     parented: bool = False
+    parent: "Placement | None" = None
 
     def at(self, tick: int) -> tuple[np.ndarray, np.ndarray]:
         """Eye and target at `tick`, interpolated within the key holding it."""
@@ -966,6 +969,7 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
                 keys=tuple(keys),
                 shift=offset,
                 parented=parent is not None,
+                parent=parent,
             ))
             continue
 
@@ -1063,7 +1067,7 @@ def _onto_parent(node: int, start: int, end: int, keys: list[Key],
         keys = [Key(key.tick + offset, key.duration,
                     key.position, key.rotation, key.scale) for key in keys]
     return Track(node, start + offset, end + offset, tuple(keys),
-                 shift=offset, parented=parent is not None)
+                 shift=offset, parented=parent is not None, parent=parent)
 
 
 def field_of_view() -> float:

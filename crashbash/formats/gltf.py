@@ -533,6 +533,19 @@ def export_glb(
     return _pack_glb(document, bytes(buffer.data))
 
 
+def _placement_of(placement) -> dict | None:
+    """A sub-scene's placement, so a writer can invert what it was applied to.
+
+    Without this the shift in `extras` undoes a sub-scene's clock but nothing
+    undoes its frame, and a parented key can only be skipped on the way back.
+    """
+    if placement is None:
+        return None
+    return {"position": [float(v) for v in placement.position],
+            "rotation": [float(v) for v in placement.rotation],
+            "scale": [float(v) for v in placement.scale]}
+
+
 def _scene_extras(scene, model) -> dict:
     """The shot as the file itself holds it, for `extras`.
 
@@ -560,6 +573,7 @@ def _scene_extras(scene, model) -> dict:
         return {
             "node": track.node, "first": first, "stride": stride,
             "shift": track.shift, "parented": bool(track.parented),
+            "parent": _placement_of(track.parent),
             "keys": [{"at": track.node + first + stride * i,
                       "tick": int(k.tick), "duration": int(k.duration),
                       "position": [float(v) for v in k.position],
@@ -583,6 +597,7 @@ def _scene_extras(scene, model) -> dict:
     out["cameras"] = [{"node": c.node, "start": c.start, "end": c.end,
                        "screen_distance": float(c.screen_distance),
                        "shift": c.shift, "parented": bool(c.parented),
+                       "parent": _placement_of(c.parent),
                        "keys": [{"at": c.node + scene_module.CAMERA_KEYS
                                  + scene_module.CAMERA_STRIDE * i,
                                  "tick": int(k.tick), "duration": int(k.duration),

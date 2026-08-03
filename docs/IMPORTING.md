@@ -211,10 +211,39 @@ edit is just as narrow — moving one placement 100 units in x changes one byte,
 the x word going 35 to 25635, a delta of 25600 = 100 × 256 in the file's 8.8
 fixed point.
 
-**What it refuses to write.** A sub-scene's keys are read onto the parent's
-clock and into the parent's frame. `extras` carries the clock shift per track
-and per camera, so that is undone; it does not carry the parent's placement, so
-the frame cannot be inverted from the file alone. Those 117 keys are reported as
-skipped and left untouched, because writing them anyway would move things
-silently. Undoing the frame needs the parent placement carried in `extras` as
-well — that is the change that would close it, and it has not been made.
+**Sub-scenes, the case that needed care.** A sub-scene's keys are read onto the
+parent's clock *and* into the parent's frame, so writing one back means running
+both backwards. `extras` carries the clock shift per track and per camera, and
+it carries the parent's own placement; `_Frame` inverts the placement — the
+basis transposed, the translation subtracted, the scale divided out, the
+quaternion conjugated — and the shift is subtracted from the tick. With the
+placement carried, **nothing is skipped**: all 5819 track keys and 173 camera
+keys write back byte for byte. A file exported before the placement was carried
+still has parented keys reported as skipped rather than written wrong.
+
+## The whole trip, measured
+
+`tools/roundtrip.py` exports every entry, imports the file it just wrote, and
+compares what the two models draw. Geometry cannot be compared byte for byte —
+import re-derives the strip list, so the bytes legitimately differ — and it is
+compared as sorted triangle corners instead:
+
+| Group | Files | Triangles | Same count | Worst corner | Scenes | Byte-identical |
+| --- | --- | --- | --- | --- | --- | --- |
+| level | 134 | 196,700 | 196,700 | **0.0000** | 113 | 113 |
+| cutscene | 64 | 119,220 | 119,220 | **0.0000** | 64 | 64 |
+| character | 104 | 45,300 | 45,300 | **0.0000** | 0 | 0 |
+| models | 98 | 93,373 | 93,373 | **0.0000** | 28 | 28 |
+
+Sorting before comparing is the whole reason that column reads zero. A rebuilt
+mesh returns its triangles in a different order, and comparing the two lists in
+sequence measures the re-ordering: the first version of this tool reported
+corner errors of 5 to 20 units on models that had lost nothing at all.
+
+**Five entries do not import**, and the run names them:
+`arena/test/objects`, `medieval_ring/arena`, `tank_jungle/arena`,
+`tank_jungle/crystalarena`, `crate_jungle/arena`. Each has zero numbered meshes
+— 1, 16, 8, 4 and 15 object meshes respectively and nothing in `model.meshes` —
+so the `_meshNN` names the export writes and the import matches on never exist.
+Teaching the exporter to name object meshes would be the fix; the writers have
+never touched that pool (FORMAT §8.3), so it has not been attempted.
