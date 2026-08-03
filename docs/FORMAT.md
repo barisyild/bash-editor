@@ -4454,12 +4454,25 @@ are not only undocumented format; they are also where a reader is quietly skippi
   The pool is the position source animation keyframes index; +0x08 is a frame count and +0x0C
   points at the mesh a clip drives.
 
-* **Why the colour and UV tables are pinned in `warp_room1`** — the one substantial unknown
-  this document still carries, and the most heavily instrumented thing in it. The *facts* are
-  settled: repointing `0x20` crashes the room, and repointing **`0x24` alone** scrambles every
-  textured surface — three bytes of the file, a byte-identical copy, everything else
-  untouched. Fourteen hardware probes tabulate it in §2.1, including four that isolate `0x24`
-  against every field that might bound it (`0x28` following, `0x50` grown, `0x08` grown).
+* **Why the colour and UV tables are pinned in `warp_room1`** — **the cause is now known; one
+  sub-question remains.** §8.6's sub-blocks are **meshes** (§8.6: `+0x14 == 32` puts the strip
+  list at 0x34 in 38/38, `+0x18` and `+0x20` are the uv- and colour-index arrays, and every
+  entry lands inside the model's own tables), they stream in from disc independently of the
+  file's resident part, and they index the **shared** UV and colour tables — the colour side
+  in exactly the band the numbered meshes leave spare. Moving `0x20` or `0x24` moves those
+  tables out from under geometry that arrives separately. Hardware proves it from both
+  directions: `tables2` relocated the tables with their spans intact and the room **crashed**,
+  and `spare-paint` repainted only the spare band, leaving the room **identical while the map
+  previews turned red**. The remaining sub-question is narrow and honest: the ordinary mesh
+  path resolves `model+0x24` live and would follow a relocation, so the sign meshes' draw must
+  reach it some other way, and *that* code is still untraced.
+
+  The instrumentation that got here is kept because the eliminations are reusable. The facts
+  were settled first: repointing `0x20` crashes the room, and repointing **`0x24` alone**
+  scrambles every textured surface — three bytes of the file, a byte-identical copy,
+  everything else untouched. Fourteen hardware probes tabulate it in §2.1, including four that
+  isolate `0x24` against every field that might bound it (`0x28` following, `0x50` grown,
+  `0x08` grown).
 
   The *mechanism* is **?unknown?**, and every candidate has been killed rather than left
   open: the resident boundary (uvmove2 on hardware), the layout boundary (uvmove4), a
@@ -4548,14 +4561,14 @@ are not only undocumented format; they are also where a reader is quietly skippi
   `0x44`, `0x50` untouched — and the room **crashes**. So the harm is not a stretched length;
   it is the tables' *position*, and now there is a consumer that cares about position for a
   reason the packet path never could: **§8.6's sub-blocks are streamed from disc into fresh
-  allocations and coloured from the shared table.** One probe tests the colour claim without needing that code at all. **spare-paint** repaints
-  every non-black entry of `warp_room1`'s spare band — 1,025 of the 1,101 entries from 3415 to
-  4515 — bright magenta and changes nothing else: same file size, every byte outside the
-  colour table identical, entries 0..3414 untouched. No numbered mesh reaches that band, so
-  the room must look exactly as it shipped; if the map previews turn magenta, the binding is
-  proven from the data side and the missing code's *effect* is established even while its
-  location is not. If nothing changes anywhere, this section's central finding is wrong and
-  says so.
+  allocations and coloured from the shared table.** **And hardware confirmed it.** The **spare-paint** probe repainted every non-black entry of
+  `warp_room1`'s spare band — 1,025 of the 1,101 entries from 3415 to 4515 — bright magenta
+  and changed nothing else: same file size, every byte outside the colour table identical,
+  entries 0..3414 untouched. On the disc **the room is unchanged and the map previews turn
+  red**. Two facts in one image: the sign meshes take their colours from the model's shared
+  table, and they take them from exactly the band no numbered mesh reaches. This is the
+  section's central claim proven from the data side, on the console, without needing the code
+  that performs the binding.
 
   Whatever binds their colour indices to
   that table is resolved somewhere this document has not traced — at stream-in, in the
