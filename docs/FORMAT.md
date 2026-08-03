@@ -633,11 +633,15 @@ calls. `gameeng.bin`'s eight owner-global sites are triaged and none is it eithe
 **fade writers** into the owner's `+0x14` slot (`0x8008FB84`, `0x80094EE4` with its `4096 − x`
 arithmetic, `0x80093088/158`), confirming §9.11.10's fade plumbing from the engine side; two
 clear the billboard parameter pair at `+40/+44`; one is a 24-stride render loop and one the
-viewport driver. So the locator hides behind a **pointer escape**: some call receives the door
-struct's address and reads `+36` through a register this scan cannot see. Following the door
-struct's escape sites is the remaining avenue, and the behavioural fact stands regardless:
-sub-blocks are selected by the in-file index, located by something that ignores the live
-header.
+viewport driver. And the pointer-escape avenue is measured shut as well: a register-flow scan from all 27 base
+references finds **no call that receives a door-struct address within 18 instructions** — the
+base register's derivations never reach `a0..a3` before a `jal`. What does leave the classifier
+is a different write: `sw $s4, 84($s2)` puts something into the **instance's** `+84` as each
+kind-3 preview placement is registered, so the index may travel with the instance rather than
+the door struct. That write's source register and its readers are the remaining thread; beyond
+it, this question needs cross-reference tooling or the emulator. The behavioural facts stand
+regardless: sub-blocks are selected by the in-file index, located by something that ignores
+the live header.
 
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
