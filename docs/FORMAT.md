@@ -1237,7 +1237,7 @@ the piece.
 | +0x48 | MATRIX | A second one, byte-identical to the first in 541/2689. Not read by the loader. | **confirmed** (shape) / ?unknown? (use) |
 | +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
-| +0x9C | u16 | **A threshold the draw path compares before it will use a texture**, and flag bit 25 is what says the record carries one. See below. | **confirmed** (the path) / ?unknown? (the units) |
+| +0x9C | u16 | **The ordering-table index the placement draws into** — its depth bucket — bounds-checked against the segment's last index before the textured path is entered. Flag bit 25 says the record carries one; without it the index is 1. See below. | **confirmed** |
 | +0x9E | u16 | **Traced end to end, and never exercised.** Copied to runtime +0x8A; 0x80019A9C reads it back and writes it to the global at 0x80056AC4, gated on flag bit 30; 0x800190E4 is that global's only reader and tests it for non-zero as one condition among several on a draw path. The data never takes the path: the field is **0 in 2689/2689** records and **bit 30 is clear in 2689/2689**. | **confirmed** (where it goes and what tests it) / ?unknown? (what it would mean) |
 
 ### The +0x14 block: the last thing in a level, and nothing found reads it
@@ -1426,24 +1426,40 @@ records have the bit clear and all 789 have a zero there, 1900 have it set and a
 a non-zero. So the bit is not a mode, it is a "this record states its own threshold" marker,
 and the loader's copy to runtime +0x68 is what the compare reads.
 
-What it is compared *against* is now traced. 0x80018EFC writes `ctx+0x46`, in the run that
-fills the rest of the context — its +0x14 fade slot, +0x30, +0x40 and +0x44 — and it writes
+**It is an ordering-table index.** What the threshold is measured against gives the units.
+0x80018EFC writes `ctx+0x46` in the run that fills the rest of the context, and the few
+instructions before it say what the number is:
 
 ```
+80018DAC  lui   $a1, 0xff
+80018DB0  ori   $a1, $a1, 0xffff   ; 0x00FFFFFF -- the OT tag's next pointer
+80018DB4  lui   $a2, 0xff00        ; 0xFF000000 -- and its length byte
+80018DB8  lw    $a0, 0x1c($s1)     ; the segment's length
+80018DBC  lw    $v0, 0x18($s1)     ;   and its start
+80018DC0  lw    $a3, -0x4974($s5)  ; the ordering table itself
+80018DF8  sll   $v1, $v1, 2
+80018E04  addu  $v1, $v1, $v0      ; table + 4*(start + length)
+80018E08  lw    $v0, -4($v1)       ; ... - 4: the deepest slot
+80018E14  or    $v0, $v0, $s0      ; link the primitive in
+80018E18  sw    $v0, -4($v1)
+80018EEC  sw    $v1, 0x40($s3)     ; ctx+0x40 = table + 4*start
 80018EF0  lhu   $v0, 0x1c($s1)
 80018EF8  addiu $v0, $v0, -1
-80018EFC  sh    $v0, 0x46($s3)     ; ctx+0x46 = [s1+0x1C] - 1
+80018EFC  sh    $v0, 0x46($s3)     ; ctx+0x46 = length - 1, the deepest index
 ```
 
-so the threshold is **a count, minus one** — the last valid index of whatever `[s1+0x1C]`
-sizes. That makes the `sltu` at 0x80019EBC read as a bounds check rather than a distance
-test, which is the more useful shape to know even without the units.
+The two masks are the PS1 ordering table's tag format to the letter, and the
+`lw` / `and` / `or` / `sw` around them is a primitive being linked into it. So `[s1+0x18]`
+and `[s1+0x1C]` are the segment's start and length, `ctx+0x40` is its base and `ctx+0x46` its
+last valid index — and the `sltu` at 0x80019EBC is a **bounds check on a depth bucket**.
 
-The units are still ?unknown?. The values are 256 ×419, 512 ×215, 51 ×144, 384 ×127,
-128 ×104, and 93 records holding 0xFFB4 — which `lh` sign-extends into something `sltu` can
-never find smaller, so those 93 placements fail the check outright. What `[s1+0x1C]` counts is
-not traced. What is settled is the mechanism: a placement that fails this compare draws
-nothing.
+That makes a placement's `+0x9C` the ordering-table index it draws into: how deep in the
+depth sort the piece is placed. The values fit — 256, 512, 384, 128, 51 — and so does the
+awkward one: 93 records hold 0xFFB4, which `lh` sign-extends into a value `sltu` can never
+find smaller, so those placements are bounds-checked out and draw nothing.
+
+What the segment length is *set from* is not traced, so the absolute scale of an index is
+?unknown?. The meaning is not.
 
 ### The id is the same id the draw dispatcher takes
 
