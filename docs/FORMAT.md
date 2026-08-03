@@ -373,22 +373,28 @@ points at the shared tables except the header's own `0x20`/`0x24`/`0x28`: a scan
 self-relative i32 in `warp_room1` finds exactly **one** pointer to each.
 
 | grow 24k | 24,576 zero bytes appended, not one pointer touched | 221,112 | **loads** |
+| junk | the tables-appended probe's exact appended bytes, not one pointer touched | 220,140 | **loads** |
 
-**The size hypothesis is dead.** The grow-24k probe matches the crashing table probes byte for
-byte in size, is pure zero padding, and loads. Two searches agree with it: none of the seven
-files' sizes, sector roundings or `0x50` values appears as a u32 anywhere in the executable or
-the 16 overlays (the many hits on 196,608 = 0x30000 are the instruction encoding
-`sll $zero, $v1, 0`, not data), so there is no stored per-room budget to enforce one.
+**The size hypothesis is dead, and so is the content one.** The grow-24k probe matches the
+crashing table probes in size, is pure zero padding, and loads. No stored budget could enforce a
+threshold anyway: none of the seven files' sizes, sector roundings or `0x50` values appears as a
+u32 anywhere in the executable or the 16 overlays (the many hits on 196,608 = 0x30000 are the
+instruction encoding `sll $zero, $v1, 0`, not data). The junk probe then killed the content
+theory: it appends **exactly the bytes the tables-appended probe appended** — 18,064 of colour
+table, 5,540 of UV, non-zero data sitting right behind §8.6's block — with the header
+byte-identical to shipped, and it loads.
 
-**Two hypotheses still fit every row.** Every crashing probe moved `0x20`/`0x24` — and every
-crashing probe also appended *non-zero* data (table copies, rebuilt geometry), while every
-loading probe appended zeros or nothing. If something walks §8.6's block to the end of the file,
-non-zero bytes behind the block read as fake sub-block headers, and that crashes with the
-pointers never touched. The discriminating probe appends **exactly the bytes the tables-appended
-probe added — 18,064 of colour table, 5,540 of UV — with not one pointer updated**: same size,
-same content, only the header differs. Crash → trailing non-zero content is fatal and the
-pointers were never the story. Load → relocating `0x20`/`0x24` is fatal on its own. Until it
-runs, the cause is **?unknown?** — what is established is which probes crash, not why.
+**That leaves a clean A/B.** Junk and tables-appended are the same size with the same appended
+content; the only difference is that tables-appended rewrites `0x20`, `0x24`, `0x28` and `0x08`.
+One loads, one crashes. The far-boundary probe already moved `0x28` and `0x08` to EOF on their
+own and loaded, so the pair that remains is **`0x20`/`0x24`: repointing the colour and UV tables
+is fatal in this file, by itself**. The *mechanism* is still ?unknown? — every known reader of
+either field is a draw-time site resolving the self-relative pointer, and with the whole file in
+RAM a relocated copy should serve; something evidently resolves them differently, and no code
+doing so has been found. What is established is the fact, by elimination on hardware, not the
+why. Whether `0x20` and `0x24` are *individually* fatal is the one split left — the uv-move
+probe relocates `0x24`/`0x28` only, colour untouched — and it decides whether a writer may grow
+the colour table in place and move the UV table out, or must grow both in place.
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
