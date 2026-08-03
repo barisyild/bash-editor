@@ -47,6 +47,12 @@ PTR_MODEL_END = 0x08
 # The shared position pool (§7.3) runs from here to the boundary, so moving the
 # boundary without moving the pool turns a degenerate pool into a huge bogus one.
 PTR_MODEL_POOL = 0x28
+# Two invariants every shipped model keeps, and appending at the end breaks both:
+# `T(0x08) <= T(0x44)` in 400/400 and `T(0x08) <= i32@0x50` in 400/400. So new
+# geometry is *inserted* in front of the clip table rather than added after it,
+# and these two move with it.
+PTR_CLIP_TABLE = 0x44
+RESIDENT_SIZE = 0x50  # base-relative, not self-relative
 
 MESH_HEADER_START = 0x58
 COLOUR_ENTRY_SIZE = 4
@@ -389,7 +395,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     strips = source.data[strips_at:bounds_at]
     geometry = source.data[bounds_at:blocks_end]
 
-    out = bytearray(dest_data)
+    out, tail, cut = _split_at_clip_table(dest_data)
     if len(out) % 4:
         out += b"\x00" * (4 - len(out) % 4)
 
@@ -417,6 +423,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     attachment_new = append(source.attachment) if source.attachment else 0
     end_new = len(out)
     boundary = _carry_vector_pool(out, dest_data)
+    _rejoin_tail(out, tail, cut, boundary)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
     struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
@@ -495,7 +502,7 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
           for f in range(faces)],
     )
 
-    out = bytearray(dest_data)
+    out, tail, cut = _split_at_clip_table(dest_data)
     if len(out) % 4:
         out += b"\x00" * (4 - len(out) % 4)
 
@@ -520,6 +527,7 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     colour_index_new = append(colour_index)
     end_new = len(out)
     boundary = _carry_vector_pool(out, dest_data)
+    _rejoin_tail(out, tail, cut, boundary)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
     struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
@@ -532,6 +540,39 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
                    geometry_new, strips_new, uv_index_new, texture_new,
                    colour_index_new, end_new)
     return bytes(out)
+
+
+def _split_at_clip_table(data: bytes) -> tuple[bytearray, bytes, int]:
+    """Everything before the clip table, everything from it on, and where it was.
+
+    Appending geometry at the end of the file put it past `T(0x44)` and past the
+    resident end at `i32@0x50` -- both of which every one of the 400 shipped
+    models keeps the geometry inside, 400/400 each. For a warp room that is
+    worse than untidy: `T(0x44)` is where §8.6's block starts and runs to EOF, so
+    appending drops the new geometry into the middle of it. Splitting here lets
+    the caller put its geometry in front of that tail instead.
+    """
+    cut = PTR_CLIP_TABLE + struct.unpack_from("<i", data, PTR_CLIP_TABLE)[0]
+    if not 0 < cut <= len(data):
+        cut = len(data)
+    return bytearray(data[:cut]), bytes(data[cut:]), cut
+
+
+def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> None:
+    """Put the tail back after the inserted geometry and move what named it.
+
+    Only two fields name anything past the insertion point: `0x44`, which is
+    self-relative and now has further to reach, and `0x50`, which is a plain
+    length from the file's base. Every pointer *inside* the tail is self-relative
+    within it and survives the shift untouched, and `write_clips` recomputes each
+    descriptor's mesh pointer afterwards from the header's own offset.
+    """
+    inserted = boundary - cut
+    out.extend(tail)
+    struct.pack_into("<i", out, PTR_CLIP_TABLE, boundary - PTR_CLIP_TABLE)
+    resident = struct.unpack_from("<i", out, RESIDENT_SIZE)[0]
+    if resident >= cut:
+        struct.pack_into("<i", out, RESIDENT_SIZE, resident + inserted)
 
 
 def _carry_vector_pool(out: bytearray, source: bytes) -> int:
