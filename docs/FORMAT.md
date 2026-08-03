@@ -508,9 +508,20 @@ the function the model-init wrappers hand their callback to — is an **async re
 it pops a node from the free list at `[0x80050F3C]`, fills seven fields (handle, three
 arguments, and three more from the caller's stack, one of them the callback), and links it into
 the queue at `0x80050628+0x0C/+0x10`; `0x8001316C` is the matching dequeuer. The read length is
-not in this code — it travels inside the request for the **queue worker** to use, and that
-worker is the next unread link. Until it is read, how much of an entry the game loads is
-established behaviourally, not from the instructions that do it. The in-file runtime-slot pattern also names a
+not in this code — it travels inside the request for the **queue worker** to use. One link
+further is read: `0x80013290` is the **synchronous load wrapper** — enqueue with a completion
+flag at `0x80069E7C` and the destination buffer from the entry struct's `+4`, then spin on
+`0x80012FFC`, servicing the drive through `0x8001231C` and waiting a frame through `0x8002BAE8`
+each lap, with `0x80011544` as the post-load hook. The sector arithmetic is one level lower, in
+that service path, and remains unread.
+
+The same page of code answered a question the residency hypothesis had left open. `0x800131B0`
+is the allocator's pre-check, and on a failed fit it calls `0x80017640` — a scavenger that
+frees packet caches — and then **`0x80011D28`, a heap compactor**, before retrying. A
+compacting heap is the missing mechanism: a discarded file tail is not merely stale, it is
+**moved over** as live allocations slide — which is why every pointer aimed past the resident
+boundary read garbage immediately rather than old bytes. Behavioural attribution of the
+compactor's role, instruction-level attribution of its existence. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
