@@ -346,6 +346,7 @@ def import_glb(
     model_data: bytes,
     pack_data: bytes | None,
     other_pack_users: dict[int, set[int]] | None = None,
+    pin_tables: bool = False,
 ) -> Report:
     """Rebuild `model_data`'s meshes and clips from the glTF file at `path`.
 
@@ -433,7 +434,8 @@ def import_glb(
             textures=textures if (textures >= 0).any() else None,
             uvs=uvs if (textures >= 0).any() else None,
         )
-        trimmed = MW.install_mesh(trimmed, index, new_mesh)
+        trimmed = MW.install_mesh(trimmed, index, new_mesh,
+                                  pin_tables=pin_tables)
         report.meshes_rebuilt.append(index)
     grown = trimmed
     rebuilt_model = read_model(grown)

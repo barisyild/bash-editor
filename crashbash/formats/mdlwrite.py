@@ -259,6 +259,25 @@ def _swatch_entry(data: bytes, mesh: Mesh) -> int:
     return seen.most_common(1)[0][0] if seen else 0
 
 
+def _nearest_triple(colours: bytes, triple: bytes) -> int:
+    """The index of the existing colour triple closest to `triple`.
+
+    Pinned-table installs may not append, so a colour with no exact match takes
+    the nearest neighbour by summed channel distance over the three corners.
+    Distance-mapped colour is an approximation and callers should say so.
+    """
+    want = list(triple)
+    best, best_at = None, 0
+    for at in range(0, len(colours) - 2 * COLOUR_ENTRY_SIZE, COLOUR_ENTRY_SIZE):
+        have = colours[at : at + 3 * COLOUR_ENTRY_SIZE]
+        score = sum(abs(want[i] - have[i]) for i in (0, 1, 2, 4, 5, 6, 8, 9, 10))
+        if best is None or score < best:
+            best, best_at = score, at // COLOUR_ENTRY_SIZE
+            if score == 0:
+                break
+    return best_at
+
+
 def _pack_runs(values: list[int]) -> bytes:
     """One entry per triangle, back into `(run << 9) | value` runs.
 
@@ -509,12 +528,23 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     return bytes(out)
 
 
-def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
+def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
+                 pin_tables: bool = False) -> bytes:
     """Put a mesh built from scratch in place of `dest_index`.
 
     Same rules as `transplant_mesh`: run `strip_animation` first, write the clips
     back afterwards. The colour table is extended with the mesh's own colours;
     the UV table is not touched, since untextured triangles never read it.
+
+    `pin_tables` is for the seven §8.6 carriers, where relocating the shared
+    tables is fatal on hardware: repointing `0x20` crashed the room and
+    repointing `0x24`/`0x28` scrambled every textured surface, across eleven
+    probes (§2.1). In this mode the colour and UV tables and the three header
+    fields naming them are left byte-for-byte where they are. Each incoming
+    colour maps to the **nearest existing triple** instead of appending; a
+    textured triangle must find its exact UV triple already in the table or the
+    install refuses. The new geometry goes into space opened by pushing the
+    §8.6 block outward, which the block-shift probe showed the game accepts.
     """
     dest = read_model(dest_data)
     if not 0 <= dest_index < len(dest.meshes):
@@ -545,7 +575,9 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     for f in range(faces):
         triple = bytes(new_colours[f * 12 : f * 12 + 12])
         found = triples.get(triple)
-        if found is None:
+        if found is None and pin_tables:
+            found = _nearest_triple(colours, triple)
+        elif found is None:
             found = len(colours) // COLOUR_ENTRY_SIZE
             colours += triple
             start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
@@ -562,11 +594,28 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
             "13-bit colour index can address"
         )
     colour_index = struct.pack(f"<{faces}H", *[i & 0xFFFF for i in indices])
-    uv_index = struct.pack(
-        f"<{faces}H",
-        *[((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
-          for f in range(faces)],
-    )
+    if pin_tables and blocks["textured"]:
+        table = dest_data[dest_uv : dest_uv + dest_uv_len]
+        uv_slots = []
+        for f in range(faces):
+            need = blocks["uvs"][f * 6 : f * 6 + 6]
+            at = table.find(need)
+            while at >= 0 and at % 2:
+                at = table.find(need, at + 1)
+            if at < 0:
+                raise ValueError(
+                    "pinned tables: a triangle's UV triple is not in the "
+                    "shared table, and growing it is what crashes these rooms; "
+                    "use untextured geometry or existing UVs"
+                )
+            uv_slots.append(at // UV_ENTRY_SIZE)
+        uv_index = struct.pack(f"<{faces}H", *[s & 0xFFFF for s in uv_slots])
+    else:
+        uv_index = struct.pack(
+            f"<{faces}H",
+            *[((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
+              for f in range(faces)],
+        )
 
     out, tail, cut = _split_at_clip_table(dest_data)
     if len(out) % 4:
@@ -579,12 +628,13 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
             out.extend(b"\x00" * (4 - len(out) % 4))
         return at
 
-    new_colour_at = len(out)
-    out.extend(colours)
-    new_uv_at = len(out)
-    out.extend(uvs)
-    if len(out) % 4:
-        out.extend(b"\x00" * (4 - len(out) % 4))
+    if not pin_tables:
+        new_colour_at = len(out)
+        out.extend(colours)
+        new_uv_at = len(out)
+        out.extend(uvs)
+        if len(out) % 4:
+            out.extend(b"\x00" * (4 - len(out) % 4))
 
     strips_new = append(blocks["strips"])
     geometry_new = append(blocks["geometry"])
@@ -592,11 +642,17 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     texture_new = append(blocks["texture"])
     colour_index_new = append(colour_index)
     end_new = len(out)
-    boundary = _carry_vector_pool(out, dest_data)
+    if pin_tables:
+        # The tables, 0x20/0x24/0x28 and the vector pool all stay exactly where
+        # they are; only the boundary follows the new geometry.
+        boundary = len(out)
+    else:
+        boundary = _carry_vector_pool(out, dest_data)
     boundary = _rejoin_tail(out, tail, cut, boundary)
 
-    struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
-    struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
+    if not pin_tables:
+        struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
+        struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
     struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
 
     header = MESH_HEADER_START + MESH_HEADER_SIZE * dest_index
