@@ -273,7 +273,7 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x30 | i32 | — | 0 in 400/400. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x34 | i32 | — | 0 in 400/400. No reader found. | **confirmed** (zero) / ?unknown? (purpose) |
 | 0x38 | i32 | `count_3C` | 0 in 393/400. The 7 non-zero are `warp_room1..5/level.mdl` and `demo_hub1..2/level.mdl` (5, 6, 8, 7, 6, 3, 3). Repeated at `[T(0x3C)]` 400/400. The block stores **count+1** records. | **confirmed** |
-| 0x3C | i32 ptr | `ptr_chunks` | `[i32 count]` then `count+1` records of 16 bytes. See §8.1. | **confirmed** |
+| 0x3C | i32 ptr | `ptr_chunks` | `[i32 count]` then `count+1` records of 16 bytes: **the §8.6 sub-block directory, and nothing else**. Row 0 is a null sentinel in 7/7 (why the door index is 1-based); row *k* is `[start, end)` file offsets of sub-block *k* — verified across all 38 rows in the archive, every one targeting the §8.6 region, ends chaining to the next start. `+8`/`+12` are runtime buffer/handle slots, zero on disk. Streamed on demand from **disc** by `0x800163E0` (request, via `0x800133C8`) and `0x80016450` (poll) — the three `0x3C` sites of the table above. A writer that moves the §8.6 block must repoint these rows; the shipped Python's pinned graft moves neither. | **confirmed** |
 | 0x40 | i32 | `count_44` | Number of 24-byte clip records. Range 0..14; 0 in 148 of the 373 models with meshes. | **confirmed** |
 | 0x44 | i32 ptr | `ptr_subfiles` | Appended clip directory, 24-byte records: the **animation** table. See §8.2 and §9. | **confirmed** |
 | 0x48 | i32 | `count_4C` | Number of i32 entries in the 0x4C array. Range 0..40. | **confirmed** |
