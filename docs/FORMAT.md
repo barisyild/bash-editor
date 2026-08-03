@@ -607,6 +607,14 @@ previews are per-door §8.6 sub-blocks, selected by an index the file carries be
 records. What remains unread is only the **locator** — the code that turns index *n* into the
 sub-block's address, which the block-shift probe shows is not a walk from the live `T(0x44)`.
 
+The hunt for the locator has its haystack mapped: the per-door array at `0x800BCCF4` (40-byte
+records) is referenced from **27 sites** in `warp.bin`, and the index at `+36` is not read by
+either of the overlay's two literal `lw +36` instructions — those belong to a different struct,
+a cursor that bounces between bounds by a step and drives `0x8001E21C`/`0x8001E41C`, the shape
+of an animation pump. The locator therefore computes its `+36` access from the array base, and
+the 27 reference sites (clusters at `0x800B65xx`, `0x800B6Axx`, `0x800B7Axx`) are where it will
+be found or excluded.
+
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
 (no overlay references it), literal block offsets (none in `warp.bin`, `gameeng.bin` or
