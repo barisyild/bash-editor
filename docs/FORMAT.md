@@ -4269,16 +4269,20 @@ are not only undocumented format; they are also where a reader is quietly skippi
   0x2000 in 73/73 with no reader, +0x14 and +0x18 hold the same value in 73/73 and land
   4 bytes apart near the end of the file, +0x24 takes 13 values. The array itself and the
   placement records are **closed**, see §8.5.
-* **The rest of a +0x0C list entry.** The list is **closed**, and so is most of the key space:
-  all eleven call sites of the lookup are read in §8.5, and they ask for key 1 (the camera, in
-  73/73 models), key 2, key 9, and **keys 101..112**, which `warp.bin` walks in a twelve-slot
-  loop and which occur in exactly the seven rooms it drives. What is left open is narrower
-  than it was: the ~0x50 bytes of the 104-byte record outside +0x0C, +0x30 and +0x4C, and the
-  four keys (0, 3, 203, 204) that no call site among the eleven asks for. **I could not
-  validate what reads those, which is not evidence nothing does.** The record itself is
-  better mapped than it was: all eleven sites were followed and they touch ten of the 104
-  bytes (§8.5), including two — +0x3C and +0x40 — that code reads and that are **0 in
-  217/217**. The remaining ~78 bytes no site among the eleven touches.
+* **The rest of a +0x0C list entry — now largely SOLVED.** The list is **closed**, the key
+  space too: the eleven lookup sites ask for keys 1, 2, 9 and 101..112, and the band nobody
+  asked for is answered by a **twelfth route that bypasses the lookup entirely**. The warp
+  preview initialiser at `0x800B6EC4` indexes the entry *array* directly — `[ctx+0x2C]`, the
+  cached `T(sub+0x0C)+4`, plus `4·i`, self-relative resolve — and hands the entry to the
+  preview player as its **track**. Keys **200..204** mark these entries and select viewport
+  modes 0..4 (`[workspace+0x34]`). The formerly unread tail of the 104-byte record is the
+  track body: a header whose `+0x04` bounds the tick range, and **one 28-byte segment at
+  `+0x4C..+0x67`** — end-tick at segment `+0x0C`, a skip flag `0x2000` at `+0x14`, position
+  triple at `+0x00/+0x04/+0x08`, mode word at `+0x14/+0x16` — consumed by the tick-to-segment
+  walker `0x8001E41C` and its sibling `0x8001E21C`, both read. 104 − 76 = 28: the entry is
+  exactly one track header plus one segment. What remains of this item: keys 0 and 3, and the
+  field-level meaning of the segment words beyond the ones named — the *machinery* is traced
+  end to end.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
