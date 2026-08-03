@@ -56,6 +56,20 @@ They are not style preferences.
   inside the span it names; every animation blob sits after it. So the order is
   always: `strip_animation` (lift the blobs off) → `install_mesh` /
   `transplant_mesh` (which moves the boundary) → `write_clips` (put them back).
+- **New geometry is inserted before `T(0x44)`, never appended after the file**
+  (§2.1). Every shipped model keeps `T(0x08) <= T(0x44)` and
+  `T(0x08) <= i32@0x50`, 400/400 each, and `0x44` and `0x50` have to move by the
+  inserted length. Appending instead breaks both: a warp room has no clips to
+  strip, so the only thing between `T(0x44)` and EOF is §8.6's block, and the
+  new geometry lands inside it. `warp_room1` built that way would not load.
+- **Import needs the model's sibling `.tex`.** Without it no material resolves
+  to a slot and every mesh is rebuilt untextured — silently, until it is on
+  screen, where it reads as a texture bug in the game. The importer now refuses
+  the case, but the call still has to pass the pack.
+- **Rebuild only the meshes actually edited.** `install_mesh` appends a fresh
+  copy of the colour and UV tables per call, so importing a glTF that still
+  holds every mesh multiplies them: `warp_room1` went from 196 KB to 1.3 MB
+  through 42 installs. Delete the untouched meshes before exporting.
 - **Keyframes carry the vertex flag words** in their low two bits (§9.4). The
   game draws the animated pose, never the static records, so zeros there shred
   a model whose static data is byte-identical to the original. This shipped

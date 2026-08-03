@@ -255,3 +255,36 @@ a warning saying the geometry was left as it was, and only a file that changed
 nothing at all is an error. The tool counts them in their own column rather than
 as a rebuild that never ran, which is what "same count" would otherwise have
 silently claimed.
+
+## Three ways a rebuild goes wrong, all found on a real disc
+
+These are recorded together because they were found together, in one build that
+edited four models and broke three of them.
+
+**Pass the sibling `.tex`.** `_material_slots` resolves a material name like
+`tex_014_64x64_4bpp` to a pack slot, and without a pack it resolves nothing.
+Every primitive then comes back with `slot = None`, every mesh is written
+untextured, and the result looks like a texture bug in the game rather than a
+missing argument. The importer now counts materials whose names carry a slot and
+refuses the import if none resolved, but a caller still has to hand it the pack —
+`app/window.py` reads it from the entry of the same name.
+
+**Insert, do not append.** A model keeps its geometry inside `T(0x44)` and inside
+`i32@0x50`, 400/400 each (FORMAT §2.1). Appending at EOF and moving `0x08` there
+breaks both, and for the seven models with an §8.6 block it writes the new
+geometry straight into that block, because with no clips to strip there is
+nothing else between `T(0x44)` and the end of the file. `warp_room1` rebuilt that
+way did not load. `mdlwrite` now splits at `T(0x44)`, builds in front of the
+tail, and moves `0x44` and `0x50` by the inserted length.
+
+**Bring only the meshes you edited.** Each `install_mesh` appends a full copy of
+the colour and UV tables, so a glTF that still contains all 42 of `warp_room1`'s
+meshes appends them 42 times — 196 KB became 1.3 MB. Deleting the untouched
+meshes in the modelling tool before exporting brings it back to 229 KB, and the
+importer rebuilds only what is present, so nothing else changes.
+
+One measurement trap is worth carrying with them. After a rebuild the triangles
+come back in a different order, so "the last N triangles" is not the geometry you
+added — checking a new colour that way reported the wrong value twice. Compare
+the colour *table* against the original instead: each of the four edits added
+exactly one entry, matching what was set to within the rounding.

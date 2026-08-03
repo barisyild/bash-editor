@@ -310,6 +310,22 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | `T(0x1C) == T(0x3C) + 4 + 16*(i32@0x38 + 1)` | 400/400 |
 | `T(0x18) == T(0x4C) + 4*i32@0x48` | 400/400 |
 | `(T(0x2C) == T(0x3C))` iff `(i32@0x14 == 0)` | 400/400 |
+| **`T(0x08) <= T(0x44)`** — the geometry span ends at or before the clip table | **400/400** |
+| **`T(0x08) <= i32@0x50`** — and at or before the end of the resident image | **400/400** |
+
+> **The last two are a writer's business, and breaking them cost a disc.** A writer that
+> *appends* new geometry at the end of the file and moves `0x08` there breaks both at once. For
+> most models that is merely wrong; for a warp room it is fatal, because with no clips to strip
+> there is nothing between `T(0x44)` and EOF except §8.6's block, so the appended geometry lands
+> **inside** it. `warp_room1` rebuilt that way did not load at all, and its §8.6 block came back
+> altered. New geometry has to be *inserted* in front of `T(0x44)`, with `0x44` and `0x50` moved
+> along by the inserted length — after which all 7 models carrying such a block get it back
+> byte-identical.
+>
+> Note what this does **not** say. It is a corpus invariant, not a traced bound: no EXE site is
+> known to read `0x50` (see its row below), so this is not evidence that the loader stops there.
+> It says only that no shipped model puts geometry past either point, and that a build which
+> does can fail to load.
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
