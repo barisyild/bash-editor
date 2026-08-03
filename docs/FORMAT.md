@@ -517,12 +517,17 @@ length from `[request+8]`**, rounds it up to whole 2048-byte sectors, and alloca
 `0x80011654` on one path, and on the other through a fit-check that runs the scavenger and the
 compactor before falling back to `0x80011748`; a request arriving with `[+24]` set brings its
 own buffer, which is how the blob fetches pass their exact byte ranges. So the length is caller
-data, not loader arithmetic: the sync loader forwards `[entry_struct+4]`, and **whose struct
-that is — and whether its `+4` holds the file's full size or its resident size — is the single
-untraced hop left in the load path.** Full size there means the game loads everything and the
-tail is freed after init, which the compactor then moves live data over; resident size means a
+data, not loader arithmetic. The synchronous wrapper `0x80013290` that forwards
+`[entry_struct+4]` turns out to have **no caller and no address-taken site anywhere in the
+executable or the 16 overlays** — two scans, jal targets and literal/`lui`-pair address builds,
+both empty. Linked but apparently unreached; by this document's own rule that is recorded as "no
+evidence found", not "unused". The live route is the **asynchronous** one: the model-init
+wrapper calls `0x80013034` directly with a callback and `a2 = [owner+0x24]`, so the model's load
+length is whatever fills `owner+0x24` — and **who fills it, with the file's full size or its
+resident size, is the single untraced hop left.** Full size means the game loads everything and
+frees the tail after init, which the compactor then moves live data over; resident size means a
 short read. Either way the probes' garbage is explained; which mechanism it is stays
-**?unknown?** until that one provenance is read.
+**?unknown?** until that provenance is read.
 
 The same page of code answered a question the residency hypothesis had left open. `0x800131B0`
 is the allocator's pre-check, and on a failed fit it calls `0x80017640` — a scavenger that
