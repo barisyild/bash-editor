@@ -4474,13 +4474,27 @@ are not only undocumented format; they are also where a reader is quietly skippi
   copy, and the hardware says it does not. That is recorded as a **contradiction**, not
   resolved by preferring one side.
 
-  One experiment can still cut it without an emulator, by asking whether the relocated table
-  is read at all. **uvzero** is `uv-move` with the copy replaced by the same number of zero
-  bytes, the original table left intact where it was. If the game follows `0x24`, every
-  textured triangle samples a single texel and the room goes **flat-coloured**; if it renders
-  the *same scramble* as `uv-move`, the copy is never read and moving `0x24` breaks something
-  other than the UV fetch — which would explain why a byte-identical copy did not help and
-  redirect the hunt at that other thing. The
+  **uvzero broke the deadlock.** It is `uv-move` with the copy replaced by the same count of
+  zero bytes, the original table left intact where it stood — and on hardware it renders the
+  *same scramble*, not the flat single-texel room a zeroed UV table would produce. So the
+  relocated copy is **never read** (or the room would be flat) and the original is not read
+  either (or the room would be correct). **The damage is not the UV fetch at all.**
+
+  That leaves one reading, and it is the reading the contradiction was hiding: `0x24` is not
+  only the UV table's start, it is the **colour table's end** — §2.1 derives that table's
+  length from the span `T(0x20)..T(0x24)`. Moving `0x24` to EOF leaves the colour pointer
+  correct but stretches its length from 18,064 bytes to about 190,000, and something that
+  walks the colour table by that length runs far past it. It explains every observation at
+  once: all five uv probes produce the same damage regardless of what the copy contains,
+  moving `0x20` corrupts the same span from the other end and crashes outright, and
+  `safeadd2` — which never touches either pointer — is fine.
+
+  **tables2** tests it directly: colour and UV copied *together* to EOF with both spans
+  preserved to the byte, `0x08`, `0x44` and `0x50` untouched. Correct textures → the length
+  is the mechanism and the pin becomes "the spans must stay intact", which a writer can
+  satisfy while relocating; still scrambled → the span survives as the last standing
+  explanation only if something else about position matters, and the hunt returns to dynamic
+  observation. The
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
