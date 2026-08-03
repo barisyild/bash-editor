@@ -428,12 +428,22 @@ probe proves exists, is not in the init path.
 The per-frame packet path is read now too, and it is also innocent. The known `0x20` site at
 `0x80017B88` traces back to `lw $v1, ($at 0x80056998); lw $v1, 0x0C($v1)` — the **current-owner
 global**, dereferenced to the live model base, with `T(0x20)` resolved fresh per packet. A mesh
-drawn through this path would follow a relocated colour table without complaint. So the consumer
-that crashes on a moved `0x20` and scrambles on a moved `0x24` is in neither the init chain nor
-the packet builder — which corners it in the level-specific draw path. That is the same corner
-§8.6's unfound reader lives in, and the block's own content — vertex arrays and index lists —
-is the shape of render data. **The two unfound readers are plausibly one and the same code**;
-that is an inference from position, not a trace, and it is the remaining place to look. The in-file runtime-slot pattern also names a
+drawn through this path would follow a relocated colour table without complaint.
+
+The level's own draw chain is mapped one link further. `warp.bin` references the owner global at
+three sites, and `0x800BBE60` is its per-placement draw: it tests the placement flag's **bit 15**
+(cross-confirming §8.5's drawn bit at instruction level, in the overlay as well as the engine),
+fetches the model as `[struct+0x6C]+0x0C`, and calls **`0x8001D894`** with it. That function is
+the per-instance transform setup: it takes the runtime instance's position from `+4/+8/+0x0C`,
+subtracts the camera, multiplies through `0x800330CC`, loads the GTE rotation from the
+instance's `+152` (or a global, on flag `0x2000000`), and — the line that ties the paths
+together — **writes the owner into the `0x80056998` global per instance drawn**, from the ctx
+the init wrappers stored at `0x8005AB50`. So level instances draw through the same owner-global
+route as characters, and the consumer that pins the tables is in none of the code read so far.
+The one unread link is the dispatch that follows `0x8001DA00` — everything before it is
+transform setup, everything after it is where the packets get built — and that is the remaining
+place to look. §8.6's reader has still not been found; whether it lives in that dispatch is
+untested either way. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
