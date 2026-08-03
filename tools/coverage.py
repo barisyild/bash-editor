@@ -174,6 +174,93 @@ def cover(data: bytes, model, clips) -> tuple[bytearray, Counter]:
     return marks, owners
 
 
+def cover_tex(data: bytes) -> tuple[bytearray, Counter]:
+    """The same walk for a TEX pack, following §10.1 through §10.5."""
+    marks = bytearray(len(data))
+    owners: Counter = Counter()
+
+    def claim(start: int, end: int, label: str) -> None:
+        for i in range(max(0, start), min(len(marks), end)):
+            if not marks[i]:
+                marks[i] = 1
+                owners[label] += 1
+
+    def u32(at: int) -> int:
+        return struct.unpack_from("<I", data, at)[0]
+
+    def u16(at: int) -> int:
+        return struct.unpack_from("<H", data, at)[0]
+
+    if len(data) < 0x20:
+        return marks, owners
+    claim(0, 0x20, "pack header")
+
+    textures, palettes = u16(8), u16(0x0A)
+
+    at = 0x10 + u32(0x10)
+    for _ in range(palettes):
+        if at + 4 > len(data):
+            break
+        count = struct.unpack_from("<i", data, at)[0]
+        if not 0 < count <= 256:
+            break
+        claim(at, at + 4 + 2 * count, "palettes")
+        at += 4 + 2 * count
+
+    at = 0x0C + u32(0x0C)
+    for _ in range(textures):
+        if at + 0x14 > len(data):
+            break
+        w, h = u16(at), u16(at + 2)
+        claim(at, at + 0x14, "texture records")
+        claim(at + 0x14, at + 0x14 + 2 * w * h, "texture pixels")
+        at += 0x14 + 2 * w * h
+
+    # §10.5. The block opens with two pointers, each to a count and its records;
+    # a flipbook record then points at a table of frames, and each frame is a
+    # full replacement image for its texture.
+    animation = u32(0x18)
+    if animation and animation + 8 <= len(data):
+        claim(animation, animation + 8, "animation block header")
+        flip_ptr, scroll_ptr = u32(animation), u32(animation + 4)
+        if flip_ptr:
+            at = animation + flip_ptr
+            if at + 4 <= len(data):
+                n = u32(at)
+                claim(at, at + 4 + 0x14 * n, "flipbook records")
+                for i in range(n):
+                    record = at + 4 + 0x14 * i
+                    if record + 0x14 > len(data):
+                        break
+                    frames_ptr = u32(record)
+                    index = struct.unpack_from("<i", data, record + 4)[0]
+                    frames = struct.unpack_from("<i", data, record + 8)[0]
+                    if not 0 <= index < textures or not 0 <= frames <= 4096:
+                        continue
+                    rec = 0x0C + u32(0x0C)
+                    for _ in range(index):
+                        if rec + 0x14 > len(data):
+                            break
+                        rec += 0x14 + 2 * u16(rec) * u16(rec + 2)
+                    if rec + 0x14 > len(data):
+                        continue
+                    length = 2 * u16(rec) * u16(rec + 2)
+                    table = record + frames_ptr
+                    claim(table, table + 4 * frames, "flipbook frame tables")
+                    for frame in range(frames):
+                        slot = table + 4 * frame
+                        if slot + 4 > len(data):
+                            break
+                        start = slot + struct.unpack_from("<i", data, slot)[0]
+                        claim(start, start + length, "flipbook frame pixels")
+        if scroll_ptr:
+            at = animation + 4 + scroll_ptr
+            if at + 4 <= len(data):
+                claim(at, at + 4 + 0x10 * u32(at), "scroller records")
+
+    return marks, owners
+
+
 def spans(marks: bytearray) -> list[tuple[int, int]]:
     out, run = [], None
     for i, mark in enumerate(marks):
@@ -215,6 +302,30 @@ def main(exe: str) -> int:
         print(f"  {label:34s} {count:10d}")
     print("\nmodels with the most unclaimed:")
     for left, name, size in sorted(worst, reverse=True)[:10]:
+        print(f"  {name:46s} {left:7d} of {size:7d}")
+
+    tex_total = tex_claimed = 0
+    tex_owner: Counter = Counter()
+    tex_worst: list[tuple[int, str, int]] = []
+    for entry in archive:
+        if entry.kind != "tex" or not entry.size:
+            continue
+        data = archive.read(entry)
+        marks, owners = cover_tex(data)
+        tex_total += len(data)
+        tex_claimed += sum(marks)
+        tex_owner.update(owners)
+        left = len(data) - sum(marks)
+        if left:
+            tex_worst.append((left, entry.name, len(data)))
+
+    print(f"\n{tex_total} bytes over the TEX corpus, {tex_claimed} claimed "
+          f"({100.0 * tex_claimed / tex_total:.2f}%), {tex_total - tex_claimed} "
+          f"unclaimed\n")
+    for label, count in tex_owner.most_common():
+        print(f"  {label:34s} {count:10d}")
+    print("\npacks with the most unclaimed:")
+    for left, name, size in sorted(tex_worst, reverse=True)[:10]:
         print(f"  {name:46s} {left:7d} of {size:7d}")
     return 0
 

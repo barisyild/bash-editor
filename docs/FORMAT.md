@@ -2730,8 +2730,10 @@ A routine that recovered a record by subtracting 0x14 from a descriptor's pixel 
 still escape it, and nothing suggests one does.
 
 Walking `palette_count` palettes then `texture_count` records does **not** land exactly on the
-file size. Where `ptr_animation` is set the residual is the animation block below; where it is
-not, the residual is 8 bytes in 263 packs and 12 in 51, still ?unknown?.
+file size, and the reason is the animation block: a flipbook's frames are full replacement
+images stored past the records (§10.5). Follow those and the walk accounts for **99.98 %** of
+the archive's 15.2 MB, with nothing left but a 4-, 8- or 12-byte run of zeros at EOF — 44, 263
+and 51 packs respectively, and 42 packs with no tail at all.
 
 **A slot's liveness cannot be proven from the meshes.** "No mesh samples it" is not evidence a
 slot is free: the game also draws textures straight from code, with no geometry involved. The
@@ -3198,6 +3200,10 @@ left is two files:
 Neither is a claim that those bytes are unused — only that **I could not validate what
 reads them**.
 
+The tool walks the **TEX** corpus too, and there it reaches **99.98 %** of 15.2 MB. Every one
+of the 2892 bytes it leaves is at the end of a file and zero — 4 bytes in 44 packs, 8 in 263,
+12 in 51 — so a pack is padding and nothing else past its last structure.
+
 The audit is worth running for what it catches rather than for the number. It found the mesh
 terminator of §3, the padding rule of §2.1 and the hub block of §8.6 — and then it found a
 **bug in this project's own reader**: `_root_offset` bounded the root array by `len − 0x40`,
@@ -3343,9 +3349,12 @@ are not only undocumented format; they are also where a reader is quietly skippi
 * ~~**Record +0x0E** and **+0x10**~~ — **closed** as far as the code goes, see §10.3 and
   §10.4: +0x0E bit 1 gates a sibling lookup and +0x10 bounds it. What the variants *are* is
   still open, and so is the selector that picks one.
-* **The pack tail.** Walking the palettes and then the texture records leaves a residual
-  before EOF: 8 bytes in 263 packs, 12 in 51, 32 in 12, and up to 32,904 in a few. Something
-  else is stored there.
+* ~~**The pack tail**~~ — **closed.** The residual was an artefact of a walk that stopped at
+  the texture records and never followed a flipbook's frame table into its replacement
+  images, which is where the "up to 32,904 bytes" came from. Walking the animation block
+  properly (§10.5) accounts for **99.98 %** of the 15.2 MB TEX corpus, and every one of the
+  358 spans left is **at EOF and entirely zero**: 4 bytes in 44 packs, 8 in 263, 12 in 51.
+  The other 42 packs end exactly on their last structure. It is alignment padding.
 
 **Animation** (§9 — the container, the poses and the playback model are now read; what is left)
 
