@@ -593,7 +593,21 @@ result: it does not prove a reader follows the header, only that nothing objects
 (no reader at all would also load). What it proves for a writer is what matters: **the §8.6
 block may be relocated wholesale**, so the space in front of it can be opened.
 
-Where the position anchor lives is still ?unknown?, and the search log now covers: the model
+**The model-side half of the reader is found, and it is data, verified 38/38.** The word at
+`T(0x1C) + 12·slot + 12` — the one right after an object's 12-byte record — is that object's
+**§8.6 sub-block index**. It is non-zero on exactly the door objects and zero everywhere else,
+and across all seven carriers the non-zero values are exactly each file's sub-block inventory:
+`warp_room1` slots 17, 18, 19, 20, 25 carry 1..5, `warp_room4`'s eight doors carry 1..8, and so
+on — 38 of 38. The consuming chain is read at instruction level to the same depth: `warp.bin`'s
+instance classifier at `0x800B5200` switches on the instance's kind byte (`+0x64`), and for
+kind 3 it **clears the instance's bit-15 drawn flag itself** — the preview screen is a
+placement hidden from the normal draw — then calls `0x80015984(id, model)`, the object-slot
+word fetch, and stores the returned index in its 40-byte per-door struct at `+36`. So the
+previews are per-door §8.6 sub-blocks, selected by an index the file carries beside the object
+records. What remains unread is only the **locator** — the code that turns index *n* into the
+sub-block's address, which the block-shift probe shows is not a walk from the live `T(0x44)`.
+
+Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
 (no overlay references it), literal block offsets (none in `warp.bin`, `gameeng.bin` or
 `menu.bin`), a per-room sector table (`[82, 72, 88, 81, 81]` as u32 or u16: absent; the one
