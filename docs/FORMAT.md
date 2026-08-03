@@ -1835,9 +1835,9 @@ Its first header, and the shape every one of the 27 shares:
 | Offset | Type | Measured |
 | --- | --- | --- |
 | +0x00, +0x04 | i32 | 0 in 7/7 |
-| +0x08 | u16 | a count: 167, 167, 183, 236, 289, 360, 437 |
+| +0x08 | u16 | a count, 167..943 over the 27 sub-blocks. It counts the **index** entries, not the vertices: the equal arrays hold `[+0x08] − 1` or `− 2` u16 each, while the number of 8-byte slots between the vertex start and `p0` minus `[+0x08]` takes **21 different values across the 27** — so it is unrelated to the vertex array's length. |
 | +0x0A, +0x0C, +0x0E | u16 | **4, 4, 1 in 7/7** |
-| +0x10 | i32 | 104, 120, 124, 128, 132, 212 |
+| +0x10 | i32 | **Where the vertex array starts, biased by 0x24.** Across all 27 sub-blocks the 8-byte group at `[+0x10] + 0x24` is vertex-shaped and the group before it is not — **27/27** — and `p0 − ([+0x10] + 0x24)` is a multiple of 8 in **27/27**, so the array runs from there in whole records. Values 104..300. |
 | +0x14 | i32 | **32 in 7/7** |
 | +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7. **The first and last gaps are equal in 7/7** — `p3 − p2 == p1 − p0` exactly, 332/364/716/872/468/576 bytes — so a sub-block holds two arrays of the same size with a smaller one between them. Both are even, and dividing by 2 gives `[+0x08] − 1` in five of the seven and `[+0x08] − 2` in the other two (`warp_room4`, `warp_room2`) — measured now rather than fitted, and the one-or-two shortfall is itself unexplained. |
 | +0x28..+0x30 | i32 | 0 in 7/7 |
@@ -1847,9 +1847,17 @@ The first is 8-byte records laid out like a vertex record (§4.2) — `demo_hub1
 `636, −171, 3169, 0` then `557, 4, 3065, 1` — and the other three are lists of small ascending
 integers, the shape an index list has. Those records **start well before `p0`**, not at it: at
 `p0 − 48` `demo_hub1` is still reading `(783, −57, 2740, 1)`, `(791, −103, 2739, 0)`,
-`(624, −19, 2818, 0)`, and three more follow `p0` itself before the small integers begin. So
-`p0` is a point inside the vertex run rather than its start, and where the run does start is
-?unknown?. Between 42 and 109 of those records per model, and
+`(624, −19, 2818, 0)`, and three more follow `p0` itself before the small integers begin. Where
+the run *starts* is the `+0x10` rule above — `demo_hub1`'s first sub-block begins its vertices
+at 160 with `[+0x10]` at 124, `warp_room1` at 164 with 128, and the bias is 0x24 in 27 of 27.
+
+One alignment trap is worth recording, because it inverted the reading once. The records are
+8-byte aligned to **where the array starts**, not to the 0x34 header, and `p0` is not always a
+multiple of 8 from the block start — `warp_room1`'s is 6204. Grouping from 0x34 instead shifts
+every record by four bytes and turns a solid run of vertices into noise: the same region read
+that way scored 4 % vertex-shaped, and read from the right anchor it is an unbroken run of 250.
+
+Between 42 and 109 of those records per model, and
 their coordinates fall inside the room rather than around it: `warp_room1` spans
 x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent reaches ±19000 on the sky dome
 alone.
