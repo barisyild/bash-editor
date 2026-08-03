@@ -4314,8 +4314,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   over the track's ticks. Key 99 is closed too: it is **`boss_oxide/arena.mdl`'s single door-shaped entry**, and its
   consumer is a **twelfth lookup call site** the earlier sweep missed — `oxide.bin` at
   `0x800BB188` loads the literal 99 and calls the lookup at `0x8001E48C` directly, feeding the
-  boss arena's state struct. What remains of this item: key 3's consumer alone — the
-  *machinery* is traced end to end.
+  boss arena's state struct. And key 3 closes the set: `warp.bin` at `0x800B80CC` calls the entry-placer helper
+  (`0x800B7FD0` — resolve the entry, take the two stored positions, aim with `0x8001463C`)
+  with the literal key 3, so the per-carrier singleton is the **room's spawn/anchor point**.
+  With that, **every key in the +0x0C space has a traced consumer**: 0 idle slots, 1 the
+  camera, 2 and 9 the engine pair, 3 the spawn placer, 99 oxide's direct ask, 101..112 the
+  doors, 200..204 the preview tracks. Nothing about this item remains — the machinery and the
+  key space are both closed.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
