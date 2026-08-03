@@ -677,8 +677,10 @@ function `0x800BBC64` is the **per-frame OT linker**: it splices the sign's *pre
 packet chain into the frame's ordering table through the arena tag at `+1240`, patching only
 the screen offset — `0x8002FAF4` inserts, `FF00FFFF`-masked link words join the chains. So the
 sign packets are built **once, at stream-in**, and the builder — the code that resolves the
-sub-block's index lists against whatever tables they index — is cornered in the two remaining
-candidates, `0x800B8568` and `0x800B8A84`. That builder is also the best remaining suspect for
+sub-block's index lists against whatever tables they index — is cornered in the last
+candidate: `0x800B8568`'s function turned out to be the nearest-door finder (a twelve-door
+distance loop over `0x80015480` with a 129-unit threshold), leaving **`0x800B8A84`** and the
+unread tail of the door update at `0x800B5668..` as where the builder must be. That builder is also the best remaining suspect for
 the table-pinning mechanism: if the index lists resolve against the model's shared tables at
 stream-in, how it fetches those bases decides the crash and the scramble both. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
