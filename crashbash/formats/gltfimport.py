@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import struct
+from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -33,8 +34,9 @@ from . import mdlwrite as MW
 from . import scenewrite as SW
 from . import texwrite as TW
 from .anim import WEIGHT_ONE, read_animations
+from . import gltf
 from .gltf import AXIS_FLIP, FRAMES_PER_SECOND
-from .gltfread import Glb, read_glb
+from .gltfread import Glb, parse_glb, read_glb
 from .mdl import Model, read_model
 from .tex import TexturePack, read_pack
 
@@ -56,6 +58,9 @@ MATCH_TOLERANCE = 1.0
 @dataclass
 class Report:
     meshes_rebuilt: list[int] = field(default_factory=list)
+    # Meshes the file brought back exactly as they left, whose blocks were
+    # therefore not touched at all.
+    meshes_unchanged: list[int] = field(default_factory=list)
     clips_rebuilt: list[str] = field(default_factory=list)
     clips_static: list[str] = field(default_factory=list)
     clips_copied: list[str] = field(default_factory=list)
@@ -71,6 +76,69 @@ class Report:
 def _accessor_or_none(glb: Glb, primitive: dict, name: str):
     index = primitive.get("attributes", {}).get(name)
     return None if index is None else glb.accessor(index)
+
+
+def _face_key(points, colours, uvs, texture):
+    """One triangle, canonical under rotation but not under reversal.
+
+    Rotating a triangle's corners leaves it the same triangle; reversing them
+    turns it inside out (§11.3), so the two must not compare equal.
+    """
+    start = min(range(3), key=lambda k: points[k])
+    order = [(start + k) % 3 for k in range(3)]
+    return (tuple(points[k] for k in order), tuple(colours[k] for k in order),
+            tuple(uvs[k] for k in order), texture)
+
+
+def _payload_bag(positions, colours, uvs, textures) -> Counter:
+    """A mesh's triangles as a multiset, order-independent.
+
+    The exporter groups a mesh's triangles by texture, so a round trip brings
+    them back grouped rather than in the strip order the file stores; only the
+    set of triangles can be compared, not their order.
+    """
+    bag = Counter()
+    rounded = np.clip(np.round(positions), -32768, 32767).astype(np.int64)
+    for f in range(positions.shape[0]):
+        bag[_face_key(
+            [tuple(int(v) for v in rounded[f, k]) for k in range(3)],
+            [tuple(int(v) for v in colours[f, k]) for k in range(3)],
+            [tuple(int(v) for v in uvs[f, k]) for k in range(3)]
+            if uvs is not None else [(0, 0)] * 3,
+            int(textures[f]) if textures is not None else -1,
+        )] += 1
+    return bag
+
+
+def _reference_bags(model_data: bytes, model, pack, slot_of, warnings):
+    """What this importer reads back from the exporter's own output, per mesh.
+
+    The comparison has to be like for like. The exporter folds a swatch texel
+    into the vertex colour and writes swatch cell UVs, so an incoming mesh
+    never matches the model's stored arrays even when nothing was edited --
+    measured over `mainmenu/models`, positions agree on 6031 of 6031 triangles
+    while the stored UVs agree on 2015. Exporting the shipped model here and
+    reading it back through the same path gives the arrays an untouched mesh
+    must equal.
+    """
+    try:
+        blob = gltf.export_glb(model, pack, [], name="reference")
+        reference = parse_glb(blob, "<reference>")
+    except Exception:
+        return {}
+    bags = {}
+    for node in reference.json.get("nodes", []):
+        match = MESH_NAME.search(node.get("name", ""))
+        if not match or "mesh" not in node:
+            continue
+        mesh_json = reference.json["meshes"][node["mesh"]]
+        try:
+            positions, colours, uvs, textures, _ = _mesh_payload(
+                reference, mesh_json, slot_of, None)
+        except Exception:
+            continue
+        bags[int(match.group(1))] = _payload_bag(positions, colours, uvs, textures)
+    return bags
 
 
 def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
@@ -278,6 +346,7 @@ def import_glb(
     other_pack_users: dict[int, set[int]] | None = None,
     pin_tables: bool | None = None,
     animation_only: bool = False,
+    rebuild_all: bool = False,
 ) -> Report:
     """Rebuild `model_data`'s meshes and clips from the glTF file at `path`.
 
@@ -374,11 +443,31 @@ def import_glb(
     trimmed = MW.strip_animation(model_data, clips)
     payloads = {}
     staged = {}
+    original = read_model(model_data)
+    # `rebuild_all` puts every mesh through the writer even when the file did
+    # not change it. Nothing in the app wants that -- it costs colour entries
+    # for nothing -- but the verification tools do: with untouched meshes left
+    # alone, a round trip of the shipped corpus rebuilds nothing and compares
+    # nothing, which is a check that passes by doing no work.
+    reference = {} if rebuild_all else _reference_bags(
+        model_data, original, pack, slot_of, report.warnings)
     for index, mesh in sorted(incoming.items()):
         positions, colours, uvs, textures, bases = _mesh_payload(
             glb, mesh, slot_of, report.warnings
         )
         payloads[index] = (mesh, bases)
+        if (index in reference
+                and _payload_bag(positions, colours, uvs, textures)
+                == reference[index]):
+            # Came back exactly as it went out, so its blocks are left alone:
+            # re-striping an untouched mesh reorders every triangle's corners,
+            # which costs colour table entries it did not need to spend. All 22
+            # meshes of `mainmenu/models` rebuilt wanted 8402 entries against
+            # the 8192 a 13-bit index can address, for one edited mesh. It also
+            # keeps the clips of the meshes nobody edited byte-identical, since
+            # a clip whose mesh was not rebuilt is copied rather than rebuilt.
+            report.meshes_unchanged.append(index)
+            continue
         report.meshes_rebuilt.append(index)
         if animation_only:
             # Nothing to install: the clips below still rebuild, because they
@@ -428,7 +517,14 @@ def import_glb(
             for f in clip.frames
         ]
         target_mesh = clip.mesh_index
-        if target_mesh not in report.meshes_rebuilt:
+        animation = animations_by_name.get(clip.label)
+        drives_this = animation is not None and node_mesh.get(
+            animation["channels"][0]["target"].get("node"), target_mesh
+        ) == target_mesh
+        # A mesh whose geometry came back untouched can still have been
+        # re-animated -- that is the whole of an animation-only edit -- so the
+        # clip is copied only when the file has nothing to say about it either.
+        if target_mesh not in report.meshes_rebuilt and not drives_this:
             specs.append(AW.ClipSpec(
                 poses=[clip.pool()[clip._slots(k)].astype(np.int16) for k in keys],
                 frames=original_frames, name_hash=clip.name_hash,
@@ -442,10 +538,6 @@ def import_glb(
         flags = np.asarray(built.vertex_flags, dtype=np.uint16) & 3
         header = MW.MESH_HEADER_START + MW.MESH_HEADER_SIZE * target_mesh
 
-        animation = animations_by_name.get(clip.label)
-        drives_this = animation is not None and node_mesh.get(
-            animation["channels"][0]["target"].get("node"), target_mesh
-        ) == target_mesh
         if animation is None or not drives_this:
             rest_i16 = np.clip(np.round(rest), -32768, 32767).astype(np.int16)
             specs.append(AW.ClipSpec(

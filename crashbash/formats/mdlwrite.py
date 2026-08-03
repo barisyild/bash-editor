@@ -891,55 +891,79 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     for at in range(0, len(colours) - 2 * COLOUR_ENTRY_SIZE, COLOUR_ENTRY_SIZE):
         triples.setdefault(bytes(colours[at : at + 3 * COLOUR_ENTRY_SIZE]),
                            at // COLOUR_ENTRY_SIZE)
+    # The UV table is shared and overlapping in exactly the same way, and the
+    # shipped files lean on it just as hard: `mainmenu/models` carries 6035
+    # triangles in 2350 pairs. Appending a fresh triple per textured face
+    # instead took that to 17,242 -- seven times the original for the same
+    # geometry -- which is bytes on the disc for nothing.
+    uv_runs: dict[bytes, int] = {}
+    for at in range(0, len(uvs) - 2 * UV_ENTRY_SIZE, UV_ENTRY_SIZE):
+        uv_runs.setdefault(bytes(uvs[at : at + 3 * UV_ENTRY_SIZE]),
+                           at // UV_ENTRY_SIZE)
 
     per_mesh = {}
-    exhausted = 0  # faces that had to settle for the nearest existing triple
+    wanted: dict[int, list[bytes]] = {}
     for index, (target, blocks) in prepared.items():
         faces = blocks["faces"]
         uv_base = len(uvs) // UV_ENTRY_SIZE
-        if not pin_tables:
-            uvs += blocks["uvs"]
+        if pin_tables:
+            uv_index = [((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
+                        for f in range(faces)]
+        else:
+            uv_index = []
+            source = blocks["uvs"]
+            for f in range(faces):
+                if not blocks["textured"]:
+                    uv_index.append(0)
+                    continue
+                run = bytes(source[f * 6 : f * 6 + 6])
+                at = uv_runs.get(run)
+                if at is None:
+                    at = _append_run(uvs, run, UV_ENTRY_SIZE)
+                    start = max(0, (at - 2) * UV_ENTRY_SIZE)
+                    for k in range(start, len(uvs) - 2 * UV_ENTRY_SIZE,
+                                   UV_ENTRY_SIZE):
+                        uv_runs.setdefault(
+                            bytes(uvs[k : k + 3 * UV_ENTRY_SIZE]),
+                            k // UV_ENTRY_SIZE)
+                uv_index.append(at & 0xFFFF)
 
-        indices: list[int] = []
-        new_colours = blocks["colours"]
-        for f in range(faces):
-            triple = bytes(new_colours[f * 12 : f * 12 + 12])
+        wanted[index] = [bytes(blocks["colours"][f * 12 : f * 12 + 12])
+                         for f in range(faces)]
+        per_mesh[index] = (None, struct.pack(f"<{faces}H", *uv_index))
+
+    # Every mesh's colours at once, so the chain can share across meshes as well
+    # as inside one. Doing it per face in face order left `mainmenu/models`
+    # wanting 8370 entries against the 8192 a 13-bit index can address.
+    if not pin_tables:
+        packed = _pack_appends([t for row in wanted.values() for t in row],
+                               colours, triples, COLOUR_ENTRY_SIZE)
+        triples.update(packed)
+
+    for index, row in wanted.items():
+        indices = []
+        for triple in row:
             found = triples.get(triple)
-            if found is None and (pin_tables or _table_full(colours)):
-                # A colour index is 13 bits, so the table cannot grow past
-                # MAX_COLOURS however many distinct triples the geometry wants.
-                # Whole-model rebuilds do reach it -- re-striping orders a
-                # triangle's corners anew, so its triple no longer matches the
-                # run the shipped file holds, and `mainmenu/models` asked for
-                # 8370 entries against a ceiling of 8192. Refusing outright
-                # produced no disc at all; the nearest existing triple costs a
-                # shade of colour on the triangles past the ceiling.
-                found = _nearest_triple(colours, triple)
-                exhausted += 1
-            elif found is None:
-                found = _append_triple(colours, triple)
-                start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
-                for at in range(start, len(colours) - 2 * COLOUR_ENTRY_SIZE,
-                                COLOUR_ENTRY_SIZE):
-                    triples.setdefault(
-                        bytes(colours[at : at + 3 * COLOUR_ENTRY_SIZE]),
-                        at // COLOUR_ENTRY_SIZE)
+            if found is None:
+                found = (_nearest_triple(colours, triple) if pin_tables
+                         else _append_run(colours, triple, COLOUR_ENTRY_SIZE))
+                if not pin_tables:
+                    triples[triple] = found
             indices.append(found)
         if indices and max(indices) + 3 > MAX_COLOURS:
             raise ValueError(
                 f"{max(indices) + 3} colours would exceed the {MAX_COLOURS} a "
                 "13-bit colour index can address")
-        per_mesh[index] = (
-            struct.pack(f"<{faces}H", *[i & 0xFFFF for i in indices]),
-            struct.pack(f"<{faces}H",
-                        *[((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
-                          for f in range(faces)]),
-        )
+        per_mesh[index] = (struct.pack(f"<{len(indices)}H",
+                                       *[i & 0xFFFF for i in indices]),
+                           per_mesh[index][1])
 
-    if exhausted and notes is not None and not pin_tables:
+    if notes is not None and not pin_tables:
+        grew = len(colours) // COLOUR_ENTRY_SIZE
         notes.append(
-            f"the colour table reached the {MAX_COLOURS} entries a 13-bit index "
-            f"can address; {exhausted} faces took the nearest existing colour")
+            f"colour table {(dest_uv - dest_colour) // COLOUR_ENTRY_SIZE} -> "
+            f"{grew} entries of {MAX_COLOURS}; the shipped entries are "
+            f"unchanged and the new ones chained onto the end")
 
     layout = None if pin_tables else _geometry_region(dest_data, dest)
     if layout is not None:
@@ -1026,26 +1050,70 @@ def _append_triple(colours: bytearray, triple: bytes) -> int:
     unmatched at all: the same triangle comes back with its corners rotated, so
     its triple is no longer the one the table holds.
     """
-    entry = COLOUR_ENTRY_SIZE
+    return _append_run(colours, triple, COLOUR_ENTRY_SIZE)
+
+
+def _append_run(table: bytearray, run: bytes, entry: int) -> int:
+    """Append three entries at the end, sharing whatever the tail already has.
+
+    Both shared tables are addressed the same way -- an index names three
+    consecutive entries -- so both dedupe the same way, on the colour table's
+    4-byte entry and the UV table's 2-byte pair alike.
+    """
     for shared in (2, 1):
-        if len(colours) >= shared * entry and \
-                triple[: shared * entry] == bytes(colours[-shared * entry:]):
-            at = len(colours) // entry - shared
-            colours += triple[shared * entry:]
+        if len(table) >= shared * entry and \
+                run[: shared * entry] == bytes(table[-shared * entry:]):
+            at = len(table) // entry - shared
+            table += run[shared * entry:]
             return at
-    at = len(colours) // entry
-    colours += triple
+    at = len(table) // entry
+    table += run
     return at
 
 
-def _table_full(colours: bytearray) -> bool:
-    """Would one more triple push the table past what 13 bits can address?
+def _pack_appends(triples: list[bytes], table: bytearray,
+                  known: dict[bytes, int], entry: int) -> dict[bytes, int]:
+    """Append distinct triples in an order that shares as many entries as it can.
 
-    Three entries is the worst case, when nothing at the tail can be shared.
-    Checked before appending rather than after, so the caller can fall back to
-    an existing triple instead of building a file whose indices cannot be read.
+    An index names three consecutive entries, so two triples that overlap by two
+    can be stored in four entries instead of six. The shipped files lean on that
+    hard -- `mainmenu/models` carries 6035 triangles in 5216 colour entries --
+    and appending in face order takes whatever overlap the faces happen to
+    offer. Chaining greedily on the shared pair instead earns the rest.
+
+    The shipped entries are never reordered or dropped. They cannot be: the
+    meshes reach all 5216 of that model's, which means an index held anywhere
+    else lands inside the same range, and rewriting the table under it drew the
+    menu in flat bands of the wrong colour. Covered by the meshes is not the
+    same as reached only by the meshes.
     """
-    return len(colours) // COLOUR_ENTRY_SIZE + 3 > MAX_COLOURS
+    placed: dict[bytes, int] = {}
+    # Face order first: neighbouring triangles share colours, so it already
+    # overlaps well, and reordering wholesale threw that away -- a greedy chain
+    # seeded arbitrarily wanted 9743 entries where face order wanted 8370.
+    pending = [t for t in dict.fromkeys(triples) if t not in known]
+    if not pending:
+        return placed
+    by_head: dict[bytes, list[bytes]] = {}
+    for triple in pending:
+        by_head.setdefault(triple[: 2 * entry], []).append(triple)
+
+    def settled(triple: bytes) -> bool:
+        return triple in placed or triple in known
+
+    for triple in pending:
+        if settled(triple):
+            continue
+        placed[triple] = _append_run(table, triple, entry)
+        # Then follow the chain: anything starting with the two entries the
+        # table now ends on costs one more entry instead of three.
+        while True:
+            tail = bytes(table[-2 * entry:])
+            nxt = next((c for c in by_head.get(tail, ()) if not settled(c)), None)
+            if nxt is None:
+                break
+            placed[nxt] = _append_run(table, nxt, entry)
+    return placed
 
 
 def _geometry_region(data: bytes, model) -> tuple[int, int, int, int] | None:

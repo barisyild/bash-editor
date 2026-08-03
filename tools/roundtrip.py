@@ -128,7 +128,11 @@ def main() -> int:
                 with open(path, "wb") as handle:
                     handle.write(export_glb(model, None, clips, "roundtrip",
                                             scene))
-                result = import_glb(path, data, None)
+                # Force the writer to run. Left to itself the importer leaves a
+                # mesh the file did not change alone, which is right for an
+                # edit and useless here: the whole corpus would come back
+                # untouched and this would compare nothing.
+                result = import_glb(path, data, None, rebuild_all=True)
                 after = corners(read_model(result.model))
             except Exception as error:  # noqa: BLE001 - reported, not raised
                 row["failed"].append(f"{entry.name}: {error}")

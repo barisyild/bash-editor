@@ -41,26 +41,59 @@ class Glb:
     json: dict
     binary: bytes
 
-    def accessor(self, index: int) -> np.ndarray:
-        spec = self.json["accessors"][index]
-        count = spec["count"]
-        width = TYPE_COUNT[spec["type"]]
-        dtype = COMPONENT_DTYPE[spec["componentType"]]
+    def _dense(self, spec: dict, count: int, width: int, dtype: str) -> np.ndarray:
         if "bufferView" not in spec:
-            return np.zeros((count, width), dtype=dtype).squeeze()
+            return np.zeros((count, width), dtype=dtype)
         view = self.json["bufferViews"][spec["bufferView"]]
         start = view.get("byteOffset", 0) + spec.get("byteOffset", 0)
         raw = np.frombuffer(
             self.binary, dtype=dtype, count=count * width, offset=start
         )
-        return raw.reshape(count, width) if width > 1 else raw
+        return raw.reshape(count, width)
+
+    def accessor(self, index: int) -> np.ndarray:
+        """One accessor's values, sparse overrides applied.
+
+        A sparse accessor stores only the elements that differ from its base,
+        and the base may be absent altogether -- then every element is zero
+        until the overrides land. Blender writes them: re-exporting the editor's
+        own `mainmenu/models` glTF unchanged produced 15 sparse accessors and 18
+        with no `bufferView` at all. Reading the base and ignoring the overrides
+        returned a morph target of zeros, so the pose it carried was silently
+        dropped and the clip played something else -- three of that model's
+        twelve clips came back wrong, while every static check passed.
+        """
+        spec = self.json["accessors"][index]
+        count = spec["count"]
+        width = TYPE_COUNT[spec["type"]]
+        dtype = COMPONENT_DTYPE[spec["componentType"]]
+        values = self._dense(spec, count, width, dtype)
+
+        sparse = spec.get("sparse")
+        if sparse:
+            values = np.array(values, dtype=dtype)  # writable, and never a view
+            spread = sparse["count"]
+            index_spec = sparse["indices"]
+            where = self._dense(
+                index_spec, spread, 1,
+                COMPONENT_DTYPE[index_spec["componentType"]]
+            ).reshape(-1)
+            replacement = self._dense(sparse["values"], spread, width, dtype)
+            values[where] = replacement
+
+        return values.reshape(count, width) if width > 1 else values.reshape(count)
 
 
 def read_glb(path) -> Glb:
-    data = open(path, "rb").read()
+    return parse_glb(open(path, "rb").read(), str(path))
+
+
+def parse_glb(data: bytes, name: str = "<memory>") -> Glb:
+    """The same, from bytes -- an import compares against a glTF it makes itself."""
     magic, _version, _length = struct.unpack_from("<3I", data, 0)
     if magic != GLB_MAGIC:
-        raise ValueError(f"{path} is not a glTF binary")
+        raise ValueError(f"{name} is not a glTF binary")
+    path = name
     document: dict | None = None
     binary = b""
     at = 12

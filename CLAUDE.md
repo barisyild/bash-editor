@@ -99,6 +99,37 @@ They are not style preferences.
   game draws the animated pose, never the static records, so zeros there shred
   a model whose static data is byte-identical to the original. This shipped
   three broken discs.
+- **A glTF accessor may be sparse, and the overrides are the data.** Blender
+  writes them: re-exporting this project's own `mainmenu/models` export
+  *unchanged* produced 15 sparse accessors and 18 with no `bufferView` at all.
+  Reading the base and ignoring `spec["sparse"]` returned a morph target of
+  zeros, so the pose it carried was dropped — three of that model's twelve
+  clips came back playing something else while every static check passed. This
+  is what "the animation plays partially and broken" was.
+- **Never reorder or drop the shipped colour table — grow it only at the end.**
+  Rebuilding it from the meshes' own triples looked safe: `mainmenu/models`
+  carries 5216 entries and its 22 meshes reach all 5216. That measurement does
+  not say what it seems to. *Covered by the meshes* is not *reached only by the
+  meshes* — because they cover the whole range, any index held anywhere else
+  lands inside it too, so rewriting the table under it silently repaints
+  whatever that is. On hardware the menu came back drawing flat bands of the
+  wrong colour. The shipped entries stay exactly where they are; new triples
+  chain onto the end.
+- **Rebuild only the meshes the file actually changed.** An untouched mesh
+  re-striped comes back with every triangle's corners rotated, so its colour
+  triples no longer match the runs the table holds and it spends entries it
+  never needed: all 22 meshes of `mainmenu/models` rebuilt for *one* edited
+  mesh wanted **8402 entries against the 8192 a 13-bit index can address**,
+  while rebuilding the one mesh grows the table 5216 → 5488. `_reference_bags`
+  decides it by exporting the shipped model and reading it back through the
+  same path — comparing an incoming mesh against the model's stored arrays
+  instead is comparing unlike things, since the exporter folds the swatch texel
+  into the vertex colour and writes swatch cell UVs (positions then agree on
+  6031 of 6031 triangles while the stored UVs agree on 2015). A mesh left alone
+  also keeps its clips byte-identical. Deduplicate UV triples the way colours
+  are deduplicated: the shipped files lean on the three-consecutive-entry
+  overlap hard (2350 pairs for 6035 triangles) and a fresh triple per face
+  costs seven times the table for the same geometry.
 - **Strip flag bit 3 states the first triangle's winding** (§5.1), and bit 0 of
   the vertex flag alternates from there. A mesh must not contradict its own
   flag byte.
