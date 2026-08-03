@@ -87,10 +87,14 @@ They are not style preferences.
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
   the case, but the call still has to pass the pack.
-- **Rebuild only the meshes actually edited.** `install_mesh` appends a fresh
-  copy of the colour and UV tables per call, so importing a glTF that still
-  holds every mesh multiplies them: `warp_room1` went from 196 KB to 1.3 MB
-  through 42 installs. Delete the untouched meshes before exporting.
+- **Install several meshes in one call, and rebuild only what was edited.**
+  `install_mesh` appends the colour table, the UV table *and* the vector pool
+  on every call, and each earlier copy is then unreachable. Nine meshes through
+  `mainmenu/models` left **983,128 of 1,396,026 bytes unreachable — 70 % of the
+  file** — and the game hung on the loading screen. `install_meshes` shares one
+  copy and brings the same import to 435 KB / 28 %. Deleting untouched meshes
+  before exporting still helps, and for an edit that only re-times animation
+  use `import_glb(animation_only=True)`, which leaves every mesh byte-identical.
 - **Keyframes carry the vertex flag words** in their low two bits (§9.4). The
   game draws the animated pose, never the static records, so zeros there shred
   a model whose static data is byte-identical to the original. This shipped

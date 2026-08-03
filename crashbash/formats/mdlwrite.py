@@ -769,6 +769,134 @@ def _refuse_carrier(data: bytes, what: str) -> None:
         )
 
 
+def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
+                   pin_tables: bool = False) -> bytes:
+    """Install several meshes in one pass, sharing one copy of the tables.
+
+    `install_mesh` appends a colour table, a UV table and the vector pool on
+    every call, and the copies from earlier calls are then unreachable. Nine
+    meshes through `mainmenu/models` left **983,128 of 1,396,026 bytes
+    unreachable -- 70 % of the file** -- dominated by the 58,672-byte vector
+    pool copied nine times. The game hung on the loading screen. This appends
+    the shared tables once, the pool once, and each mesh's blocks once, so a
+    multi-mesh replacement costs what its own geometry costs.
+
+    Colours are deduplicated across *all* the meshes at once, which is what
+    keeps a many-mesh import inside the 13-bit index.
+    """
+    if not meshes:
+        return dest_data
+    dest = read_model(dest_data)
+    for index in meshes:
+        if not 0 <= index < len(dest.meshes):
+            raise ValueError(f"the model has no mesh {index}")
+
+    prepared = {}
+    for index, mesh in sorted(meshes.items()):
+        target = dest.meshes[index]
+        if mesh.textures is None and not mesh.swatch:
+            mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
+        prepared[index] = (target, build_blocks(mesh))
+
+    dest_colour, dest_uv, dest_uv_len = _table_bounds(dest_data, dest)
+    colours = bytearray(dest_data[dest_colour:dest_uv])
+    uvs = bytearray(dest_data[dest_uv : dest_uv + dest_uv_len])
+
+    triples: dict[bytes, int] = {}
+    for at in range(0, len(colours) - 2 * COLOUR_ENTRY_SIZE, COLOUR_ENTRY_SIZE):
+        triples.setdefault(bytes(colours[at : at + 3 * COLOUR_ENTRY_SIZE]),
+                           at // COLOUR_ENTRY_SIZE)
+
+    per_mesh = {}
+    for index, (target, blocks) in prepared.items():
+        faces = blocks["faces"]
+        uv_base = len(uvs) // UV_ENTRY_SIZE
+        if not pin_tables:
+            uvs += blocks["uvs"]
+
+        indices: list[int] = []
+        new_colours = blocks["colours"]
+        for f in range(faces):
+            triple = bytes(new_colours[f * 12 : f * 12 + 12])
+            found = triples.get(triple)
+            if found is None and pin_tables:
+                found = _nearest_triple(colours, triple)
+            elif found is None:
+                found = len(colours) // COLOUR_ENTRY_SIZE
+                colours += triple
+                start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
+                for at in range(start, len(colours) - 2 * COLOUR_ENTRY_SIZE,
+                                COLOUR_ENTRY_SIZE):
+                    triples.setdefault(
+                        bytes(colours[at : at + 3 * COLOUR_ENTRY_SIZE]),
+                        at // COLOUR_ENTRY_SIZE)
+            indices.append(found)
+        if indices and max(indices) + 3 > MAX_COLOURS:
+            raise ValueError(
+                f"{max(indices) + 3} colours would exceed the {MAX_COLOURS} a "
+                "13-bit colour index can address")
+        per_mesh[index] = (
+            struct.pack(f"<{faces}H", *[i & 0xFFFF for i in indices]),
+            struct.pack(f"<{faces}H",
+                        *[((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
+                          for f in range(faces)]),
+        )
+
+    if pin_tables:
+        out = bytearray(dest_data)
+    else:
+        out, tail, cut = _split_at_clip_table(dest_data)
+    if len(out) % 4:
+        out += b"\x00" * (4 - len(out) % 4)
+
+    def append(block: bytes) -> int:
+        at = len(out)
+        out.extend(block)
+        if len(out) % 4:
+            out.extend(b"\x00" * (4 - len(out) % 4))
+        return at
+
+    if not pin_tables:
+        new_colour_at = len(out)
+        out.extend(colours)
+        new_uv_at = len(out)
+        out.extend(uvs)
+        if len(out) % 4:
+            out.extend(b"\x00" * (4 - len(out) % 4))
+
+    placed = {}
+    for index, (target, blocks) in prepared.items():
+        colour_index, uv_index = per_mesh[index]
+        strips_new = append(blocks["strips"])
+        geometry_new = append(blocks["geometry"])
+        uv_index_new = append(uv_index)
+        texture_new = append(blocks["texture"])
+        colour_index_new = append(colour_index)
+        placed[index] = (blocks["faces"], geometry_new, strips_new,
+                         uv_index_new, texture_new, colour_index_new, len(out))
+
+    if pin_tables:
+        out.extend(b"\x00" * (-len(out) % SECTOR))
+        boundary = len(out)
+        struct.pack_into("<i", out, RESIDENT_SIZE, boundary)
+    else:
+        boundary = _carry_vector_pool(out, dest_data)
+        boundary = _rejoin_tail(out, tail, cut, boundary)
+        struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
+        struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
+    struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
+
+    for index, (target, blocks) in prepared.items():
+        faces, geo, strips, uvi, tex, ci, end = placed[index]
+        header = MESH_HEADER_START + MESH_HEADER_SIZE * index
+        if header != target.header_offset:
+            raise ValueError(
+                f"mesh {index}'s header is not where the layout implies")
+        _finish_header(out, header, faces, target.format, target.unk13,
+                       target.unk14, geo, strips, uvi, tex, ci, end)
+    return bytes(out)
+
+
 def _carry_vector_pool(out: bytearray, source: bytes) -> int:
     """Re-lay the shared position pool so it still ends at the new boundary.
 

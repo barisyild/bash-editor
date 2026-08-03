@@ -348,12 +348,22 @@ def import_glb(
     pack_data: bytes | None,
     other_pack_users: dict[int, set[int]] | None = None,
     pin_tables: bool | None = None,
+    animation_only: bool = False,
 ) -> Report:
     """Rebuild `model_data`'s meshes and clips from the glTF file at `path`.
 
     `other_pack_users` maps texture slot -> the set of *other* meshes sampling
     it, and palette slot uses are derived from the pack itself; a palette named
     by any texture outside the imported slots is treated as shared.
+
+    `animation_only` rebuilds the clips and leaves every mesh exactly as it is.
+    A clip is only rebuilt when its mesh is in the import, so re-timing an
+    animation otherwise means reinstalling geometry that did not change -- and
+    `install_mesh` appends a fresh copy of the colour and UV tables on every
+    call, so nine untouched meshes cost nine copies. Measured on
+    `mainmenu/models`: 276 KB became 1.4 MB and the game hung on the loading
+    screen; with this flag the same twelve clips come back in 400 KB and it
+    boots. Use it whenever the edit is to the timeline rather than the mesh.
     """
     report = Report()
     # The seven §8.6 carriers announce themselves: their chunk-descriptor count
@@ -434,23 +444,31 @@ def import_glb(
     # --- geometry ------------------------------------------------------
     trimmed = MW.strip_animation(model_data, clips)
     payloads = {}
+    staged = {}
     for index, mesh in sorted(incoming.items()):
         positions, colours, uvs, textures, bases = _mesh_payload(
             glb, mesh, slot_of, report.warnings
         )
         payloads[index] = (mesh, bases)
+        report.meshes_rebuilt.append(index)
+        if animation_only:
+            # Nothing to install: the clips below still rebuild, because they
+            # match their poses against the mesh that is already there.
+            continue
         positions, colours, uvs, textures = _orient_consistently(
             positions, colours, uvs, textures
         )
-        new_mesh = MW.NewMesh(
+        staged[index] = MW.NewMesh(
             positions=np.clip(np.round(positions), -32768, 32767).astype(np.int16),
             colours=colours,
             textures=textures if (textures >= 0).any() else None,
             uvs=uvs if (textures >= 0).any() else None,
         )
-        trimmed = MW.install_mesh(trimmed, index, new_mesh,
-                                  pin_tables=pin_tables)
-        report.meshes_rebuilt.append(index)
+    # One pass for all of them: a per-mesh call would append the shared tables
+    # and the vector pool once each time, and those copies are unreachable
+    # afterwards -- 70% of the file on a nine-mesh import (§ mdlwrite).
+    if staged:
+        trimmed = MW.install_meshes(trimmed, staged, pin_tables=pin_tables)
     grown = trimmed
     rebuilt_model = read_model(grown)
 
