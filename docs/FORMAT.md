@@ -669,8 +669,18 @@ code reading all four `p0..p3` words plus the index or count off one base narrow
 to **six sites**, and two sit exactly where the two halves of the story predict:
 `0x800B56F0` in the mode-boot region (the parse must run before the classifier registers
 doors) and `0x800BBDFC` inside the sign-draw band (the consumer of the parsed runtime copy).
-The other four are `0x800B64A8`, `0x800B7A58`, `0x800B8568`, `0x800B8A84`. Reading `0x800B56F0`
-first is the named next step. The prologue did yield one solid cross-check on the way: it
+The other four are `0x800B64A8`, `0x800B7A58`, `0x800B8568`, `0x800B8A84`.
+
+Two of those are read. `0x800B56F0`'s function (`0x800B551C`) is the per-door frame update —
+it is where `[door+36]` feeds the stream request, read in §14's solve. And the sign-draw band's
+function `0x800BBC64` is the **per-frame OT linker**: it splices the sign's *prebuilt* GPU
+packet chain into the frame's ordering table through the arena tag at `+1240`, patching only
+the screen offset — `0x8002FAF4` inserts, `FF00FFFF`-masked link words join the chains. So the
+sign packets are built **once, at stream-in**, and the builder — the code that resolves the
+sub-block's index lists against whatever tables they index — is cornered in the two remaining
+candidates, `0x800B8568` and `0x800B8A84`. That builder is also the best remaining suspect for
+the table-pinning mechanism: if the index lists resolve against the model's shared tables at
+stream-in, how it fetches those bases decides the crash and the scramble both. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
 101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
