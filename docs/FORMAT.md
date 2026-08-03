@@ -680,7 +680,12 @@ sign packets are built **once, at stream-in**, and the builder — the code that
 sub-block's index lists against whatever tables they index — is cornered in the last
 candidate: `0x800B8568`'s function turned out to be the nearest-door finder (a twelve-door
 distance loop over `0x80015480` with a 129-unit threshold), leaving **`0x800B8A84`** and the
-unread tail of the door update at `0x800B5668..` as where the builder must be. That builder is also the best remaining suspect for
+unread tail of the door update at `0x800B5668..` as where the builder must be. The former is
+read and is **room boot**: it picks a per-room id in `214..221` through a jump table on a room
+byte and preloads a zero-terminated id list through `0x800165F8` — one more member of the
+`0x16xxx` streaming family, and a new id band worth noting — but it builds no packets. The
+builder therefore lives in the door update's unread tail, the single remaining unread stretch
+of this chain. That builder is also the best remaining suspect for
 the table-pinning mechanism: if the index lists resolve against the model's shared tables at
 stream-in, how it fetches those bases decides the crash and the scramble both. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
