@@ -124,17 +124,22 @@ def _reference_bags(model_data: bytes, model, pack, slot_of, warnings):
     try:
         blob = gltf.export_glb(model, pack, [], name="reference")
         reference = parse_glb(blob, "<reference>")
+        # Its own material map, not the incoming file's: a material index means
+        # whatever the file it came from says it means. Reusing the caller's map
+        # read every mesh through the wrong slots the moment an edit changed
+        # which materials the file carries, and eight meshes nobody had touched
+        # were rebuilt for it.
+        own_slots = _material_slots(reference, pack)
     except Exception:
         return {}
     bags = {}
-    for node in reference.json.get("nodes", []):
-        match = MESH_NAME.search(node.get("name", ""))
-        if not match or "mesh" not in node:
+    for mesh_json in reference.json.get("meshes", []):
+        match = MESH_NAME.search(mesh_json.get("name", ""))
+        if not match:
             continue
-        mesh_json = reference.json["meshes"][node["mesh"]]
         try:
             positions, colours, uvs, textures, _ = _mesh_payload(
-                reference, mesh_json, slot_of, None)
+                reference, mesh_json, own_slots, None)
         except Exception:
             continue
         bags[int(match.group(1))] = _payload_bag(positions, colours, uvs, textures)
