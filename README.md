@@ -179,6 +179,23 @@ What identifies the frames beyond argument: each is exactly as long as the textu
 pixel data, in all 136 flipbooks — and frame 0 is byte-identical to that data. The texture
 as stored *is* the first frame of its own animation.
 
+### Placements
+
+A level draws what its placement list names (§8.5), so the **Placements** tab is
+what changes a room. Each record names an object and stands it somewhere;
+selecting one fills in its id and translation, and *Apply to entry* rewrites that
+record and stages the file for the next build. Nothing moves and the file keeps
+its size — a record is 160 bytes rewritten where it lies.
+
+The list cannot be made longer. Its array is boxed in by four more arrays that
+begin where it ends, the resident region holds no run of zeros big enough to
+relocate 81 records into, and nothing past the shipped resident size is there at
+run time — the same array copied beyond the old end of file, with `0x50` grown to
+cover it, drew nothing at all. So a room's only spare capacity is a record whose
+object is placed elsewhere too; those are marked **spare**, and `warp_room1` has
+ten. Spending one of them put a second green panel in that room while the first
+kept its own door.
+
 ### Meshes the game never draws
 
 A level draws what its placement list names, not everything the file holds. `warp_room1`

@@ -28,11 +28,14 @@ from crashbash.archive import (
     find_exe_near,
 )
 from crashbash import build, iso, scene
-from crashbash.formats import anim, gltf, gltfimport, mdl, sfx, tex
+from crashbash.formats import (
+    anim, gltf, gltfimport, mdl, placewrite, sfx, tex,
+)
 
 from .glview import ModelView
 from .panels import (
     AnimationPanel,
+    PlacementPanel,
     AudioView,
     FileTree,
     HexView,
@@ -123,6 +126,9 @@ class MainWindow(QMainWindow):
         self.anim_panel.frame_changed.connect(self._set_frame)
         self.anim_panel.shot_camera.toggled.connect(self.view3d.set_use_shot_camera)
 
+        self.placement_panel = PlacementPanel()
+        self.placement_panel.placement_changed.connect(self._set_placement)
+
         model_side = QSplitter(Qt.Vertical)
         model_side.addWidget(self.mesh_panel)
         model_side.addWidget(self.anim_panel)
@@ -132,6 +138,7 @@ class MainWindow(QMainWindow):
 
         self.side = QTabWidget()
         self.side.addTab(model_side, "Model")
+        self.side.addTab(self.placement_panel, "Placements")
 
         right = QSplitter(Qt.Horizontal)
         right.addWidget(self.pages)
@@ -405,6 +412,7 @@ class MainWindow(QMainWindow):
             self.scene = scene.read_scene(data, self.model, self.animations)
             self.view3d.set_model(self.model, self._sibling_texture_pack(entry))
             self.mesh_panel.set_model(self.model, header)
+            self.placement_panel.set_model(self.model)
             self.anim_panel.set_animations(self.animations, self.scene)
             self.pages.setCurrentIndex(0)
             self.export_obj_action.setEnabled(bool(self.model.meshes))
@@ -412,6 +420,7 @@ class MainWindow(QMainWindow):
             self.import_glb_action.setEnabled(bool(self.model.meshes))
         elif entry.group == "texture":
             self.mesh_panel.set_model(None, header)
+            self.placement_panel.set_model(None)
             self.pack = tex.read_pack(data)
             self.texture_view.set_pack(self.pack)
             self.pages.setCurrentIndex(1)
@@ -477,6 +486,34 @@ class MainWindow(QMainWindow):
     def _set_all_meshes(self, visible: bool) -> None:
         self.view3d.set_all_meshes_visible(visible)
         self.mesh_panel.set_all_checked(visible)
+
+    @guarded("Could not change that placement")
+    def _set_placement(self, record: int, identifier: int,
+                       translation: tuple) -> None:
+        """Rewrite one placement record and stage the entry.
+
+        The record is rewritten where it stands -- the list cannot be made
+        longer (§8.5, and `crashbash.formats.placewrite` for the probes) -- so
+        the file keeps its size and every other byte.
+        """
+        if self.entry is None or self.model is None:
+            return
+        instance = next(
+            (i for i in self.model.instances if i.index == record), None)
+        if instance is None:
+            return
+        payload = placewrite.write_placement(
+            self._effective_bytes(self.entry), instance,
+            identifier=identifier, translation=translation)
+        self.replacements[self.entry.index] = payload
+        self.tree.set_replaced(self.entry.index, True)
+        self._sync_edit_actions()
+        self.statusBar().showMessage(
+            f"Placement {record} now draws {identifier:#06x} at "
+            + ", ".join(f"{v:.1f}" for v in translation)
+            + f" — {len(self.replacements)} pending"
+        )
+        self.open_entry(self.entry)
 
     def _apply_view_options(self) -> None:
         options = self.view_options

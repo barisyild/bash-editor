@@ -11,6 +11,8 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QDoubleSpinBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from crashbash.archive import BashArchive, Entry
 from crashbash.formats import anim, sfx, tex
+from crashbash.formats import placewrite as PW
 from crashbash.formats.mdl import IDENTITY
 
 
@@ -367,6 +370,118 @@ class MeshPanel(QWidget):
 # console's tick actually was has not been established here, and 30 is the rate
 # the poses read plausibly at rather than a measured fact.
 PLAYBACK_FPS = 30.0
+
+
+class PlacementPanel(QWidget):
+    """The level's placement list (§8.5): what it draws, and where.
+
+    A level draws what these records name and nothing else, so this is the one
+    panel that changes what a room looks like. The list cannot be made longer --
+    see `crashbash.formats.placewrite` for why, and for the probes behind it --
+    so a record is either moved, re-aimed at another object, or spent: a
+    placement whose object is placed elsewhere too is marked "spare", and
+    rewriting one of those adds something to the room at the cost of a
+    duplicate.
+    """
+
+    placement_changed = Signal(int, int, tuple)   # record, id, translation
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.list = QListWidget()
+        self.list.currentRowChanged.connect(self._on_selected)
+
+        self.identifier = QLineEdit()
+        self.identifier.setPlaceholderText("0x5021")
+        self.axes = []
+        for label in ("X", "Y", "Z"):
+            box = QDoubleSpinBox()
+            box.setRange(-8388608.0, 8388607.0)
+            box.setDecimals(3)
+            box.setSingleStep(1.0)
+            box.setPrefix(f"{label}  ")
+            self.axes.append(box)
+
+        form = QFormLayout()
+        form.addRow("Object id", self.identifier)
+        for box in self.axes:
+            form.addRow("", box)
+
+        self.apply = QPushButton("Apply to entry")
+        self.apply.clicked.connect(self._on_apply)
+        self.apply.setEnabled(False)
+
+        self.report = QPlainTextEdit(readOnly=True)
+        self.report.setMaximumHeight(90)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(QLabel("Placements"))
+        layout.addWidget(self.list, 1)
+        layout.addLayout(form)
+        layout.addWidget(self.apply)
+        layout.addWidget(self.report)
+
+        self._instances = []
+
+    def set_model(self, model) -> None:
+        self.list.clear()
+        self._instances = list(model.instances) if model is not None else []
+        self.apply.setEnabled(False)
+        if not self._instances:
+            self.report.setPlainText(
+                "This model has no placement list. Its meshes are drawn by "
+                "something else -- the menu draws its own from code -- so there "
+                "is nothing here to edit."
+            )
+            return
+
+        spare = set(PW.spare_records(model))
+        names = {}
+        for slot, obj in enumerate(model.objects):
+            if obj.mesh is not None:
+                names[PW.object_id(slot)] = obj.mesh
+        for instance in self._instances:
+            mesh = names.get(instance.id)
+            where = ", ".join(f"{v:.1f}" for v in instance.translation)
+            item = QListWidgetItem(
+                f"{instance.index:>3}  id {instance.id:#06x}"
+                + (f"  mesh {mesh.index} ({mesh.face_count} tris)" if mesh
+                   else "  (drawn from another file)")
+                + f"  at {where}"
+                + ("  — spare" if instance.index in spare else "")
+            )
+            self.list.addItem(item)
+        self.report.setPlainText(
+            f"{len(self._instances)} placements, {len(spare)} of them spare — "
+            "their object is placed elsewhere too, so one can be spent on "
+            "something new. The list cannot be made longer."
+        )
+
+    def _on_selected(self, row: int) -> None:
+        if not 0 <= row < len(self._instances):
+            self.apply.setEnabled(False)
+            return
+        instance = self._instances[row]
+        self.identifier.setText(f"{instance.id:#06x}")
+        for box, value in zip(self.axes, instance.translation):
+            box.setValue(float(value))
+        self.apply.setEnabled(True)
+
+    def _on_apply(self) -> None:
+        row = self.list.currentRow()
+        if not 0 <= row < len(self._instances):
+            return
+        try:
+            identifier = int(self.identifier.text(), 0)
+        except ValueError:
+            self.report.setPlainText(
+                f"{self.identifier.text()!r} is not a number — an id looks like "
+                "0x5021.")
+            return
+        translation = tuple(box.value() for box in self.axes)
+        self.placement_changed.emit(self._instances[row].index, identifier,
+                                    translation)
 
 
 class AnimationPanel(QWidget):
