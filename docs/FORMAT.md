@@ -717,9 +717,11 @@ Runtime descriptor strides, from the two accessors:
 800160EC  addu  $v0, $v1, $v0
 ```
 
-These 56- and 12-byte structures are **built at load time and do not exist in the file**. The
-file-side data that produces them is in the TEX pack (§10); which TEX field lands in which
-descriptor slot is ?unknown? — see §13.
+These 56- and 12-byte structures are **built at load time and do not exist in the file**. Which
+TEX field lands in which descriptor slot was once unknown and is now the table in §10.4: the
+builder at 0x8002926C fills every slot from the record, and the two the render pass reads
+here — the tpage and the CLUT id — are written later still, by the VRAM allocator at
+0x80028D40 out of the rect a texture is given.
 
 ## 6.3 Colour index array (`ptr_colour_index`, mesh +0x20)
 
@@ -1040,7 +1042,10 @@ the 0x1C table** at 0, 4 or 8 mod 12 (401 / 163 / 124) — i.e. each names a *fi
 rather than a flat array. One record kind is now partly readable: the scene **nodes** the
 cutscene player walks, which carry a time window, a **play command** — loop start/end
 frames and mode — at `+0x14`, and placement keys from `+0x30` at stride 0x4C; see the
-looping part of §9.7. The rest of the graph is ?unknown?.
+looping part of §9.7. The rest of the graph is no longer unknown: §9.11.9 reads the type table
+and finds **six kinds and no more**, §9.11.10 names the last of them, and `tools/coverage.py`
+now accounts for the whole span between the object records and `T(0x4C)` down to 292 bytes of
+four-byte alignment across the entire archive.
 
 ## 8.4 Mesh attachment block (`mesh + 0x2C`)
 
@@ -1134,11 +1139,16 @@ arenas. Counting the numbered meshes of those same models adds 54 more, so 89 of
 blocks in the archive are in a level and 688 are on something else — characters, props and
 cutscene actors. No arena floor, wall or warp-room stair has one.
 
-So **the MDL does not carry a level's collision geometry**: there is no collision mesh, no
-height field and no volume list behind the set. Nor do the minigames look for one — across
-the 14 mode overlays there is exactly **one** call to the object resolver at 0x800159C4
-(`warp.bin`, 0x800BB60C), so they are not walking the level's meshes to test against them
-either. Where a floor or a wall is defined is ?unknown? and is not in this file.
+So **no level carries collision as attachment volumes**: there is no volume list behind the
+set, no `+0x2C` block on a floor or a wall. Nor do the minigames walk the level's meshes to
+test against them — across the 14 mode overlays there is exactly **one** call to the object
+resolver at 0x800159C4 (`warp.bin`, 0x800BB60C).
+
+Where a floor is defined is still ?unknown?, but "not in this file" would now be too strong a
+way to put it. §8.6 finds 242 KB in the seven hub and warp rooms that begins past the
+resident image on a sector boundary, holds vertex-shaped records in room coordinates, and has
+no traced reader. That is not a collision mesh until something is shown to read it as one —
+but it is in the file, and it is the reason this paragraph no longer says otherwise.
 
 When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
 5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
@@ -2574,8 +2584,10 @@ any pointer visible in the images, so its caller is resolved at run time.
 its single `model+0x4C` pointer resolves to the *first* record of the object-graph span —
 `0xCB5C` in `level_ending_good_shot3`, which is `T(0x1C)` itself. The nodes this section
 reads are found by walking the span and matching shape; the game reaches them from that root.
-How the root enumerates its children is **?unknown?**, so a node found by shape is a node the
-game *may* visit, not one it certainly does.
+**How the root enumerates its children is no longer unknown** — `spawn_order` quotes the
+spawner doing it at 0x8001FFD4: a root states its child count at `+0x00` and their
+self-relative pointers start at `+0x1C`. A node the walk reaches is a node the game
+constructs, and walking every root of every model finds 3333 of them.
 
 **Cameras are overlay-owned.** Counting calls per overlay: `menu.bin` initialises two
 cameras and renders through three; `warp.bin` initialises one, renders through two, and is
