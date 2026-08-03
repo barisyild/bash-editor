@@ -440,10 +440,23 @@ instance's `+152` (or a global, on flag `0x2000000`), and — the line that ties
 together — **writes the owner into the `0x80056998` global per instance drawn**, from the ctx
 the init wrappers stored at `0x8005AB50`. So level instances draw through the same owner-global
 route as characters, and the consumer that pins the tables is in none of the code read so far.
-The one unread link is the dispatch that follows `0x8001DA00` — everything before it is
-transform setup, everything after it is where the packets get built — and that is the remaining
-place to look. §8.6's reader has still not been found; whether it lives in that dispatch is
-untested either way. The in-file runtime-slot pattern also names a
+The dispatch is read now, and the chain closes into a function this document already knew from
+the inside. `0x8001D894` ends at `0x8001DAF4` — it is transform setup only: GTE rotation and
+translation loads, and the ordering-table depth biased by the instance's `+104`, which
+cross-confirms §8.5's `+0x9C` OT index at instruction level. The draw itself is back in
+`warp.bin`, immediately after the call returns: `0x800BBEBC` is `jal 0x80019A60` with the **id**
+from the instance's `+116` — the runtime copy of the record's `+0x88`, §8.5's copy confirmed —
+and the flags or'd with `0x2000000`. So the level draws its meshes **by id**, through
+`0x80019A60`, the same function whose interior §9.10 already quotes at `0x80019B34`/`0x80019B50`
+fetching a clip's resident blob. The full chain is now: `warp.bin` bit-15 walk → `0x8001D894`
+transform → `0x80019A60` draw-by-id → namespace dispatch (§2.3) → packet builders → live
+`T(0x20)`.
+
+Which means the pinning consumer has survived every read so far, and the honest state is this:
+**every link of the level draw chain that has been read resolves the model through the live
+header, and the code that behaves otherwise — proven to exist by the uv-move probe — has not
+been found.** The unread remainder is the interior of `0x80019A60`'s mesh-namespace paths and
+`0x8002F254`'s packet arena. Not found is not absent; the probes show it is there. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
