@@ -684,10 +684,16 @@ unread tail of the door update at `0x800B5668..` as where the builder must be. T
 read and is **room boot**: it picks a per-room id in `214..221` through a jump table on a room
 byte and preloads a zero-terminated id list through `0x800165F8` — one more member of the
 `0x16xxx` streaming family, and a new id band worth noting — but it builds no packets. The
-builder therefore lives in the door update's unread tail, the single remaining unread stretch
-of this chain. That builder is also the best remaining suspect for
-the table-pinning mechanism: if the index lists resolve against the model's shared tables at
-stream-in, how it fetches those bases decides the crash and the scramble both. The prologue did yield one solid cross-check on the way: it
+door update's tail is read as well, and it completes the streaming trio rather than building
+packets: as the fade counter at the `-3488` global runs down it restores the instance's drawn
+bit and calls **`0x8001636C(owner, [door+36])`** — the family's *release*. Request
+(`0x800163E0`), poll (`0x80016450`), release (`0x8001636C`): the §8.3 descriptor row's life
+cycle is complete at instruction level. The packet builder is therefore **not in `warp.bin` at
+all**; the one remaining candidate is the engine's large render loop at `0x8008CB44`. Until it
+is read, the builder — and with it the best remaining suspect for the table-pinning
+mechanism, since whatever resolves the sub-block's index lists against the shared tables
+decides the crash and the scramble both — stays **?unknown?**: searched to the edge of the
+overlay and not found, which is not evidence of absence. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
 101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
