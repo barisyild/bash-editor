@@ -1355,6 +1355,32 @@ GTE control registers 0..4, its translation into 5..7 and its +0x18 into control
 | +0x30 | 3 × i32 | A point, read as a triple at 0x800961BC and landing in the camera's eye slot. **213 of 217 lie inside their own model's bounds.** | **confirmed** (a position) / *likely* (the eye) |
 | +0x4C | 3 × i32 | A second point, 0x1C further on, differenced against the first by 0x800153B4. | **confirmed** (a position) |
 
+### The keys, and who asks for them
+
+The list is a **table of named points**, and the names are the keys. 0x8001E48C has **eleven
+call sites** across the disc — six in `warp.bin`, three in `gameeng.bin`, one each in
+`oxide.bin` and `menu.bin` — and between them they ask for four things:
+
+| Key | Asked by | What it reads |
+| --- | --- | --- |
+| 1 | `gameeng.bin` 0x80096184, 0x80097168; `warp.bin` 0x800B97B4 | +0x30 as the camera eye (§8.5 above), +0x34/+0x3C/+0x50/+0x58 for a heading |
+| 2 | `warp.bin` 0x800B53BC, 0x800B8488, 0x800B99D0 | +0x30 as a triple, +0x58 |
+| 9 | `gameeng.bin` 0x80097254 | the same heading pair as key 1 |
+| 0x65..0x70 | `warp.bin` 0x800B5404, in a twelve-iteration loop | +0x30/+0x34/+0x38 |
+
+That last row is the useful one. `warp.bin` walks `s1` from 0 to 11, skips a slot whose
+`[s2+0x14]` is zero, and looks up `s1 + 0x65` — **keys 101 to 112**. The corpus matches
+exactly: keys in that range occur in **seven models and no others**, and those seven are
+`warp_room1..5` and `demo_hub1..2`, which are precisely the rooms `warp.bin` drives. Nor does
+every room carry all twelve — 101, 102, 103, 111 and 112 are in all seven, 104/105/107/108 in
+five, 106 in four, 109 in two and **110 in none** — which is what a loop that tests before it
+asks is for.
+
+So a warp room stores up to twelve named points and the overlay reads their positions. What
+the room does with them is `warp.bin`'s business and not traced here; the remaining keys
+(0, 3, 203, 204) have no call site among the eleven, so **I could not validate what asks for
+them, which is not evidence nothing does**.
+
 Two things are deliberately not claimed. The heading at 0x80097158 reads +0x34/+0x3C and
 +0x50/+0x58 — the *second* and *fourth* words of each point rather than the first and third —
 so either the points carry more than three words or the heading is taken in a different
@@ -3250,12 +3276,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   0x2000 in 73/73 with no reader, +0x14 and +0x18 hold the same value in 73/73 and land
   4 bytes apart near the end of the file, +0x24 takes 13 values. The array itself and the
   placement records are **closed**, see §8.5.
-* **The rest of a +0x0C list entry.** The list is **closed** and three of the entry's fields
-  are read — the key at +0x0C and the two points at +0x30 and +0x4C, which `gameeng.bin`
-  turns into the level's camera (§8.5). The other ~0x50 bytes of the 104-byte record have no
-  reader yet, and neither does the key space: 1 is universal, but 203, 204, 101..103,
-  111..112 and the rest are unexplained, and only keys 1 and 9 are looked up in the code read
-  so far.
+* **The rest of a +0x0C list entry.** The list is **closed**, and so is most of the key space:
+  all eleven call sites of the lookup are read in §8.5, and they ask for key 1 (the camera, in
+  73/73 models), key 2, key 9, and **keys 101..112**, which `warp.bin` walks in a twelve-slot
+  loop and which occur in exactly the seven rooms it drives. What is left open is narrower
+  than it was: the ~0x50 bytes of the 104-byte record outside +0x0C, +0x30 and +0x4C, and the
+  four keys (0, 3, 203, 204) that no call site among the eleven asks for. **I could not
+  validate what reads those, which is not evidence nothing does.**
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
