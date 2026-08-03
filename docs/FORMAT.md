@@ -372,15 +372,23 @@ or move, and `0x50` may stay or grow without changing the outcome. Nothing in th
 points at the shared tables except the header's own `0x20`/`0x24`/`0x28`: a scan of every
 self-relative i32 in `warp_room1` finds exactly **one** pointer to each.
 
-**Two hypotheses still fit every row, and the third column is why.** Every crashing probe moved
-`0x20`/`0x24` — and every crashing probe also grew the file past 220 KB, while no loading probe
-passed 198,584. "The colour and UV tables cannot be relocated" and "the file cannot grow past a
-threshold in (198,584 .. 220,140]" both fit nine of nine. The second has a plain mechanism — a
-fixed per-room heap budget in the warp overlay, which +2 KB fits and +24 KB overflows — and
-`warp_room3` shipping at 234,368 rules out only a *global* threshold, not a per-room one. The
-discriminating probe is 24,576 appended zero bytes and nothing else: same size as the crashing
-table probes, not one pointer changed. Until it runs, the cause is **?unknown?** — what is
-established is which probes crash, not why.
+| grow 24k | 24,576 zero bytes appended, not one pointer touched | 221,112 | **loads** |
+
+**The size hypothesis is dead.** The grow-24k probe matches the crashing table probes byte for
+byte in size, is pure zero padding, and loads. Two searches agree with it: none of the seven
+files' sizes, sector roundings or `0x50` values appears as a u32 anywhere in the executable or
+the 16 overlays (the many hits on 196,608 = 0x30000 are the instruction encoding
+`sll $zero, $v1, 0`, not data), so there is no stored per-room budget to enforce one.
+
+**Two hypotheses still fit every row.** Every crashing probe moved `0x20`/`0x24` — and every
+crashing probe also appended *non-zero* data (table copies, rebuilt geometry), while every
+loading probe appended zeros or nothing. If something walks §8.6's block to the end of the file,
+non-zero bytes behind the block read as fake sub-block headers, and that crashes with the
+pointers never touched. The discriminating probe appends **exactly the bytes the tables-appended
+probe added — 18,064 of colour table, 5,540 of UV — with not one pointer updated**: same size,
+same content, only the header differs. Crash → trailing non-zero content is fatal and the
+pointers were never the story. Load → relocating `0x20`/`0x24` is fatal on its own. Until it
+runs, the cause is **?unknown?** — what is established is which probes crash, not why.
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
