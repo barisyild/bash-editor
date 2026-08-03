@@ -1185,7 +1185,7 @@ The resolve, and the four fields of the sub-object the binder reads:
 | +0x00, +0x04, +0x08 | i32 | 0x2000 in 73/73. Not read on this path. | **confirmed** (constant) / ?unknown? (purpose) |
 | +0x0C | i32 ptr | Target is the **end of the record array** in 73/73 — `records + 160*count` to the byte — and is itself `[i32 count]` then `count` self-relative i32 pointers. See below. | **confirmed** |
 | +0x10 | i32 ptr | A second block: `[i32 count]` then `count` records of 16 bytes. See below. | **confirmed** |
-| +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart. **+0x14's target is the last block in the file**: it runs from there to `T(0x44)` in 73/73, and its first two words are a count and `4 × count` in 73/73. See below. | **confirmed** (extent and header) / ?unknown? (contents, and what reads it) |
+| +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart. **+0x14's target is the last block in the file**: it runs from there to `T(0x44)` in 73/73, and its first two words are a count and `4 × count` in 73/73, followed by that many i32 — of which 77 are ascending 4-aligned in-block values and 30 are a negative last word. See below. | **confirmed** (extent, header and the array's shape) / ?unknown? (what the values mean, and what reads it) |
 | +0x1C | i32 | **Record count.** Read raw into instance +0x18 and used as the loop bound. | **confirmed** |
 | +0x20 | i32 ptr | **The record array**, 0x14 in 73/73 — it always starts at sub-object +0x34. | **confirmed** |
 | +0x24 | i32 | 0 (40), 0x01000000 (20), 13 distinct values. | ?unknown? |
@@ -1248,21 +1248,33 @@ with a sub-object — and each begins at the sub-object's **+0x14 target** and e
 **`T(0x44)`**, both in 73/73. It is the last block before the clip table, 82,300 bytes over
 the archive, up to 5144 in `dash_dot`.
 
-Its head is an offset array with a sentinel, and that much is measured exactly. The first
-word is a count and the second is `4 × count` in **73/73** — the array's byte length. Then
-`count` i32 follow, and of the 107 across the corpus:
+Its head is a counted array of i32, and the array holds **two different kinds of value**. The
+first word is a count and the second is `4 × count` in **73/73** — the array's byte length.
+Then `count` i32 follow, 107 across the corpus, and they split by sign:
 
-* the **last of each block is negative in 30/30** — a terminator, not an offset;
-* every other one, **77 of 77**, is a non-negative offset that lands inside the block.
+| | count | multiple of 4 | inside the block | position |
+|---|---|---|---|---|
+| non-negative | 77 | **77/77** | **77/77** | never last |
+| negative | 30 | 2/30 | — | **always last, one per block** |
 
-So a block with a count of *n* carries *n−1* offsets. The count is 0 in **43 of the 73**
-models, and **36 of those blocks are exactly 8 bytes** — the two head words and nothing else.
-The other seven zero-count blocks still run 236 to 1616 bytes, so the count does not size the
-block. The `+0x18` pointer lands inside it in 73/73, four bytes past where `+0x14` does.
+The 77 are strictly ascending within their block and every gap between neighbours is a
+multiple of 8 — 224 up to 1456. Four levels make the point on their own: `tank_metal`,
+`tank_jungle`, `tank_desert` and `tank_swamp` all carry `[524, 804, 1084, 1364, x]`, four
+words marching at an exact stride of 280, and **the negative last word is the only one of the
+five that differs between them** (−21, −190, −131, −97). Aligned, ordered, in-range and
+regularly spaced is what an offset table looks like; 28 of the 30 negatives are not even
+4-aligned, so whatever the last word is, it is not the same kind of thing as the other four.
+Neither reading is confirmed — see the closing paragraph.
 
-What the offsets reach is unread. Sampling `dash_dot/arena` at its first three gives triples
-of the order of −5214, 4897, −3444, 1267 — coordinate-scale, but that is a look at three
-places and not a decode.
+The count is 0 in **43 of the 73** models, and **36 of those blocks are exactly 8 bytes** —
+the two head words and nothing else. The other seven zero-count blocks still run 236 to 1616
+bytes, so the count does not size the block. The `+0x18` pointer lands inside it in 73/73,
+four bytes past where `+0x14` does, which puts it on the byte-length word: read from there the
+head is a length-prefixed array, the same shape the DAT uses for its own section table (§1.1).
+
+What the 77 reach is unread. Sampling `dash_dot/arena` at its first gives −5214, 0, −5551,
+4897 — coordinate-scale, and the negative last words are coordinate-scale too (−21 to −3096),
+but that is a look at one place and not a decode.
 
 **Nothing found reads it, and the binder demonstrably does not.** 0x8001DE18 resolves the
 sub-object's +0x0C, +0x10, +0x1C and +0x20 and passes over +0x14 and +0x18 entirely — that
