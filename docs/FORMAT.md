@@ -4115,25 +4115,14 @@ Stated precisely, with the measurement that bounds each one.
 
 **How much is left, measured.** `tools/coverage.py` marks every byte a structure in this
 document accounts for and prints what nothing claims. Over the 31.8 MB of MDL in the archive
-it reaches **99.98 %**, and **398 of the 400 models are accounted for to the byte**. What is
-left is two files:
-
-* `cutscene/gamelogo_text.mdl` — 7520 bytes at 0xC0..0x1E20, and they are **identified**: the
-  file carries the same mesh data block **twice**, and the span is a byte-for-byte duplicate
-  of the one both mesh headers point at. Same 86 strips and 494 triangles, same bounds block,
-  and **7520 of 7520 bytes identical**. Both headers name the second copy; nothing names the
-  first. Written down as a fact about the file, not as a purpose — what made the exporter
-  emit it twice is not something the data can say.
-* The **20-byte records** of §9.11.8 — 260 bytes in `gamelogo_text` and 160 in
-  `intro_eurocom`, both running from `T(0x18)+4` to `T(0x44)` in a model whose sub-object
-  count is zero, so nothing in the header sizes the span. 325 of the 327 sub-object-less
-  models leave that span empty; these two do not. The stride is measured rather than assumed.
-  The one routine that reaches this region, 0x8001DE18, indexes a sub-object pointer first,
-  so with a count of zero it cannot get here — an earlier revision called these the object
-  list's source array, and that was wrong: the source array is the placement list of §8.5.
-
-Neither is a claim that those bytes are unused — only that **I could not validate what
-reads them**.
+it now reaches **100.00 %**, TEX likewise — every byte has a *named owner*, which is a claim
+about location, never about meaning. The last two holders were `gamelogo_text`'s dead
+duplicate mesh block (§9.13 — both headers point at the second copy, nothing at the first)
+and the **20-byte rows** of §9.12 in the two cutscenes, which a later pointer scan showed to
+be **unreachable by any self-relative i32 in their own files** — positional access or none.
+Both are claimed by the tool only under a byte test, so a future file with something else
+there still surfaces as a hole. Neither claim says the bytes are unused — only that **what
+reads them could not be validated**.
 
 The tool walks the **TEX** corpus too, and there it now reaches **100.00 %** of 15.2 MB. The
 last 2892 bytes were the zero tail of §10.6: every pack's length is a multiple of 8 in 400/400,
@@ -4169,12 +4158,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   exist and never show its hand, so "padding" is the reading that fits and not a validated
   one.
 * **0x50** — the arithmetic is unambiguous (`base + value` lands on the end of the 0x44
-  directory) and no code reading it has been found, so "size" versus "pointer to a trailer" is
-  inference either way. One measurement is worth keeping: the field is a multiple of 0x800 in
-  exactly 8 of 400 models, seven being the hub/warp rooms where it equals `T(0x44)` and §8.6's
-  block starts on that boundary. **The obvious conclusion from that is wrong** — it does not
-  mark what is resident, because all 1037 animation blobs start past it too and are read. The
-  name `resident_size` in this document is inherited, not earned.
+  directory) and no code reading it has been found. The *meaning*, though, moved during the
+  warp-room probes: an earlier revision here said the blobs living past it and being read
+  proved it marks nothing resident, and that argument now cuts the other way — the blobs are
+  read **from disc, by explicit byte range, into fresh allocations** (§9.2, all five callers
+  traced), which is machinery with nothing to do if the file's tail stayed in memory. Together
+  with nine hardware probes, `resident_size` is behaviourally supported and its reader is
+  still untraced; see the upgraded row in §2.1 and the load-path map in §11.9.
 * **0x1C object table** — the mystery here is smaller than this entry used to make it sound.
   The 12-byte object records are read (§8.3) and what follows them is the node graph, which
   §9.11 reads and `tools/coverage.py` now accounts for down to 292 bytes of inter-node
@@ -4221,6 +4211,16 @@ are not only undocumented format; they are also where a reader is quietly skippi
 * ~~**0x28 vector pool framing**~~ and ~~**0x44 record +0x08 / +0x0C**~~ — **closed**, see §9.
   The pool is the position source animation keyframes index; +0x08 is a frame count and +0x0C
   points at the mesh a clip drives.
+
+* **Why the colour and UV tables are pinned in `warp_room1`** — the largest unknown this
+  document currently carries, and the best-instrumented. Repointing `0x20` crashes the room
+  and repointing `0x24`/`0x28` scrambles every textured surface, established by a ladder of
+  eleven hardware probes whose one-variable deltas are tabulated in §2.1. The mechanism is
+  **unexplained after static reading**: every explanation tried is listed there with what
+  killed it, thirty-one engine functions are mapped in §11.9, and every traced consumer
+  resolves both fields live — which is precisely what makes the scramble a paradox. The open
+  observations that would decide it are named in §2.1. I could not validate the mechanism;
+  the behaviour itself is validated eleven times over.
 
 **MDL mesh header**
 
