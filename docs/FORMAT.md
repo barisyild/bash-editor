@@ -1485,15 +1485,26 @@ their coordinates fall inside the room rather than around it: `warp_room1` spans
 x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent reaches ±19000 on the sky dome
 alone.
 
-**Everything above is corpus measurement. Nothing here is traced to code, in either
-direction.** No site is known that reads the block, but that is not the same as none
-existing: the two ways to locate it are `i32@0x50` and the end of the clip table, and their
-immediates (0x50, 0x40) appear hundreds of times across the disc against structs that are not
-models, so a scan for them proves nothing. The reading that would be tempting — §8.4 shows a
-level carries no collision volumes, so a floor must be described somewhere, and this is
-room-shaped data in the only files that are rooms — is **not** established and is written
-here only to say that it is the thing to test, by tracing `warp.bin`, which drives exactly
-these seven rooms.
+**Everything above is corpus measurement.** Nothing here is traced to code, and three
+separate routes to the block have now been searched without success:
+
+* **`base + [base+0x50]`**, the resident-image end. Looked for `lw rX, 0x50(rY)` followed by
+  an `addu` putting it back on the same base — the shape of resolving it — across the
+  executable and all 15 overlays. **Zero sites.**
+* **`T(0x44)`**, which is where the block begins when a model has no clips, and which is a
+  landmark real code does resolve: **11 sites** do, one being the 0x4000 id branch at
+  0x800156A8 and the rest a family of clip lookups at 0x80015F94..0x80016B88. Every one of
+  them bounds its walk by `[model+0x40]`, the clip count — and that is **0 in all seven**
+  models with this block, so the loops run zero times and never reach it.
+* **The +0x0C list.** All eleven call sites of the entry lookup are read above; none yields
+  an address in this region.
+
+So: **I could not validate that anything reads it, and that is not evidence it is unused.**
+242 KB in seven files, with a header identical in 7/7 down to its constants, is not what
+dead space looks like. The reading that would be tempting — §8.4 shows a level carries no
+collision volumes, so a floor must be described somewhere, and this is room-shaped data in
+the only files that are rooms — remains **untested**, and the place to test it is what
+`warp.bin` does with a model base, since it drives exactly these seven rooms.
 
 ---
 
