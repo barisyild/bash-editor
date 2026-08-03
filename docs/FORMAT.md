@@ -443,7 +443,10 @@ kept span reads garbage no matter how correct the pointer is. The discriminator 
 sector-aligned over the relocated copy. Textures intact → the resident boundary is the
 pinning mechanism, isolated on one variable; still scrambled → `0x50` is exonerated and the
 paradox stands. (The tables-inside probe grew `0x50` and still crashed, but it moved `0x20`
-as well, so it cannot separate the two — this probe can.) A mesh
+as well, so it cannot separate the two — this probe can.) The law also holds as a corpus
+invariant: **all 400 shipped models keep every shared table and the geometry boundary at or
+below `i32@0x50`**, 400/400 — no shipped file ever asks the engine to read a table from past
+the resident line, which is exactly the situation every fatal probe created. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
 The level's own draw chain is mapped one link further. `warp.bin` references the owner global at
