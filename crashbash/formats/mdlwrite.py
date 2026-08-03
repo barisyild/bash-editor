@@ -419,7 +419,14 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     so `dest_data` must not still carry its animation blobs -- they would end up
     inside the geometry span. Run `strip_animation` first and write the clips
     back afterwards.
+
+    This path relocates the shared tables, which is fatal in the seven §8.6
+    carriers -- repointing `0x20` crashes the room and repointing `0x24` alone
+    scrambles every textured surface, four probes deep (§2.1). It refuses those
+    files rather than producing a disc that fails on hardware; `install_mesh`
+    with `pin_tables=True` is the way in.
     """
+    _refuse_carrier(dest_data, "transplant_mesh")
     dest = read_model(dest_data)
     if not 0 <= dest_index < len(dest.meshes):
         raise ValueError(f"the model has no mesh {dest_index}")
@@ -742,6 +749,24 @@ def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> int:
     if resident >= cut:
         struct.pack_into("<i", out, RESIDENT_SIZE, resident + inserted)
     return boundary
+
+
+def _refuse_carrier(data: bytes, what: str) -> None:
+    """Stop a table-relocating writer from touching an §8.6 carrier.
+
+    The carriers announce themselves: `i32@0x38`, the chunk-descriptor count, is
+    non-zero in exactly the seven of them and zero in the other 393. Their
+    shared tables are pinned on hardware, so a writer that moves the tables can
+    only produce a disc that crashes or draws garbage -- better to refuse here
+    than to find out on the television.
+    """
+    if len(data) >= 0x3C and struct.unpack_from("<i", data, 0x38)[0] > 0:
+        raise ValueError(
+            f"{what} relocates the shared colour and UV tables, which is fatal "
+            "in a §8.6 carrier (warp room or hub): repointing 0x20 crashes the "
+            "room and repointing 0x24 scrambles every textured surface. Use "
+            "install_mesh(pin_tables=True) instead."
+        )
 
 
 def _carry_vector_pool(out: bytearray, source: bytes) -> int:
