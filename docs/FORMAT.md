@@ -538,7 +538,21 @@ padding, and a repacker that moves entries closer together (this project's packs
 those spans — harmless if nothing assumes slack, and the shipped gaps do carry stray non-zero
 bytes (58 to 925 per gap behind the seven carriers, measured), so nothing about the gaps is
 load-bearing on the shipped disc. Whether the model's own `owner+0x24` gets the sector-span or
-the `row+4` byte size is the remaining read. Full size means the game loads everything and
+the `row+4` byte size is the remaining read.
+
+Three more links are instruction-level now. `0x80013650` is the entry-load front door — it
+takes a handle and a callback and enqueues with **length `[handle+4]`**. `0x80011498` is a
+**shrink-and-free primitive**: it trims a heap block to a given byte size and frees the
+remainder as a new block (word-count rounded, only when ≥ 16 words are left over). And it has
+exactly **four callers**: three are the table-driven group loaders trimming each entry's
+sector-span allocation down to its `row+4` byte size — pruning the inter-entry padding — and
+the fourth sits inside §9.2's blob loader at `0x80015FFC`, trimming a blob's buffer. **No
+caller shrinks a model to its resident size.** The tidy story — load the sector span, truncate
+to `i32@0x50`, let the compactor reuse the tail — has no instruction-level support: searched
+and not found, which is not evidence of absence, but the honest state is that the *trigger* for
+the tail becoming garbage is still untraced. What stands without it: the probes' behaviour, the
+compactor's existence, and the blob machinery's refetch-from-disc — the tail is demonstrably
+not usable memory, by a mechanism not yet read. Full size means the game loads everything and
 frees the tail after init, which the compactor then moves live data over; resident size means a
 short read. Either way the probes' garbage is explained; which mechanism it is stays
 **?unknown?** until that provenance is read.
