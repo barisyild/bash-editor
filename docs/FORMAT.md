@@ -4296,9 +4296,14 @@ are not only undocumented format; they are also where a reader is quietly skippi
   `+0x4C..+0x67`** — end-tick at segment `+0x0C`, a skip flag `0x2000` at `+0x14`, position
   triple at `+0x00/+0x04/+0x08`, mode word at `+0x14/+0x16` — consumed by the tick-to-segment
   walker `0x8001E41C` and its sibling `0x8001E21C`, both read. 104 − 76 = 28: the entry is
-  exactly one track header plus one segment. What remains of this item: keys 0 and 3, and the
-  field-level meaning of the segment words beyond the ones named — the *machinery* is traced
-  end to end.
+  exactly one track header plus one segment. The key space is now fully censused:
+  `{0:18, 1:73, 2:8, 3:7, 99:1, 101..112: per-room door counts, 200..204: 49}`. **Key 0** is
+  an idle slot shaped like a door entry — the `+0x04` id field sits in the same 1615..1650
+  band the live doors use, everything else zero, and the hubs carry most of them. **Key 3**
+  is a per-carrier singleton: exactly one per hub and warp room, uniform payload
+  `[2, 1888, 0, 3, …]` — one special entry per room, its consumer unfound. What remains of
+  this item: key 99's single entry, key 3's consumer, and the field-level meaning of the
+  segment words beyond the ones named — the *machinery* is traced end to end.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
