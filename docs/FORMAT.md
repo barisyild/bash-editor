@@ -567,10 +567,17 @@ byte size.
 **Which leaves a paradox, stated as one.** If the model's load length is the table row's byte
 size, the whole file — relocated tables included — is in RAM, the packet builders resolve
 live, and the uv-move scramble has no mechanism again. Every explanation eliminated so far is
-recorded above; what would settle it next is a check of this project's own build against every
-table the game reads (are the *group* extents patched as faithfully as the entry rows?), and
-after that, dynamic observation. The scramble is real, reproducible, and as of this reading
-**unexplained** — which is the honest word for it. Full size means the game loads everything and
+recorded above, and two more died on inspection: **this project's own tables are coherent** —
+`build.py` patches the entry rows and the group `bytes` fields consistently, and documents that
+its tight packing *removes* the shipped disc's span-versus-bytes disagreement rather than adding
+one — and **the fallback allocator is not a separate region**: `0x80011654` and `0x80011748`
+are near-twins on the same heap, differing only in that the first waits on the lock first. So
+the eliminated list now reads: partial read by `0x50` or `T(0x44)` (probe-refuted or
+untraced), stale caches (build-once but post-load), non-live pointer resolves (traced live),
+incoherent rebuilt tables (audited), a clobbered temp region (allocators identical). The
+scramble is real, reproducible, and **unexplained at the end of static reading** — the next
+instrument is dynamic: a RAM watch on the loaded model while the emulator runs the probe, which
+is an observation this project's tooling cannot make on its own. Full size means the game loads everything and
 frees the tail after init, which the compactor then moves live data over; resident size means a
 short read. Either way the probes' garbage is explained; which mechanism it is stays
 **?unknown?** until that provenance is read.
