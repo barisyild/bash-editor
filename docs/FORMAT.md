@@ -3145,6 +3145,37 @@ The +0x04 column is the per-tick handler this document already decodes for three
 walking every root of every model finds 3333 nodes and not one whose type field falls outside
 0..5.
 
+## 9.12 The 20-byte rows two cutscenes put before the clip table
+
+Byte coverage is what turned these up: after everything else in the archive is accounted for,
+**two models** have anything left, and this is one of the two things left in them. `intro_eurocom`
+carries 160 bytes and `gamelogo_text` 260, in both cases ending exactly at `T(0x44)` and dividing
+evenly into **20-byte rows** — 8 and 13 of them.
+
+| Offset | Type | Measured |
+| --- | --- | --- |
+| +0x00 | i32 | Five distinct values over the 21 rows: `0x40000000`, `0x40080000`, 1, 2, 4. The two large ones are the **0x4000 animation namespace** in the high half (§2.3), with 0 and 8 in the low. |
+| +0x04 | i32 | A small index, 0..12. It counts 0,1,2,3 within a run and then restarts — `gamelogo_text` reads 0,1,2,3 / 0,1,11,10,2 / 0,1,2,3, so the rows group. |
+| +0x08 | i32 | 3584, 512, 1536, 2560 on `gamelogo_text`'s first four rows; **0 in the other 17**. |
+| +0x0C | i32 | Zero in 20 of 21 rows. |
+| +0x10 | i32 | **Zero in 21/21** — which is what the coverage walk tests before claiming the span, so a file with something else there stays visibly unclaimed. |
+
+**No reader has been found and none was searched for beyond the byte layout**, so what these
+drive is ?unknown?. The 0x4000 namespace in `+0x00` and the restarting index in `+0x04` are
+suggestive of clip references, and that is a resemblance, not a decoding. That only two of 400
+models carry them at all is itself unexplained.
+
+## 9.13 `gamelogo_text` ships its mesh block twice
+
+The other leftover, and it is not a structure. `gamelogo_text` holds **7520 bytes at 0xC0 and a
+byte-identical copy of them at 0x1E20**, back to back. Both of its mesh headers resolve every
+one of their pointers — bounds, strips, uv index, texture, colour index — into the **second**
+copy, and both name the same `ptr_end`. Nothing in the file reaches the first.
+
+So it is dead weight an exporter left behind, not data. It is worth recording because it was the
+single largest unclaimed span in the archive, and reading it as an undiscovered structure would
+have been the natural mistake: it is 7520 bytes of perfectly well-formed mesh material.
+
 ---
 
 # 10. TEX packs

@@ -179,7 +179,46 @@ def cover(data: bytes, model, clips) -> tuple[bytearray, Counter]:
             claim(run, i, "blob alignment padding")
             run = None
 
+    _pre_clip_records(data, marks, claim, clip_table)
+    _orphan_duplicates(data, marks, claim)
     return marks, owners
+
+
+def _pre_clip_records(data: bytes, marks: bytearray, claim, clip_table: int) -> None:
+    """The 20-byte rows two cutscenes carry just before the clip table (§9.12).
+
+    Claimed only when the whole gap divides by 20 and every row's last word is
+    zero, so a file with something else there stays visibly unclaimed.
+    """
+    end = clip_table
+    start = end
+    while start > 0 and not marks[start - 1]:
+        start -= 1
+    length = end - start
+    if not length or length % 20:
+        return
+    if any(i32(data, r + 16) for r in range(start, end, 20)):
+        return
+    claim(start, end, "pre-clip-table records (§9.12)")
+
+
+def _orphan_duplicates(data: bytes, marks: bytearray, claim) -> None:
+    """An unclaimed run that is a byte-for-byte copy of claimed material.
+
+    `gamelogo_text` ships its 7520-byte mesh block twice in a row and both mesh
+    headers resolve into the second copy, so the first is reachable from
+    nothing. Naming it keeps it out of the unexplained column without pretending
+    it is a structure.
+    """
+    for start, end in spans(marks):
+        block = data[start:end]
+        if len(block) < 64:
+            continue
+        elsewhere = data.find(block, end)
+        if elsewhere < 0:
+            elsewhere = data.find(block)
+        if elsewhere >= 0 and elsewhere != start and marks[elsewhere]:
+            claim(start, end, "orphaned duplicate of claimed data")
 
 
 def cover_tex(data: bytes) -> tuple[bytearray, Counter]:
