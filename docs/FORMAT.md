@@ -3319,9 +3319,18 @@ structure in the file, and it is now measured exactly:
 
 **400 of 400 packs have a length that is a multiple of 8**, and the run never exceeds 12 bytes
 and is entirely zero in 358/358. So the tail is the alignment pad, plus a further eight zero
-bytes in 314 of the 400. Why those 314 carry the extra eight and the other 86 do not is
-?unknown?; it does not track the pack's texture count, palette count or which structure ends
-last.
+bytes in 314 of the 400 — and **which 314 is settled**:
+
+| | packs | extra beyond the alignment pad |
+| --- | --- | --- |
+| `u32@0x18` non-zero — the pack has an animation block | 86 | **0** |
+| `u32@0x18` zero — it has none | 314 | **8** |
+
+The match is exact both ways, 400/400, and eight bytes is the size of §10.5's animation block
+header: the two pointers, to the flipbooks and to the scrollers. A pack that declares no
+animation still carries that header, zeroed, with nothing pointing at it. Read that as the
+builder always emitting the header and only filling `+0x18` when it has something to put in it
+— the biconditional and the size are measured, the intent is the obvious reading of them.
 
 **No reader was traced for these bytes and no reader would need to be** — nothing points at
 them, and a pack with none of them (42 of them) loads the same way. That is a search that came
@@ -3570,8 +3579,11 @@ reads them**.
 The tool walks the **TEX** corpus too, and there it now reaches **100.00 %** of 15.2 MB. The
 last 2892 bytes were the zero tail of §10.6: every pack's length is a multiple of 8 in 400/400,
 and the run of zeros that gets it there is 4 bytes in 44 packs, 8 in 263 and 12 in 51, never
-more than 12 and entirely zero in 358/358. The walker claims it by testing the bytes, never by
-position, so a structure at the end of a future file would still surface as a hole.
+more than 12 and entirely zero in 358/358. The eight bytes that sit on top of the pad in 314 of
+them turned out to be an **empty animation-block header**: `u32@0x18` is zero in exactly those
+314 and non-zero in exactly the other 86, a two-way match over 400/400, and eight bytes is the
+size of that header. The walker claims the tail by testing the bytes, never by position, so a
+structure at the end of a future file would still surface as a hole.
 
 The audit is worth running for what it catches rather than for the number. It found the mesh
 terminator of §3, the padding rule of §2.1 and the hub block of §8.6 — and then it found a
