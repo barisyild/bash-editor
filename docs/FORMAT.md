@@ -384,17 +384,46 @@ theory: it appends **exactly the bytes the tables-appended probe appended** — 
 table, 5,540 of UV, non-zero data sitting right behind §8.6's block — with the header
 byte-identical to shipped, and it loads.
 
-**That leaves a clean A/B.** Junk and tables-appended are the same size with the same appended
-content; the only difference is that tables-appended rewrites `0x20`, `0x24`, `0x28` and `0x08`.
-One loads, one crashes. The far-boundary probe already moved `0x28` and `0x08` to EOF on their
-own and loaded, so the pair that remains is **`0x20`/`0x24`: repointing the colour and UV tables
-is fatal in this file, by itself**. The *mechanism* is still ?unknown? — every known reader of
-either field is a draw-time site resolving the self-relative pointer, and with the whole file in
-RAM a relocated copy should serve; something evidently resolves them differently, and no code
-doing so has been found. What is established is the fact, by elimination on hardware, not the
-why. Whether `0x20` and `0x24` are *individually* fatal is the one split left — the uv-move
-probe relocates `0x24`/`0x28` only, colour untouched — and it decides whether a writer may grow
-the colour table in place and move the UV table out, or must grow both in place.
+| uv move | `0x24`/`0x28` repointed to a byte-identical UV copy at EOF; `0x20` untouched | 202,076 | **loads — textures scrambled** |
+
+**That closes the elimination, and it lands on `0x20` alone.** Junk and tables-appended are the
+same size with the same appended content; the only difference is the four rewritten pointers.
+Far-boundary moved `0x28` and `0x08` on their own — loads. Uv-move moved `0x24` (and `0x28`) on
+their own — loads. The one pointer never moved in a loading probe is **`0x20`: repointing the
+colour table crashes this file, by itself.**
+
+**And the uv-move probe bought a second fact with its scrambled screen.** The relocated UV table
+was byte-identical to the original; had the game fetched UVs by resolving `0x24` — its one known
+read site, 0x80017F30 — the picture would have been pixel-for-pixel unchanged. It was garbled
+instead: every textured surface sampled wrong texels while geometry, colours and the room itself
+stayed intact. So **something consumes the UV table's position by another route, and it
+demonstrably exists while remaining unfound**: base-relative scans (`lw` + `addu`) for `0x20`
+and `0x24` find zero sites in the executable and all 16 overlays, and the self-relative idiom
+finds only the draw-time sites already listed. This is the sharpest instance in this document of
+a failed search not being evidence of absence — here the unfound reader shows up on screen.
+
+The writer's rule that falls out is blunt: **in this file both shared tables are pinned.** Move
+`0x20` and the room does not load; move `0x24` and every textured triangle samples garbage. Until
+the resolving code is found, a writer must leave the colour and UV tables at their shipped
+addresses and edit them in place. (Measured on `warp_room1`; the other six §8.6 carriers share
+its layout, and extending the rule to them is inference, not measurement.)
+
+**The assembly hunt for the resolver has a trail now.** `0x8001DE18` is a load-time context
+builder that resolves header pointers *once* and caches the absolute addresses in a runtime
+struct — `ctx+0x0C = T(0x18)`, the sub-object, its `+0x0C` and `+0x10` targets, the record
+array, `T(model+0x1C)`, and `T(0x2C)` via the base-relative `0x10` read at `0x8001DEC4`. Its
+last act writes **the model base into the file image itself, at `T(0x3C) + 0x0C`** — a runtime
+pointer slot inside file data, the same pattern as the animation descriptor's `+0x14` resident
+slot (§9.2). `0x8001D6B4`, called next, is §8.5's instance builder: it allocates 168-byte
+runtime records through `0x80011654` and fills them from the file's placement records. Neither
+touches `0x20`/`0x24`. Both init wrappers (`0x8001DFF8`, `0x8001E054`) finish by calling
+`0x8001682C` with the model base — the caching demonstrably continues there, and that is where
+the colour/UV resolver should be looked for next. The in-file runtime-slot pattern also names a
+candidate mechanism for both symptoms: if slots reached through one route are written by the
+loader while the draw path reads them through another, a byte-identical relocated copy holds
+zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
+tpage/clut on the `0x24` route. That is a **hypothesis**, stated as one; the two facts are the
+caching pattern and the in-file slot, both read from the instructions above.
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
