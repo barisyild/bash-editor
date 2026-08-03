@@ -417,8 +417,14 @@ pointer slot inside file data, the same pattern as the animation descriptor's `+
 slot (§9.2). `0x8001D6B4`, called next, is §8.5's instance builder: it allocates 168-byte
 runtime records through `0x80011654` and fills them from the file's placement records. Neither
 touches `0x20`/`0x24`. Both init wrappers (`0x8001DFF8`, `0x8001E054`) finish by calling
-`0x8001682C` with the model base — the caching demonstrably continues there, and that is where
-the colour/UV resolver should be looked for next. The in-file runtime-slot pattern also names a
+`0x8001682C`, and that one is now read too: it is **§9.2's resident-blob scheduler**, walking
+the clip descriptors at `T(0x44)`, allocating for each whose `+0x14` slot is zero and queueing a
+read of `[start, end)` through `0x800133C8` — with its teardown twin at `0x80016928` freeing the
+blobs and zeroing the slots. A clean instruction-level cross-confirmation of §9.2, and a no-op
+in the seven §8.6 carriers, whose clip count at `0x40` is zero. So **the model-init chain has
+been read end to end and none of it touches `0x20`/`0x24`** — the resolver, which the uv-move
+probe proves exists, is not in the init path. What remains unsearched is the per-frame render
+setup and the mode overlay side. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
