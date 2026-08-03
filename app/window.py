@@ -561,9 +561,10 @@ class MainWindow(QMainWindow):
                 APP_NAME,
                 f"Nothing was staged.\n\n{exc}\n\n"
                 "The file must come from this editor's own glTF export — mesh "
-                "names carry the index the importer matches on. To edit one "
-                "mesh of a many-mesh model, delete the others in the modelling "
-                "tool before exporting; only the meshes present are rebuilt.",
+                "names carry the index the importer matches on. Every mesh "
+                "present is rebuilt and its clips with it, so a file holding "
+                "the whole model replaces the whole model; deleting meshes "
+                "before exporting only narrows what is touched.",
             )
             return
 
