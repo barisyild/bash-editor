@@ -74,15 +74,24 @@ They are not style preferences.
   the block may move only if those rows move with it.
   Use `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)` — engaged
   automatically now, since a carrier announces itself by a non-zero `i32@0x38`
-  (7/400). It emits the **graft layout**, hardware-proven by `safeadd2` and
-  `safeadd3`: the file stays byte-identical through its old EOF except the
-  rebuilt mesh's header and `0x08`/`0x50`, new blocks go after the §8.6 block
-  under a grown sector-aligned `0x50`, colours map to the nearest existing
-  entry, and textured triangles need their exact UV triple already in the
-  table. *Why* `0x24` is pinned is still unfound: every reader traces to a live
-  resolve that a byte-identical copy would satisfy, and a disc-wide sweep of all
-  385 loads at that offset accounts for every one. Searched and not found is not
-  the same as absent.
+  (7/400). It emits the **graft layout**: the file stays byte-identical through
+  its old EOF except the rebuilt mesh's header and `0x08`/`0x50`, new blocks go
+  after the §8.6 block under a grown sector-aligned `0x50`, colours map to the
+  nearest existing entry, and textured triangles need their exact UV triple
+  already in the table. *Why* `0x24` is pinned is still unfound: every reader
+  traces to a live resolve that a byte-identical copy would satisfy, and a
+  disc-wide sweep of all 385 loads at that offset accounts for every one.
+  Searched and not found is not the same as absent.
+- **Nothing past the shipped resident size is there at run time, and growing
+  `0x50` does not change that.** `warp_room1`'s placement array was copied byte
+  for byte past its old EOF with `0x50` grown to cover it and `+0x20` repointed
+  — four bytes changed below the old EOF — and **the whole room stopped
+  drawing**. The same pointer aimed at a copy *inside* the resident region drew
+  its objects. So the array's base is an ordinary live pointer; what failed was
+  the destination. `safeadd2`, `safeadd3` and `grow24k` "worked" only because
+  nothing ever read the bytes they appended — the graft layout is proven not to
+  crash, and has never been shown to deliver data. A level edit must fit inside
+  the resident image the file already has.
 - **An object-pool mesh's blocks may not leave the pool.** The pool is one
   packed run: the next object mesh's header sits exactly four bytes past the
   previous mesh's `ptr_end` in **1802 of 1898** consecutive pairs. Rebuilding
@@ -96,6 +105,18 @@ They are not style preferences.
   authoring tool's, so even a reshape with the same triangle count can want more
   room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
   owned).
+- **The placement list is live data, and it is how a level's set is changed.**
+  Both fields answer to the file: taking `warp_room1`'s count from 81 to 80 —
+  one byte — draws the room with its last object gone, and repointing the array
+  at a copy inside the resident region draws exactly the records that copy
+  holds. Rewriting a record in place is the whole of what a level edit can do
+  today: translation, rotation and the object id are all just bytes. Growing the
+  list is what is blocked, and not by the list — the array is boxed in by four
+  more arrays that start where it ends, the resident region holds no run of
+  zeros big enough to relocate 81 records into (largest 1325 bytes against
+  12,960 needed), and past the old EOF nothing is loaded. Five objects are
+  placed twice in that room, so a redundant record is the room's only spare
+  capacity.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an
