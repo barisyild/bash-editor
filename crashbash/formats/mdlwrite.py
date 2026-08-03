@@ -78,7 +78,9 @@ MAX_COLOURS = COLOUR_INDEX_MASK + 1
 
 # Bit 3 of a strip's flag byte. docs/FORMAT.md recorded it as having no reader
 # and no known meaning; it is the winding of the strip's first triangle, and
-# equals bit 0 of that triangle's vertex flag in 42,267 of 42,267 strips.
+# equals bit 0 of that triangle's vertex flag in 42,267 of 42,267 strips. This
+# writer seeds every strip outward, so the bit is always clear here -- it is
+# named for the meshes that carry it, which a reader still has to honour.
 STRIP_FLAG_FIRST_FLIPPED = 0x08
 
 
@@ -231,6 +233,23 @@ class NewMesh:
     swatch: int = 0
 
 
+def _attachment_bytes(data: bytes, mesh: Mesh) -> bytes:
+    """The mesh's own `+0x2C` block, whole, or empty when it has none.
+
+    `[u16 flags][u16 count][16 bytes x count]`, and it lives inside the mesh's
+    own span, so a rebuild that lays new blocks down drops it. §8.4: for a
+    character this is the collision volume gameplay reads live, and zeroing it
+    let the crate game's crates be walked through. A whole-model rebuild of
+    `mainmenu/models` zeroed it on all nine of the meshes that had one.
+    """
+    at = mesh.ptr_attachment
+    if not at or at + 4 > len(data):
+        return b""
+    count = struct.unpack_from("<H", data, at + 2)[0]
+    end = at + 4 + 16 * count
+    return bytes(data[at:end]) if end <= len(data) else b""
+
+
 def _run_entry(mesh: "NewMesh", value: int) -> int:
     """One texture-run entry: a slot, a recovered swatch, or the mesh default."""
     if value >= 0:
@@ -369,10 +388,11 @@ def build_blocks(mesh: NewMesh) -> dict:
         plain = (not textured) or int(mesh.textures[run[0][0]]) < 0
         # Bit 3 states the winding of the strip's first triangle and must agree
         # with the vertex flags below -- 42,267 of the game's 42,267 strips do.
-        # Seeds are written in the source's own order, which the game marks as
-        # winding 1: rebuilding one of its meshes reproduces its pool exactly,
-        # 473 of 473 slots, and the flag it gives that first triangle is 1.
-        flags = STRIP_FLAG_FIRST_FLIPPED | (STRIP_FLAG_UNTEXTURED if plain else 0)
+        # A seed is emitted in the incoming order, which is the outward one, so
+        # its first triangle is not flipped and bit 3 stays clear. Setting it
+        # unconditionally -- as this did -- inverted the backface test on every
+        # seed whose parity that guess got wrong.
+        flags = STRIP_FLAG_UNTEXTURED if plain else 0
         strips += struct.pack("<H", (len(run) << 8) | flags)
     strips += struct.pack("<H", 0xFF00)
 
@@ -398,9 +418,16 @@ def build_blocks(mesh: NewMesh) -> dict:
     # written in their own order, so the first triangle is not flipped, the
     # parity starts at zero and the strip flag leaves bit 3 clear. Start it at
     # one instead -- as this did -- and the mesh contradicts its own flag byte.
+    #
+    # This is not cosmetic. The game flips the sign of the NCLIP backface test
+    # per this bit (§11.3), so an inverted parity culls the triangle instead of
+    # drawing it. Rebuilding `mainmenu/models` against the shipped facing:
+    # 6031/6031 triangles correct with the parity starting at zero, 2944/6031
+    # with it starting at one -- and the backdrop, mesh 6, was inverted in all
+    # 875 of its triangles and vanished from the menu.
     winding: list[int] = []
     for run in runs:
-        winding += [0 if k < 2 else (k - 1) % 2 for k in range(len(run) + 2)]
+        winding += [0 if k < 2 else k % 2 for k in range(len(run) + 2)]
     vertices[:, 3] = np.array(winding[: points.shape[0]], dtype="<i2")
     # int64 throughout: squaring an int16 span overflows well before a model does.
     low = points.min(axis=0).astype(np.int64)
@@ -824,7 +851,8 @@ def _refuse_carrier(data: bytes, what: str) -> None:
 
 
 def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
-                   pin_tables: bool = False) -> bytes:
+                   pin_tables: bool = False,
+                   notes: list[str] | None = None) -> bytes:
     """Install several meshes in one pass, sharing one copy of the tables.
 
     `install_mesh` appends a colour table, a UV table and the vector pool on
@@ -836,7 +864,9 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     multi-mesh replacement costs what its own geometry costs.
 
     Colours are deduplicated across *all* the meshes at once, which is what
-    keeps a many-mesh import inside the 13-bit index.
+    keeps a many-mesh import inside the 13-bit index. `notes` collects the
+    remarks a caller should pass on -- how many faces the 13-bit ceiling forced
+    onto a neighbouring colour, when it forced any.
     """
     if not meshes:
         return dest_data
@@ -863,6 +893,7 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                            at // COLOUR_ENTRY_SIZE)
 
     per_mesh = {}
+    exhausted = 0  # faces that had to settle for the nearest existing triple
     for index, (target, blocks) in prepared.items():
         faces = blocks["faces"]
         uv_base = len(uvs) // UV_ENTRY_SIZE
@@ -874,8 +905,17 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         for f in range(faces):
             triple = bytes(new_colours[f * 12 : f * 12 + 12])
             found = triples.get(triple)
-            if found is None and pin_tables:
+            if found is None and (pin_tables or _table_full(colours)):
+                # A colour index is 13 bits, so the table cannot grow past
+                # MAX_COLOURS however many distinct triples the geometry wants.
+                # Whole-model rebuilds do reach it -- re-striping orders a
+                # triangle's corners anew, so its triple no longer matches the
+                # run the shipped file holds, and `mainmenu/models` asked for
+                # 8370 entries against a ceiling of 8192. Refusing outright
+                # produced no disc at all; the nearest existing triple costs a
+                # shade of colour on the triangles past the ceiling.
                 found = _nearest_triple(colours, triple)
+                exhausted += 1
             elif found is None:
                 found = _append_triple(colours, triple)
                 start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
@@ -895,6 +935,11 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                         *[((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
                           for f in range(faces)]),
         )
+
+    if exhausted and notes is not None and not pin_tables:
+        notes.append(
+            f"the colour table reached the {MAX_COLOURS} entries a 13-bit index "
+            f"can address; {exhausted} faces took the nearest existing colour")
 
     layout = None if pin_tables else _geometry_region(dest_data, dest)
     if layout is not None:
@@ -931,8 +976,11 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         uv_index_new = append(uv_index)
         texture_new = append(blocks["texture"])
         colour_index_new = append(colour_index)
+        end_new = len(out)
+        keep = _attachment_bytes(dest_data, dest.meshes[index])
         placed[index] = (blocks["faces"], geometry_new, strips_new,
-                         uv_index_new, texture_new, colour_index_new, len(out))
+                         uv_index_new, texture_new, colour_index_new, end_new,
+                         append(keep) if keep else 0)
 
     if pin_tables:
         out.extend(b"\x00" * (-len(out) % SECTOR))
@@ -946,13 +994,13 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
 
     for index, (target, blocks) in prepared.items():
-        faces, geo, strips, uvi, tex, ci, end = placed[index]
+        faces, geo, strips, uvi, tex, ci, end, attach = placed[index]
         header = MESH_HEADER_START + MESH_HEADER_SIZE * index
         if header != target.header_offset:
             raise ValueError(
                 f"mesh {index}'s header is not where the layout implies")
         _finish_header(out, header, faces, target.format, target.unk13,
-                       target.unk14, geo, strips, uvi, tex, ci, end)
+                       target.unk14, geo, strips, uvi, tex, ci, end, attach)
     return bytes(out)
 
 
@@ -988,6 +1036,16 @@ def _append_triple(colours: bytearray, triple: bytes) -> int:
     at = len(colours) // entry
     colours += triple
     return at
+
+
+def _table_full(colours: bytearray) -> bool:
+    """Would one more triple push the table past what 13 bits can address?
+
+    Three entries is the worst case, when nothing at the tail can be shared.
+    Checked before appending rather than after, so the caller can fall back to
+    an existing triple instead of building a file whose indices cannot be read.
+    """
+    return len(colours) // COLOUR_ENTRY_SIZE + 3 > MAX_COLOURS
 
 
 def _geometry_region(data: bytes, model) -> tuple[int, int, int, int] | None:
@@ -1057,8 +1115,11 @@ def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
             uvi = append(uv_index)
             tex = append(blocks["texture"])
             ci = append(colour_index)
+            end = len(out)
+            keep = _attachment_bytes(dest_data, mesh)
+            attach = append(keep) if keep else 0
             placed[index] = (blocks["faces"], geometry, strips, uvi, tex, ci,
-                             len(out))
+                             end, attach)
         else:
             low = min(mesh.ptr_bounds, mesh.ptr_strips, mesh.ptr_uv_index,
                       mesh.ptr_texture, mesh.ptr_colour_index)
@@ -1097,10 +1158,10 @@ def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
     for index, mesh in enumerate(dest.meshes):
         header = MESH_HEADER_START + MESH_HEADER_SIZE * index
         if index in placed:
-            faces, geo, strips, uvi, tex, ci, end = placed[index]
+            faces, geo, strips, uvi, tex, ci, end, attach = placed[index]
             target = prepared[index][0]
             _finish_header(out, header, faces, target.format, target.unk13,
-                           target.unk14, geo, strips, uvi, tex, ci, end)
+                           target.unk14, geo, strips, uvi, tex, ci, end, attach)
             continue
         shift = shifted[index]
         for field, was in ((FIELD_BOUNDS, mesh.ptr_bounds),

@@ -272,8 +272,20 @@ def _group_triangles(model, mesh, pack) -> list[_Group]:
                 factor = 2.0
 
         group = groups.setdefault(key, _Group(key))
-        for corner, vertex in enumerate((a, b, c)):
-            group.corners.append(vertex)
+        # Outward, not pool order. The game never reorders a triangle's corners
+        # -- it flips the sign of the NCLIP backface test per vertex flag bit 0
+        # (§11.3) -- so the outward order is the pool's when that bit is clear
+        # and the reverse when it is set, and consecutive triangles in a strip
+        # therefore alternate. Exporting the pool order as it stands hands the
+        # importer a soup whose facing alternates, from which the outward
+        # direction cannot be recovered: rebuilt meshes then scored 2944/6031
+        # against the shipped facing, a coin flip, and `mainmenu/models` mesh 6
+        # -- the menu backdrop -- came back 875/875 inverted and was culled
+        # away entirely. Flipping here, attributes in step as §11.3 requires,
+        # takes that to 6031/6031.
+        order = (0, 1, 2) if not (mesh.vertex_flags[c] & 1) else (0, 2, 1)
+        for corner in order:
+            group.corners.append((a, b, c)[corner])
             group.uvs.append(corner_uvs[corner])
             # Unclamped: a textured corner's multiplier runs to 2.0. Blender
             # and the three.js family use float vertex colours as they are;

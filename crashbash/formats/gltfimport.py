@@ -144,83 +144,6 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
     )
 
 
-def _orient_consistently(positions, colours, uvs, textures):
-    """Give every triangle the same orientation as its neighbours.
-
-    The exporter emits corners in strip-presentation order, which alternates
-    winding triangle by triangle; the strip builder needs the authored,
-    consistent orientation or it finds no directed edges to chain and falls
-    back to one strip per triangle -- a shape the game never ships. Flipping a
-    triangle reverses its corners and its colour and UV rows with them, since
-    those are positional.
-
-    Orientation spreads by flood fill over shared edges; each connected
-    component is then signed so its faces point outward (the corpus
-    convention), measured as the sum of cross products against the component's
-    own centre. Flat components -- sprites -- have no outward and are left as
-    they arrive.
-    """
-    quantised = np.round(positions.reshape(-1, 3)).astype(np.int64)
-    _, welded = np.unique(quantised, axis=0, return_inverse=True)
-    welded = welded.reshape(-1, 3)
-    faces = welded.shape[0]
-
-    by_edge: dict[tuple[int, int], list[int]] = {}
-    for face in range(faces):
-        a, b, c = (int(v) for v in welded[face])
-        for u, v in ((a, b), (b, c), (c, a)):
-            by_edge.setdefault((min(u, v), max(u, v)), []).append(face)
-
-    flip = np.zeros(faces, dtype=bool)
-    seen = np.zeros(faces, dtype=bool)
-    component = np.full(faces, -1, dtype=np.int64)
-    for seed in range(faces):
-        if seen[seed]:
-            continue
-        stack = [seed]
-        seen[seed] = True
-        component[seed] = seed
-        while stack:
-            face = stack.pop()
-            ids = [int(v) for v in welded[face]]
-            if flip[face]:
-                ids = ids[::-1]
-            edges = {(ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])}
-            for u, v in edges:
-                for other in by_edge.get((min(u, v), max(u, v)), ()):
-                    if seen[other]:
-                        continue
-                    other_ids = [int(x) for x in welded[other]]
-                    other_edges = {(other_ids[0], other_ids[1]),
-                                   (other_ids[1], other_ids[2]),
-                                   (other_ids[2], other_ids[0])}
-                    # Consistent neighbours traverse a shared edge in opposite
-                    # directions; seeing it the same way round means a flip.
-                    flip[other] = (u, v) in other_edges
-                    seen[other] = True
-                    component[other] = seed
-                    stack.append(other)
-
-    for face in np.flatnonzero(flip):
-        positions[face] = positions[face, ::-1]
-        colours[face] = colours[face, ::-1]
-        uvs[face] = uvs[face, ::-1]
-
-    for seed in np.unique(component):
-        member = component == seed
-        tri = positions[member]
-        centre = tri.reshape(-1, 3).mean(axis=0)
-        normals = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-        outward = float((normals * (tri.mean(axis=1) - centre)).sum())
-        if abs(outward) < 1e-6:
-            continue
-        if outward < 0:
-            positions[member] = positions[member][:, ::-1]
-            colours[member] = colours[member][:, ::-1]
-            uvs[member] = uvs[member][:, ::-1]
-    return positions, colours, uvs, textures
-
-
 def _material_slots(glb: Glb, pack: TexturePack | None) -> dict:
     """Material index -> pack slot, from the names the exporter wrote."""
     slots: dict = {"sizes": {}}
@@ -461,9 +384,13 @@ def import_glb(
             # Nothing to install: the clips below still rebuild, because they
             # match their poses against the mesh that is already there.
             continue
-        positions, colours, uvs, textures = _orient_consistently(
-            positions, colours, uvs, textures
-        )
+        # The winding arrives authored -- the exporter emits outward corner
+        # order (§11.3) -- so it is taken as it comes. Reorienting it here
+        # instead cost facing: rebuilding `mainmenu/models` against the shipped
+        # facing scores 6031/6031 triangles with the soup left alone and
+        # 5912/6031 with a flood fill imposed on it, and the strip builder does
+        # not care either way (1876 strips against 1879, longest mesh 224 both
+        # ways, against the 348 no shipped mesh exceeds).
         staged[index] = MW.NewMesh(
             positions=np.clip(np.round(positions), -32768, 32767).astype(np.int16),
             colours=colours,
@@ -474,7 +401,8 @@ def import_glb(
     # and the vector pool once each time, and those copies are unreachable
     # afterwards -- 70% of the file on a nine-mesh import (§ mdlwrite).
     if staged:
-        trimmed = MW.install_meshes(trimmed, staged, pin_tables=pin_tables)
+        trimmed = MW.install_meshes(trimmed, staged, pin_tables=pin_tables,
+                                    notes=report.warnings)
     grown = trimmed
     rebuilt_model = read_model(grown)
 

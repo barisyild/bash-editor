@@ -102,6 +102,19 @@ They are not style preferences.
 - **Strip flag bit 3 states the first triangle's winding** (§5.1), and bit 0 of
   the vertex flag alternates from there. A mesh must not contradict its own
   flag byte.
+- **The glTF carries the facing; never re-derive it.** The game flips the sign
+  of the NCLIP backface test per vertex flag bit 0 (§11.3), so an inverted
+  parity culls a triangle rather than drawing it — and nothing on a static
+  render shows it. The exporter therefore emits corners in *outward* order
+  (flipping UVs and colours with them, as §11.3 requires) and the writer seeds
+  every strip unflipped, bit 3 clear. The importer takes the winding as it
+  arrives. It used to reorient each connected component so its faces pointed
+  away from the component's own centre, which cannot survive a surface seen
+  from inside: `mainmenu/models` mesh 6 is a room shell whose faces correctly
+  point inward, all 875 came back inverted, and the menu lost its background.
+  Measured against the shipped facing over the whole corpus: **363,007
+  triangles, 0 flipped**; that same model scored 4856/6031 before.
+  `tools/roundtrip.py` cannot catch this — it sorts each triangle's corners.
 - **`mesh+0x2C` is the collision volume** for a character (§8.4) — a standing
   cylinder read live by gameplay. Zeroing it let the character walk through the
   crates. Carry the replaced mesh's own block through a transplant. A

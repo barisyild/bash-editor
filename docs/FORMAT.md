@@ -4127,6 +4127,22 @@ game handles it by flipping the sign of the `NCLIP` test per vertex flag bit 0 (
 reordering. An exporter that wants consistent winding must flip every other triangle **and**
 swap the matching attributes.
 
+Because that bit signs the backface test, its **absolute** parity is not free: invert it and
+the triangle is culled instead of drawn, and no static render shows the difference. A
+triangle's outward order is therefore its pool order when the bit is clear and the reverse
+when it is set, and that is the only place the outward direction is recorded — a soup exported
+in pool order has lost it, and no rule recovers it (rebuilding `mainmenu/models` from one
+scores 2944/6031 against the shipped facing, a coin flip).
+
+Geometry alone will not recover it either. Signing a connected component so its faces point
+away from its own centre is wrong for any surface seen from **inside**: mesh 6 of
+`mainmenu/models` is the menu's room shell, its faces correctly point inward, and that test
+inverted all 875 of them — the shell was culled and the menu drew no background at all. The
+other 21 meshes of that model are props seen from outside, so only the backdrop broke.
+Carrying the winding through the glTF instead scores **363,007 of 363,007 triangles** over the
+corpus against the shipped facing. A round-trip check that sorts each triangle's corners
+before comparing is blind to all of this.
+
 ## 11.4 Degenerate triangles
 
 A strip stitches to the next run by repeating a vertex position. Such triangles are present in
