@@ -3474,6 +3474,13 @@ drive is ?unknown?. The 0x4000 namespace in `+0x00` and the restarting index in 
 suggestive of clip references, and that is a resemblance, not a decoding. That only two of 400
 models carry them at all is itself unexplained.
 
+They are also **unreachable by pointer**: a scan of every self-relative i32 in both files finds
+**zero** resolving into `gamelogo_text`'s rows from outside them, and `intro_eurocom`'s 23
+apparent hits are all either misaligned targets or the value 4096 — quaternion-one noise from
+scene keys. So whatever reads these rows, if anything does, reaches them positionally — the one
+fixed landmark being that they end exactly at `T(0x44)` in both files. Searched, not found, and
+not evidence of absence.
+
 ## 9.13 `gamelogo_text` ships its mesh block twice
 
 The other leftover, and it is not a structure. `gamelogo_text` holds **7520 bytes at 0xC0 and a
