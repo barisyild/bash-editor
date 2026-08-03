@@ -1010,6 +1010,13 @@ Nothing counts the records. The array runs until the scene nodes start, and what
 the reference field: a real record points at one of the `i32@0x38 + 1` chunk descriptors, so
 a walk stops at the first that does not (73/73).
 
+**And there is a zero word sitting exactly there.** A byte-coverage walk over the archive
+leaves one four-byte hole in each of the 73 models with an object set, every one of them at
+`T(0x1C) + 12 × records` — the first byte past the last record — and every one zero. That is
+the word the walk above fails on, so the array is terminated in the file as well as by the
+test. Measured 73/73 on both counts; no site was found that reads the word itself, which is
+what one would expect of a value whose only job is to fail a check.
+
 The 42 numbered meshes of `warp_room1/level.mdl` are its sky dome, its stars and the CRASH
 BASH sign. The room — floor, stairs, lamp posts, the CRASHBALL and POLAR PANIC boards — is
 77 objects, and their vertices are already in room coordinates, so they need no placement to
@@ -1159,7 +1166,7 @@ The resolve, and the four fields of the sub-object the binder reads:
 | +0x00, +0x04, +0x08 | i32 | 0x2000 in 73/73. Not read on this path. | **confirmed** (constant) / ?unknown? (purpose) |
 | +0x0C | i32 ptr | Target is the **end of the record array** in 73/73 — `records + 160*count` to the byte — and is itself `[i32 count]` then `count` self-relative i32 pointers. See below. | **confirmed** |
 | +0x10 | i32 ptr | A second block: `[i32 count]` then `count` records of 16 bytes. See below. | **confirmed** |
-| +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart, near the file's end. | ?unknown? |
+| +0x14, +0x18 | i32 ptr | Same value in 73/73, so two targets 4 bytes apart. **+0x14's target is the last block in the file**: it runs from there to `T(0x44)` in 73/73, and its first two words are a count and `4 × count` in 73/73. See below. | **confirmed** (extent and header) / ?unknown? (contents, and what reads it) |
 | +0x1C | i32 | **Record count.** Read raw into instance +0x18 and used as the loop bound. | **confirmed** |
 | +0x20 | i32 ptr | **The record array**, 0x14 in 73/73 — it always starts at sub-object +0x34. | **confirmed** |
 | +0x24 | i32 | 0 (40), 0x01000000 (20), 13 distinct values. | ?unknown? |
@@ -1212,6 +1219,25 @@ the piece.
 | +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
 | +0x9C, +0x9E | u16 | Copied to two different runtime slots. | ?unknown? |
+
+### The +0x14 block: the last thing in a level, and nothing found reads it
+
+A byte-coverage walk over the archive is what turned this up. After everything else in a
+model is accounted for, exactly **73 spans** are left in `T(0x18)..T(0x44)` — one per level
+with a sub-object — and each begins at the sub-object's **+0x14 target** and ends at
+**`T(0x44)`**, both in 73/73. It is the last block before the clip table, 82,300 bytes over
+the archive, up to 5144 in `dash_dot`.
+
+Its head is regular. The first word is a count and the second is `4 × count` in **73/73**;
+the count is 0 in 43 models, 5 in 13, 1 in 8, 4 in 7 and 3 in 2. The `+0x18` pointer lands
+inside it in 73/73, four bytes past where `+0x14` does.
+
+**Nothing found reads it, and the binder demonstrably does not.** 0x8001DE18 resolves the
+sub-object's +0x0C, +0x10, +0x1C and +0x20 and passes over +0x14 and +0x18 entirely — that
+much is read off the instruction sequence in §8.5 rather than inferred. Who consumes the
+block is a search that has not succeeded, so **I could not validate that anything uses it,
+and that is not evidence it is unused**: 30 of the 73 models put a non-zero count there, and
+a level would not carry up to 5 KB of it for nothing.
 
 ### The +0x10 block: a count and 16-byte records
 
@@ -3155,9 +3181,22 @@ Stated precisely, with the measurement that bounds each one.
 
 **How much is left, measured.** `tools/coverage.py` marks every byte a structure in this
 document accounts for and prints what nothing claims. Over the 31.8 MB of MDL in the archive
-it reaches **99.72 %**, and the 90 KB it does not is `T(0x18)..T(0x44)`, `T(0x4C)..T(0x18)`
-and one model's head (`cutscene/gamelogo_text.mdl`, 7520 bytes between its mesh headers and
-its strip list, in a file whose two mesh headers point at the same geometry).
+it reaches **99.98 %**, and **398 of the 400 models are accounted for to the byte**. What is
+left is two files:
+
+* `cutscene/gamelogo_text.mdl` — 7780 bytes, in two pieces. The larger is 0xC0..0x1E20,
+  between the mesh headers and the strip list, in a file whose **two mesh headers point at
+  the same geometry block**. That orphaned span opens with the same `01 02 01 02` a strip
+  list opens with, holds 152 `0xFF` terminator bytes, and its halfwords carry the negative
+  high bytes vertex coordinates have — so it reads as a **mesh data block no header names**.
+  Nothing in the file points at it. What put it there, I could not establish; a duplicated
+  mesh whose original block was left behind is the reading that fits.
+* `cutscene/intro_eurocom.mdl` — 160 bytes from `T(0x18)+4` to `T(0x44)`, in a model whose
+  sub-object count is zero, so nothing in the header describes the span at all. It is not
+  zeros: it opens `00 00 08 40` and repeats that word 20 bytes later. Unidentified.
+
+Neither is a claim that those bytes are unused — only that **I could not validate what
+reads them**.
 
 The audit is worth running for what it catches rather than for the number. It found the mesh
 terminator of §3, the padding rule of §2.1 and the hub block of §8.6 — and then it found a

@@ -89,6 +89,11 @@ def cover(data: bytes, model, clips) -> tuple[bytearray, Counter]:
                                      target(data, 0x18))
     claim(objects, objects + mdl.OBJECT_STRIDE * len(model.objects),
           "object records")
+    # The zero word the object walk stops on (§8.3): 73/73, always right here.
+    if model.objects:
+        claim(objects + mdl.OBJECT_STRIDE * len(model.objects),
+              objects + mdl.OBJECT_STRIDE * len(model.objects) + 4,
+              "object record terminator")
     claim(roots_at, roots_at + 4 * i32(data, 0x48), "scene root array")
     claim(subobjects, subobjects + 4 + 4 * i32(data, 0x14), "sub-object array")
 
@@ -116,6 +121,10 @@ def cover(data: bytes, model, clips) -> tuple[bytearray, Counter]:
             claim(block + 4, block + 4 + 16 * records, "the +0x10 block records")
         claim(block, sub + 0x14 + i32(data, sub + 0x14),
               "the +0x10 block payloads")
+        # The +0x14 block (§8.5): the last thing before the clip table, its
+        # extent measured at 73/73 and its purpose not established.
+        claim(sub + 0x14 + i32(data, sub + 0x14), target(data, 0x44),
+              "the +0x14 block")
 
     # The object graph, walked the way the spawner walks it (§9.11): a root
     # names its children and a node runs to wherever the next one starts. That
