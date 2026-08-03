@@ -224,11 +224,25 @@ class MeshPanel(QWidget):
 
     visibility_changed = Signal(int, bool)
     all_visibility_changed = Signal(bool)
+    hide_unplaced_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.list = QListWidget()
         self.list.itemChanged.connect(self._on_item_changed)
+
+        # On by default: a level's unreachable meshes are drawn here only
+        # because `draw_list` stands one at the origin rather than dropping it,
+        # and showing them makes a room look like something the game never puts
+        # on screen.
+        self.hide_unplaced = QCheckBox("Hide meshes no placement reaches")
+        self.hide_unplaced.setChecked(True)
+        self.hide_unplaced.setToolTip(
+            "A level draws what its placement list names. Meshes nothing names "
+            "are never on screen, however correct they are on disc — untick to "
+            "look at them."
+        )
+        self.hide_unplaced.toggled.connect(self.hide_unplaced_changed.emit)
 
         self.show_all = QPushButton("Show all")
         self.hide_all = QPushButton("Hide all")
@@ -246,6 +260,7 @@ class MeshPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.addWidget(QLabel("Meshes"))
         layout.addWidget(self.list, 1)
+        layout.addWidget(self.hide_unplaced)
         layout.addLayout(buttons)
         layout.addWidget(QLabel("Parse report"))
         layout.addWidget(self.report)
@@ -272,6 +287,7 @@ class MeshPanel(QWidget):
 
         matched = 0
         drawn = model.drawn_meshes
+        unplaced = model.unplaced_meshes()
         for mesh in drawn:
             flag = "✓" if mesh.faces_match_header else "!"
             item = QListWidgetItem(
@@ -279,6 +295,7 @@ class MeshPanel(QWidget):
                 f"{mesh.face_count} tris, {len(mesh.strips)} strips"
                 + (f", {len(mesh.volumes)} volume"
                    + ("s" if len(mesh.volumes) != 1 else "") if mesh.volumes else "")
+                + (" — no placement reaches it" if mesh.index in unplaced else "")
             )
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)

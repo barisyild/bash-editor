@@ -381,6 +381,9 @@ class ModelView(QOpenGLWidget):
         # The gameplay volumes of mesh+0x2C, drawn as the cylinders they are for
         # a character. Off by default: 812 of the archive's 7961 meshes have one.
         self.show_volumes = False
+        # A level's unreachable meshes are hidden until asked for. See
+        # `set_hide_unplaced`.
+        self.hide_unplaced = True
         # (mesh index, first vertex, vertex count) per volume, so a hidden mesh
         # takes its cylinder with it without a rebuild.
         self._volume_spans: list[tuple[int, int, int]] = []
@@ -807,6 +810,26 @@ class ModelView(QOpenGLWidget):
 
         return colours, uvs
 
+    def set_hide_unplaced(self, enabled: bool) -> None:
+        """Hide the meshes a level carries that no placement reaches.
+
+        On by default, because that is what the game shows: they are drawn here
+        only because `draw_list` stands an unreachable mesh at the origin rather
+        than dropping it. Turning it off is how you look at them -- and how you
+        find out that the room you were about to edit is not the room the game
+        draws.
+        """
+        if enabled == self.hide_unplaced:
+            return
+        self.hide_unplaced = enabled
+        self._rebuild()
+        self.update()
+
+    def _unplaced(self) -> set[int]:
+        if not self.hide_unplaced or self._model is None:
+            return set()
+        return self._model.unplaced_meshes()
+
     def _rebuild(self) -> None:
         self._draws = []
         self._pose_pending = []
@@ -892,6 +915,7 @@ class ModelView(QOpenGLWidget):
 
         tri_cursor = 0
         line_cursor = tri_data.shape[0]
+        unplaced = self._unplaced()
         for mesh_index, tri_count, line_count, idx, opaque_count, spans in pending:
             self._draws.append(
                 MeshDraw(
@@ -900,7 +924,8 @@ class ModelView(QOpenGLWidget):
                     tri_count,
                     line_cursor,
                     line_count,
-                    visible=mesh_index not in self._hidden,
+                    visible=(mesh_index not in self._hidden
+                             and mesh_index not in unplaced),
                     indices=idx,
                     opaque_count=opaque_count,
                     blend_spans=spans,

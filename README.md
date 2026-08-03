@@ -179,6 +179,16 @@ What identifies the frames beyond argument: each is exactly as long as the textu
 pixel data, in all 136 flipbooks — and frame 0 is byte-identical to that data. The texture
 as stored *is* the first frame of its own animation.
 
+### Meshes the game never draws
+
+A level draws what its placement list names, not everything the file holds. `warp_room1`
+has 81 placements and not one of them names any of its 42 numbered meshes — the room you
+walk through is object-pool meshes, and geometry written into a numbered one is correct on
+disc and never appears on screen. **Hide meshes no placement reaches**, under the mesh
+list, is on by default so the viewport shows what the game shows; untick it to look at the
+rest. The mesh list marks them either way. A model with no placement list at all — the
+menu, which draws its meshes from code — is left alone.
+
 ### Animation
 
 A model's clips are listed under the mesh list, with a play button and a frame slider.

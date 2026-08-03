@@ -83,6 +83,19 @@ They are not style preferences.
   resolve that a byte-identical copy would satisfy, and a disc-wide sweep of all
   385 loads at that offset accounts for every one. Searched and not found is not
   the same as absent.
+- **An object-pool mesh's blocks may not leave the pool.** The pool is one
+  packed run: the next object mesh's header sits exactly four bytes past the
+  previous mesh's `ptr_end` in **1802 of 1898** consecutive pairs. Rebuilding
+  one the way a numbered mesh is rebuilt — blocks appended past the file's end,
+  header repointed — leaves a hole in that run, and `warp_room1` built that way
+  **boots to a black screen**, where the same graft on a numbered mesh boots and
+  draws. `_write_in_place` puts the blocks back inside the span the mesh already
+  owns and keeps its shipped `ptr_end` whatever the rebuild costs, so the run is
+  undisturbed; when the rebuild does not fit, it refuses rather than build that
+  disc. Fitting is not a given — this writer's striping is looser than the
+  authoring tool's, so even a reshape with the same triangle count can want more
+  room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
+  owned).
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an

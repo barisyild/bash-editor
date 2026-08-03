@@ -409,6 +409,24 @@ class Model:
         ]
         return out
 
+    def unplaced_meshes(self) -> set[int]:
+        """Meshes a level carries that no placement reaches, by index.
+
+        `draw_list` stands these at the origin because nothing traced so far
+        says what draws them, and for a level the honest reading is that the
+        game does not: `warp_room1` has 81 placements and not one of them names
+        any of its 42 numbered meshes, so geometry written into those is
+        correct on disc and never appears. The set is empty for a model with no
+        placement list at all -- the menu draws its meshes from code, and
+        nothing here would say so.
+        """
+        if not self.instances:
+            return set()
+        placed = {id(i.mesh) for i in self.instances
+                  if i.mesh is not None and i.is_drawn}
+        return {mesh.index for mesh in self.drawn_meshes
+                if id(mesh) not in placed}
+
     def face_colours(
         self, mesh: Mesh, face: int
     ) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]] | None:

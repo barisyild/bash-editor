@@ -41,7 +41,27 @@ from .mdl import Model, read_model
 from .tex import TexturePack, read_pack
 
 MESH_NAME = re.compile(r"_mesh(\d+)$")
+# The exporter names an object-pool mesh after the id the game reaches it by,
+# because it has no slot in the numbered array. It still has a mesh index, and
+# in a level it is the only kind of mesh that is drawn.
+OBJECT_NAME = re.compile(r"_object([0-9A-Fa-f]{4})$")
 MATERIAL_SLOT = re.compile(r"^tex_(\d+)_")
+
+
+def _mesh_index_for(name: str, model: Model) -> int | None:
+    """The model mesh a glTF mesh's name stands for, plain or object-pool."""
+    match = MESH_NAME.search(name)
+    if match:
+        index = int(match.group(1))
+        return index if 0 <= index < len(model.meshes) else None
+    match = OBJECT_NAME.search(name)
+    if not match:
+        return None
+    wanted = int(match.group(1), 16)
+    for obj in model.objects:
+        if obj.id == wanted and obj.mesh is not None:
+            return obj.mesh.index
+    return None
 
 # How far a keyframe vertex may sit from its rest match, in model units. The
 # pool is built from the same corner data the targets index, so anything beyond
@@ -134,15 +154,15 @@ def _reference_bags(model_data: bytes, model, pack, slot_of, warnings):
         return {}
     bags = {}
     for mesh_json in reference.json.get("meshes", []):
-        match = MESH_NAME.search(mesh_json.get("name", ""))
-        if not match:
+        index = _mesh_index_for(mesh_json.get("name", ""), model)
+        if index is None:
             continue
         try:
             positions, colours, uvs, textures, _ = _mesh_payload(
                 reference, mesh_json, own_slots, None)
         except Exception:
             continue
-        bags[int(match.group(1))] = _payload_bag(positions, colours, uvs, textures)
+        bags[index] = _payload_bag(positions, colours, uvs, textures)
     return bags
 
 
@@ -421,9 +441,9 @@ def import_glb(
     # --- which glTF mesh replaces which model mesh ---------------------
     incoming: dict[int, dict] = {}
     for mesh in glb.json.get("meshes", []):
-        match = MESH_NAME.search(mesh.get("name", ""))
-        if match and 0 <= int(match.group(1)) < len(model.meshes):
-            incoming[int(match.group(1))] = mesh
+        index = _mesh_index_for(mesh.get("name", ""), model)
+        if index is not None:
+            incoming[index] = mesh
     if not incoming:
         # A scene patch is already done and valid at this point, and five
         # arenas reach here every time: they have no numbered meshes at all,

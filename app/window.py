@@ -114,6 +114,8 @@ class MainWindow(QMainWindow):
         self.mesh_panel = MeshPanel()
         self.mesh_panel.visibility_changed.connect(self.view3d.set_mesh_visible)
         self.mesh_panel.all_visibility_changed.connect(self._set_all_meshes)
+        self.mesh_panel.hide_unplaced_changed.connect(
+            self.view3d.set_hide_unplaced)
 
         self.anim_panel = AnimationPanel()
         self.anim_panel.animation_changed.connect(self._set_animation)

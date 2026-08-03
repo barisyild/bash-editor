@@ -104,6 +104,70 @@ class Transplant:
     attachment: bytes | None = None
 
 
+def _pool_span(target: Mesh) -> tuple[int, int]:
+    """Where an object-pool mesh's blocks begin, and how many bytes it owns."""
+    low = min(target.ptr_bounds, target.ptr_strips, target.ptr_uv_index,
+              target.ptr_texture, target.ptr_colour_index)
+    return low, target.ptr_end - low
+
+
+def _write_in_place(out: bytearray, dest_data: bytes, target: Mesh, blocks: dict,
+                    colour_index: bytes, uv_index: bytes, index: int):
+    """Lay an object-pool mesh's blocks back inside the span it already owns.
+
+    The pool is one packed run: over the corpus the next object mesh's header
+    sits exactly four bytes past the previous mesh's `ptr_end` in **1802 of
+    1898** consecutive pairs. Rebuilding one of them the way a numbered mesh is
+    rebuilt -- blocks appended past the end of the file and the header repointed
+    at them -- leaves that run with a hole and a `ptr_end` pointing off the end
+    of everything. `warp_room1` built that way boots to a black screen, while
+    the same graft applied to a numbered mesh boots and draws.
+
+    So the blocks go back where they were. `ptr_end` keeps its shipped value
+    even when the rebuild is smaller, because it is what the next header is
+    measured from; the leftover stays as slack inside this mesh's own span.
+    """
+    low, span = _pool_span(target)
+    order = [blocks["strips"], blocks["geometry"], uv_index,
+             blocks["texture"], colour_index]
+    needed = sum(len(b) + (-len(b) % 4) for b in order)
+    if needed > span:
+        raise ValueError(
+            f"mesh {index} is an object-pool mesh and the pool is a packed run "
+            f"(the next header is four bytes past the previous mesh's end in "
+            f"1802 of 1898 pairs), so its blocks cannot be moved elsewhere -- a "
+            f"disc built that way boots to a black screen. The rebuild needs "
+            f"{needed} bytes and the mesh owns {span}."
+        )
+
+    cursor = low
+    offsets = []
+    for block in order:
+        out[cursor:cursor + len(block)] = block
+        offsets.append(cursor)
+        cursor += len(block) + (-len(block) % 4)
+    strips_at, geometry_at, uv_at, texture_at, colour_at = offsets
+    return (blocks["faces"], geometry_at, strips_at, uv_at, texture_at,
+            colour_at, target.ptr_end, target.ptr_attachment)
+
+
+def mesh_index(model: Model) -> dict[int, Mesh]:
+    """Every mesh the model holds, by index, the object pool included.
+
+    `model.meshes` is only the plain meshes -- the ones whose headers run from
+    0x58. An object-pool mesh is reached through an object record instead, its
+    header sits past the boundary, and the reader numbers it from where the
+    plain ones stop. In a level those are the meshes that are drawn: nothing
+    names `warp_room1`'s 42 plain meshes, while all 81 of its placements name
+    pool meshes.
+    """
+    out = {mesh.index: mesh for mesh in model.meshes}
+    for obj in model.objects:
+        if obj.mesh is not None:
+            out.setdefault(obj.mesh.index, obj.mesh)
+    return out
+
+
 def _table_bounds(data: bytes, model: Model) -> tuple[int, int, int]:
     """Where the colour table starts, where the UV table starts, and its length.
 
@@ -871,13 +935,15 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     if not meshes:
         return dest_data
     dest = read_model(dest_data)
+    targets = mesh_index(dest)
     for index in meshes:
-        if not 0 <= index < len(dest.meshes):
+        if index not in targets:
             raise ValueError(f"the model has no mesh {index}")
 
     prepared = {}
+    plain = {mesh.index for mesh in dest.meshes}
     for index, mesh in sorted(meshes.items()):
-        target = dest.meshes[index]
+        target = targets[index]
         if not mesh.swatch:
             mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
         mesh = _restore_swatches(target, mesh)
@@ -995,13 +1061,21 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     placed = {}
     for index, (target, blocks) in prepared.items():
         colour_index, uv_index = per_mesh[index]
+        if index not in plain:
+            # An object-pool mesh is written back where it stands: the pool is
+            # one packed run and its blocks may not leave it. `ptr_end` keeps
+            # its old value however small the rebuild turns out, so the next
+            # mesh's header stays four bytes past it and the run is undisturbed.
+            placed[index] = _write_in_place(out, dest_data, target, blocks,
+                                            colour_index, uv_index, index)
+            continue
         strips_new = append(blocks["strips"])
         geometry_new = append(blocks["geometry"])
         uv_index_new = append(uv_index)
         texture_new = append(blocks["texture"])
         colour_index_new = append(colour_index)
         end_new = len(out)
-        keep = _attachment_bytes(dest_data, dest.meshes[index])
+        keep = _attachment_bytes(dest_data, target)
         placed[index] = (blocks["faces"], geometry_new, strips_new,
                          uv_index_new, texture_new, colour_index_new, end_new,
                          append(keep) if keep else 0)
@@ -1019,12 +1093,14 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
 
     for index, (target, blocks) in prepared.items():
         faces, geo, strips, uvi, tex, ci, end, attach = placed[index]
-        header = MESH_HEADER_START + MESH_HEADER_SIZE * index
-        if header != target.header_offset:
-            raise ValueError(
-                f"mesh {index}'s header is not where the layout implies")
-        _finish_header(out, header, faces, target.format, target.unk13,
-                       target.unk14, geo, strips, uvi, tex, ci, end, attach)
+        # The mesh's own header offset, not the position the plain-mesh layout
+        # implies: an object-pool mesh's header sits past the boundary with the
+        # rest of the pool (`warp_room1`'s first is at 0x111F8), and in a level
+        # those are the only meshes the game draws -- nothing names the 42 in
+        # `model.meshes`, so geometry written into them is never asked for.
+        _finish_header(out, target.header_offset, faces, target.format,
+                       target.unk13, target.unk14, geo, strips, uvi, tex, ci,
+                       end, attach)
     return bytes(out)
 
 

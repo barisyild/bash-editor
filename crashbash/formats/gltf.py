@@ -369,9 +369,10 @@ def export_glb(
 
     # A level's set is object meshes, not numbered ones, and leaving them out
     # exports a warp room as an empty sky. They are named after the id the game
-    # reaches them by, which also keeps them clear of the `_meshNN` the importer
-    # matches on: an object has no slot in the numbered array to be written back
-    # into, so an edited one must not look importable.
+    # reaches them by, since they have no slot in the numbered array -- and the
+    # importer reads that id back, because in a level these are the meshes that
+    # are actually drawn: nothing names `warp_room1`'s 42 numbered meshes, while
+    # all 81 of its placements name pool ones.
     mesh_names = {mesh.index: f"{name}_mesh{mesh.index:02d}" for mesh in model.meshes}
     mesh_names.update({
         obj.mesh.index: f"{name}_object{obj.id:04X}"
