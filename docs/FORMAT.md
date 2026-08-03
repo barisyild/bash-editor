@@ -4307,8 +4307,12 @@ are not only undocumented format; they are also where a reader is quietly skippi
   key populations exactly. Per field: `+0x00/+0x04/+0x08` a room-scale position triple (y
   mostly negative, cameras above a y-down floor), `+0x0C` the end tick equalling the header's
   `+0x04` bound in the short class, `+0x10` and `+0x18` zero in 49/49, `+0x14` exactly `0x2000`
-  or 0. What remains of this item: key 99's single entry, key 3's consumer, and what
-  distinguishes the two classes in behaviour — the *machinery* is traced end to end.
+  or 0. And the class difference is not open — it is the **`0x2000` skip flag whose test is already
+  read** in `0x8001E41C` (`andi 8192` → record skipped): the short class's single segment is
+  skipped by the walker, leaving no active segment — a **static preview shot** holding the
+  initialiser's view — while the long class's segment is live and the camera pans its position
+  over the track's ticks. What remains of this item: key 99's single entry and key 3's
+  consumer — the *machinery* is traced end to end.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
