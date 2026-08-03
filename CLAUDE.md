@@ -110,12 +110,16 @@ They are not style preferences.
   one byte — draws the room with its last object gone, and repointing the array
   at a copy inside the resident region draws exactly the records that copy
   holds. Rewriting a record in place is the whole of what a level edit can do
-  today: translation, rotation and the object id are all just bytes. Growing the
-  list is what is blocked, and not by the list — the array is boxed in by four
-  more arrays that start where it ends, the resident region holds no run of
-  zeros big enough to relocate 81 records into (largest 1325 bytes against
-  12,960 needed), and past the old EOF nothing is loaded. Five objects are
-  placed twice in that room, so a redundant record is the room's only spare
+  today: translation, rotation and the object id are all just bytes, and
+  rewriting one **adds an object to the set** — spending the second of
+  `warp_room1`'s two `0x5047` records on the green panel put a second panel in
+  the room, between the POLAR PANIC and POGO PAINTER doors, with the first still
+  at its own. Eleven bytes, nothing moved, the file the same size.
+  Growing the list is what is blocked, and not by the list — the array is boxed
+  in by four more arrays that start where it ends, the resident region holds no
+  run of zeros big enough to relocate 81 records into (largest 1325 bytes
+  against 12,960 needed), and past the old EOF nothing is loaded. Five objects
+  are placed twice in that room, so a redundant record is the room's only spare
   capacity.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
