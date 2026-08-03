@@ -1154,6 +1154,38 @@ The `bnez` guard is exactly the 5213-zero / 777-non-zero split measured in the c
 **confirmed** that the field is a live self-relative pointer; the record contents are
 decoded below for playable characters and remain ?unknown? for the rest of the family.
 
+### What 0x3000 is: a texture, and the dispatcher returns NULL because it is not in the model
+
+The dispatcher has no handler for 0x3000 above, and that reads as a gap until you find what
+*makes* one. 0x800158E4 does — given an object and an id in either mesh namespace, it produces
+a 0x3000 id:
+
+```
+800158EC  lw    $a2, 0xc($a0)     ; a0 = the object; +0x0C -> its model
+800158F8  beq   0x2000 -> 0x80015918   ; a1 = model + 0x34*(id & 0xFFF) + 0x24
+80015908  jal   0x800159c4        ; 0x5000 -> the object table, same answer
+80015940  beqz  $a1, -1           ;   no mesh -> -1
+80015948  lw    $v0, 0x1c($a1)    ; mesh+0x1C
+80015950  addu  $v0, $v0, $a1     ;   biased to the mesh, so +0x1C below lands on T(0x1C)
+80015954  lhu   $v1, 0x1c($v0)    ; the FIRST entry of the texture run list (§6.2)
+8001595C  andi  $v0, $v1, 0x8000
+80015960  bnez  $v0, -1           ;   the swatch bit -> -1
+80015964  andi  $v0, $v1, 0x1ff   ; else the texture index
+8001596C  ori   $v0, $v0, 0x3000  ;   tagged 0x3000
+```
+
+Every step matches §6.2: bits 0–8 are the texture index, bit 15 marks a swatch entry whose low
+bits are a *palette* index instead — which is exactly why that case returns −1 rather than a
+texture. So **0x3000 names a texture in the sibling TEX pack**, and the dispatcher returns NULL
+for it not because the namespace is unused but because the thing it names is not inside the
+model file the dispatcher is walking.
+
+The routine reads only the run list's first entry, so what it answers is "the texture this mesh
+starts with", not "the textures this mesh uses". A mesh whose runs span several textures has
+the rest of them invisible to it. Over the corpus all **5990** meshes carry a run list, and the
+first entry has the swatch bit set in **1284** of them — so this routine answers −1 for a fifth
+of the meshes in the game and a texture id for the other 4706.
+
 **The records are gameplay volumes — for a character, its collision body.** Decoded as
 8 × i16, every crate-minigame character carries exactly one record of the shape
 
