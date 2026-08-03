@@ -641,8 +641,13 @@ kind-3 preview placement is registered, so the index may travel with the instanc
 the door struct. The prologue loads `$s4` with `0x800BBBA4`, but that address is the middle of
 a screen-bounds tracker, not a function head, and the register may be reassigned across the
 dispatch before the store — so what the write actually carries is **unverified**, and the +84
-field's readers number 65 in `warp.bin` and 67 in `gameeng.bin`: a haystack for cross-reference
-tooling, not for hand reading. The prologue did yield one solid cross-check on the way: it
+field's readers number 65 in `warp.bin` and 67 in `gameeng.bin`. An automated triage of all
+132 followed by a read of its one `jalr` site settled what the field *is*: **the entity's
+owner/context pointer**, standard plumbing — the spawner at `0x800B7E40` writes a viewport
+link through `[entity+84]+108` and calls the entity's init callback from `[entity+72]`, a
+vtable slot. That is why it has 132 readers, and it means the classifier's store is the
+preview instance's context assignment, not a bespoke index hand-off. The locator sits behind
+this generic layer, which is exactly where static hand-reading stops paying. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
 101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
