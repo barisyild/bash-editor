@@ -427,7 +427,10 @@ probe proves exists, is not in the init path.
 
 The per-frame packet path is read now too, and it is also innocent. The known `0x20` site at
 `0x80017B88` traces back to `lw $v1, ($at 0x80056998); lw $v1, 0x0C($v1)` — the **current-owner
-global**, dereferenced to the live model base, with `T(0x20)` resolved fresh per packet. A mesh
+global**, dereferenced to the live model base, with `T(0x20)` resolved fresh per packet. The
+previously unchecked `0x80017964/994` pair is the same story from another packet-filler:
+`[0x80056998] → [owner+0x0C] → T(0x20)` live, colour triples written straight into the packet.
+Every inspected member of the ten-site `0x20` list resolves live. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
 The level's own draw chain is mapped one link further. `warp.bin` references the owner global at
