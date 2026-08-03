@@ -1237,7 +1237,8 @@ the piece.
 | +0x48 | MATRIX | A second one, byte-identical to the first in 541/2689. Not read by the loader. | **confirmed** (shape) / ?unknown? (use) |
 | +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
-| +0x9C, +0x9E | u16 | Copied to two different runtime slots. | ?unknown? |
+| +0x9C | u16 | Copied to runtime +0x68. 42 distinct values — 0 (789), 256 (419), 512 (215), 51 (144), 384 (127), 128 (104). No reader found for the runtime slot. | ?unknown? |
+| +0x9E | u16 | **Traced end to end, and never exercised.** Copied to runtime +0x8A; 0x80019A9C reads it back and writes it to the global at 0x80056AC4, gated on flag bit 30; 0x800190E4 is that global's only reader and tests it for non-zero as one condition among several on a draw path. The data never takes the path: the field is **0 in 2689/2689** records and **bit 30 is clear in 2689/2689**. | **confirmed** (where it goes and what tests it) / ?unknown? (what it would mean) |
 
 ### The +0x14 block: the last thing in a level, and nothing found reads it
 
@@ -3358,7 +3359,12 @@ are not only undocumented format; they are also where a reader is quietly skippi
   I could not validate what draws them, and that is not evidence nothing does.
 * **The unread bytes of a placement record.** The loader at 0x8001E0A8 consumes +0x00,
   +0x04..+0x0C, +0x28..+0x47, +0x74..+0x77, +0x88, +0x9C and +0x9E; the rest of the 160 is
-  copied by nothing. That includes the second MATRIX at +0x48 — identical to the first in
+  copied by nothing. One of those is now followed the whole way: **+0x9E** reaches the global
+  at 0x80056AC4 through runtime +0x8A, and 0x800190E4 tests that global for non-zero on a
+  draw path — but the field is 0 in 2689/2689 records and the flag bit that would carry it is
+  clear in 2689/2689, so no shipped asset ever takes the path. Knowing where a field goes and
+  finding the data never sends it there is a different result from not knowing, and it is
+  recorded as one. That includes the second MATRIX at +0x48 — identical to the first in
   541 of 2689 records and therefore not simply a duplicate — and the scale triple at +0x18,
   which is 4096, 4096, 4096 in every record measured.
 * ~~**0x28 vector pool framing**~~ and ~~**0x44 record +0x08 / +0x0C**~~ — **closed**, see §9.
