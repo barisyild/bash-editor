@@ -231,6 +231,53 @@ class NewMesh:
     swatch: int = 0
 
 
+def _run_entry(mesh: "NewMesh", value: int) -> int:
+    """One texture-run entry: a slot, a recovered swatch, or the mesh default."""
+    if value >= 0:
+        return value & TEXTURE_INDEX_MASK
+    if value < -1:
+        return -value          # a verbatim entry `_restore_swatches` recovered
+    return mesh.swatch
+
+
+def _restore_swatches(target: Mesh, mesh: "NewMesh") -> "NewMesh":
+    """Give each untextured incoming face the swatch entry its triangle had.
+
+    A swatch face carries `0x8000 | palette`, and a mesh may name several
+    palettes -- `mainmenu/models`'s menu heads use 113 through 117 at once,
+    which is how one mesh paints itself in several colour schemes from a single
+    16x16 image (§6.2). The exporter folds the swatch texel into the vertex
+    colour and the face comes back untextured, so without this every one of them
+    collapses onto the mesh's first palette and the heads change colour.
+
+    Faces are matched by their corner positions, which is exact wherever the
+    triangle still exists; anything reshaped or new keeps the mesh-wide default.
+    """
+    if mesh.textures is None or not len(target.face_texture):
+        return mesh
+    if not target.positions:
+        return mesh
+    scale = 1.0 / 0.00390625  # 1 / GTE_SCALE_SMALL, back to raw int16
+    original = np.round(np.asarray(target.positions, dtype=np.float64) * scale)
+    by_key: dict[tuple, int] = {}
+    for face, triangle in enumerate(target.triangles()):
+        if face >= len(target.face_texture) or max(triangle) >= len(original):
+            continue
+        key = tuple(sorted(tuple(int(v) for v in original[i]) for i in triangle))
+        by_key.setdefault(key, int(target.face_texture[face]))
+
+    textures = np.array(mesh.textures, dtype=np.int64, copy=True)
+    for face in range(len(textures)):
+        if textures[face] >= 0:
+            continue
+        key = tuple(sorted(tuple(int(v) for v in corner)
+                           for corner in mesh.positions[face]))
+        was = by_key.get(key)
+        if was is not None and was & TEXTURE_FLAG_SWATCH:
+            textures[face] = -(was & 0xFFFF)   # negative marks "verbatim entry"
+    return replace(mesh, textures=textures)
+
+
 def _swatch_entry(data: bytes, mesh: Mesh) -> int:
     """The `0x8000 | palette` a mesh's own texture list names, or 0.
 
@@ -377,7 +424,14 @@ def build_blocks(mesh: NewMesh) -> dict:
 
     if textured:
         texture = _pack_runs(
-            [int(mesh.textures[face]) & TEXTURE_INDEX_MASK for face, _ in plan]
+            # A face with no slot is not slot 511: it is a swatch face, and a
+            # mesh that mixes real textures with swatch ones is the common case
+            # -- 670 of the archive's 897 untextured-flagged meshes mix them.
+            # Writing `-1 & 0x1FF` sent those triangles at a slot that does not
+            # exist and they vanished from the menu, background included.
+            # `_restore_swatches` marks a recovered entry by storing it negated,
+            # so -1 alone still means "no match, use the mesh default".
+            [_run_entry(mesh, int(mesh.textures[face])) for face, _ in plan]
         )
         uvs = bytes(
             np.stack([mesh.uvs[face, list(corners)] for face, corners in plan])
@@ -557,8 +611,9 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
     if not 0 <= dest_index < len(dest.meshes):
         raise ValueError(f"the model has no mesh {dest_index}")
     target = dest.meshes[dest_index]
-    if mesh.textures is None and not mesh.swatch:
+    if not mesh.swatch:
         mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
+    mesh = _restore_swatches(target, mesh)
     blocks = build_blocks(mesh)
     faces = blocks["faces"]
 
@@ -793,8 +848,9 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     prepared = {}
     for index, mesh in sorted(meshes.items()):
         target = dest.meshes[index]
-        if mesh.textures is None and not mesh.swatch:
+        if not mesh.swatch:
             mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
+        mesh = _restore_swatches(target, mesh)
         prepared[index] = (target, build_blocks(mesh))
 
     dest_colour, dest_uv, dest_uv_len = _table_bounds(dest_data, dest)

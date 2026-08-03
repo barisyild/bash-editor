@@ -43,8 +43,14 @@ MATERIAL_SLOT = re.compile(r"^tex_(\d+)_")
 
 # How far a keyframe vertex may sit from its rest match, in model units. The
 # pool is built from the same corner data the targets index, so anything beyond
-# rounding means the file does not belong to this mesh.
-MATCH_TOLERANCE = 0.51
+# rounding means the file does not belong to this mesh -- but the rounding is
+# per axis and the test is a distance, so a vertex quantised half a unit on each
+# of three axes is √3/2 = 0.87 away while still being the right vertex. 0.51
+# rejected it: reshaping a mesh in Blender and reimporting failed with "a pool
+# vertex sits 0.65 units from the nearest glTF vertex" on geometry that was
+# perfectly matched. One unit is the smallest bound that admits pure
+# quantisation and still rejects a mesh that is genuinely a different shape.
+MATCH_TOLERANCE = 1.0
 
 
 @dataclass
