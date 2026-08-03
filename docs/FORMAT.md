@@ -326,6 +326,45 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 > known to read `0x50` (see its row below), so this is not evidence that the loader stops there.
 > It says only that no shipped model puts geometry past either point, and that a build which
 > does can fail to load.
+
+### Seven models have no room to grow at all
+
+In **7 of the 400** — the five warp rooms and the two demo hubs — `i32@0x50` and `T(0x44)` are
+the *same address*, and everything from there to the end of the file is §8.6's block. There is
+no slack between the geometry and the clip table, so a writer that needs one more byte has only
+two places to put it, and **both were measured on hardware and both crash**: push the §8.6 block
+along, or land past `i32@0x50`.
+
+| Model | `i32@0x50` = `T(0x44)` | §8.6 block to EOF |
+| --- | --- | --- |
+| `demo_hub1` | 86,016 | 12,932 |
+| `demo_hub2` | 81,920 | 12,932 |
+| `warp_room1` | 167,936 | 28,600 |
+| `warp_room2` | 147,456 | 31,564 |
+| `warp_room3` | 180,224 | 54,144 |
+| `warp_room4` | 165,888 | 67,324 |
+| `warp_room5` | 165,888 | 35,260 |
+
+The finding came from a ladder of probes on `warp_room1`, each changing one thing more than the
+last and each run in the emulator. It is worth keeping because it rules out most of what a
+writer touches:
+
+| Probe | What it changed | Result |
+| --- | --- | --- |
+| scene only | 224 bytes of placement fields, no size change | **loads** |
+| grow | 2048 zero bytes appended, not one pointer touched | **loads** |
+| boundary | `0x08` alone, moved 16 bytes, one byte of the file | **loads** |
+| tables | colour/UV/pool relocated, `0x44`/`0x50` moved with them | crashes |
+| tables appended | the same, but §8.6's block left exactly where it was | crashes |
+| self-transplant | mesh 1 rebuilt from its own bytes, strips and pool identical | crashes |
+| one mesh | mesh 1 rebuilt from glTF | crashes |
+
+So the geometry is not at fault (the self-transplant's strip list and vertex pool were
+byte-identical), the mesh headers are not (the table probes never touched them), the file may
+grow, and `0x08` may move. Nothing in the file points at the shared tables except the header's
+own `0x20`/`0x24`/`0x28` — a scan of every self-relative i32 in `warp_room1` finds exactly one
+pointer to each. What is left is that in these seven there is nowhere for the relocated tables
+to go. **A writer must edit them in place, within the bytes they already occupy.**
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
