@@ -582,6 +582,7 @@ def _scene_extras(scene, model) -> dict:
                     for p in scene.props]
     out["cameras"] = [{"node": c.node, "start": c.start, "end": c.end,
                        "screen_distance": float(c.screen_distance),
+                       "shift": c.shift, "parented": bool(c.parented),
                        "keys": [{"at": c.node + scene_module.CAMERA_KEYS
                                  + scene_module.CAMERA_STRIDE * i,
                                  "tick": int(k.tick), "duration": int(k.duration),

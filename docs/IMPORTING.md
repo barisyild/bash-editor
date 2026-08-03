@@ -188,3 +188,33 @@ textures affinely, so near-coplanar surfaces and animated low-poly faces
 flicker in every era-authentic title. Spyro's eyes are painted into the head
 triangles (measured: no overlay quads exist in the source), so what remains
 there is ordinary PS1 behaviour.
+
+## The shot on the way back
+
+The exporter writes the byte offset of every scene record it emits (§9.11), and
+`formats/scenewrite.py` is the other half: it writes each field back exactly
+where it was read from. Nothing is resized, so no count, size or offset moves,
+and the region whose record kinds are still unread (FORMAT §8.3) is never
+rebuilt — only read past. That is why this works without a decoded object graph.
+
+**Order matters.** The patch runs on the file as exported, *before*
+`install_mesh` moves the layout boundary (FORMAT §2.1). The offsets in `extras`
+were recorded against those bytes; patch after a rebuild and every one of them
+is stale. Because the patch resizes nothing, the geometry pipeline then runs on
+the patched bytes exactly as it would have on the originals.
+
+**Verified the way this project verifies a writer** — against the game's own
+data, not against its own reader. Reading the shot and writing it straight back
+reproduces the shipped bytes in **205 of 205** models that carry a placement list
+or a scene: 2689 placement records, 5819 track keys, 173 camera keys. A single
+edit is just as narrow — moving one placement 100 units in x changes one byte,
+the x word going 35 to 25635, a delta of 25600 = 100 × 256 in the file's 8.8
+fixed point.
+
+**What it refuses to write.** A sub-scene's keys are read onto the parent's
+clock and into the parent's frame. `extras` carries the clock shift per track
+and per camera, so that is undone; it does not carry the parent's placement, so
+the frame cannot be inverted from the file alone. Those 117 keys are reported as
+skipped and left untouched, because writing them anyway would move things
+silently. Undoing the frame needs the parent placement carried in `extras` as
+well — that is the change that would close it, and it has not been made.

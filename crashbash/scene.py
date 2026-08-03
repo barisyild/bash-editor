@@ -542,6 +542,10 @@ class Camera:
     end: int
     screen_distance: float
     keys: tuple[CameraKey, ...]
+    # What `_read_camera_keys` already did to these keys, so a writer can undo
+    # it -- the same pair `Track` carries, and for the same reason.
+    shift: int = 0
+    parented: bool = False
 
     def at(self, tick: int) -> tuple[np.ndarray, np.ndarray]:
         """Eye and target at `tick`, interpolated within the key holding it."""
@@ -960,6 +964,8 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
                 end=window_end + offset,
                 screen_distance=float(_i32(data, node + NODE_SCREEN_DISTANCE)),
                 keys=tuple(keys),
+                shift=offset,
+                parented=parent is not None,
             ))
             continue
 

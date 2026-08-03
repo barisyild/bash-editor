@@ -255,17 +255,30 @@ default 24 fps the clips come back audibly off-beat and measurably off-pose. At
 30 fps the full round trip — export, Blender save, import — reproduces every pose
 exactly, verified against Blender 5.2.
 
-The import does not read a shot back **yet**, and the reason is worth stating
-precisely, because it is narrower than it first looks. Rebuilding the object graph
-at `T(0x1C)..T(0x4C)` is out of reach — the writers have never touched it and the
-record kinds past the nodes are still unread (`docs/FORMAT.md` §8.3), so adding a
-node or changing how many keys one has means writing a region nobody has decoded.
-But *changing what an existing record holds* is a different thing entirely: no
-count moves, no size changes, no offset shifts, and the undecoded bytes are never
-even read. That is what the offsets in `extras` are for, and they are verified
-against every one of the 7938 records they name. Moving a camera, sliding a prop
-or repositioning a level object is the reachable half; adding or deleting one is
-not.
+**The import reads the shot back too.** Rebuilding the object graph at
+`T(0x1C)..T(0x4C)` is still out of reach — the writers have never touched it and the
+record kinds past the nodes are unread (`docs/FORMAT.md` §8.3), so adding a node or
+changing how many keys one has means writing a region nobody has decoded. But
+*changing what an existing record holds* is a different thing entirely: no count
+moves, no size changes, no offset shifts, and the undecoded bytes are never even
+read. That is what the offsets in `extras` are for, and it is what the importer now
+does — it patches each field where it already sits, before any mesh rebuild moves a
+boundary. Moving a camera, sliding a prop or repositioning a level object is the
+reachable half; adding or deleting one is not.
+
+The test is the one this project trusts: read the shot, write it straight back, and
+compare against the game's own bytes. Across the 205 models that carry a placement
+list or a shot the result is **byte-identical in 205 of 205** — 2689 placement
+records, 5819 track keys and 173 camera keys rewritten, every one reproducing what
+shipped. And an edit lands where it should: nudging one placement 100 units in x
+changes exactly **one byte**, the x word going 35 → 25635, a delta of 25600 = 100 × 256
+in the file's own 8.8 fixed point.
+
+117 keys are **skipped** rather than written, and they are named in the import
+report. A sub-scene's keys are read on the parent's clock and in the parent's frame;
+`extras` records the clock shift and undoes it, but nothing in it carries the
+parent's own placement, so the frame cannot be inverted from the file alone. Writing
+those anyway would move things silently, so they are left as they are.
 
 Colours need one word, because the console uses them at two scales: on a textured
 triangle the colour is a *multiplier* — the blend is `texel * colour / 128`, above

@@ -29,6 +29,7 @@ import numpy as np
 from ..binreader import GTE_SCALE_SMALL
 from . import animwrite as AW
 from . import mdlwrite as MW
+from . import scenewrite as SW
 from . import texwrite as TW
 from .anim import WEIGHT_ONE, read_animations
 from .gltf import AXIS_FLIP, FRAMES_PER_SECOND
@@ -55,6 +56,7 @@ class Report:
     textures_unchanged: list[int] = field(default_factory=list)
     palettes_shared: list[int] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    scene: SW.Patched | None = None
     model: bytes = b""
     pack: bytes | None = None
 
@@ -353,6 +355,18 @@ def import_glb(
     """
     report = Report()
     glb = read_glb(path)
+
+    # The shot rides in `extras`, and it goes back first. Every offset there was
+    # recorded against the file as exported, so it has to be written before
+    # `install_mesh` moves the layout boundary (§2.1) -- and because the patch
+    # resizes nothing, the rebuild below runs on it exactly as it would have run
+    # on the original bytes.
+    extras = (glb.json.get("extras") or {}).get("crashbash")
+    if extras:
+        model_data, patched = SW.patch_scene(model_data, extras)
+        report.scene = patched
+        report.warnings.extend(patched.skipped)
+
     model = read_model(model_data)
     clips = read_animations(model_data, model)
     pack = read_pack(pack_data) if pack_data is not None else None
