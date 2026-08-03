@@ -461,9 +461,14 @@ vertices, uv-index, texture runs and colour indices all moved to EOF and draw co
 while the model header's shared-table pointer does not.** Same file, same region, same packet
 build, opposite outcomes. Whatever consumes the UV table is not reached through the
 mesh-relative path that the vertex data is, and it is not the live `T(0x24)` resolve at
-`0x80017F30`, which would have followed a byte-identical copy. The mechanism stays
-**?unknown?** — but the writer's rule is now exact and minimal: **`0x24` must not move; `0x20`
-must not move (crash); `0x28`, `0x08`, `0x44`, `0x50` may.** The far-boundary disc's texture
+`0x80017F30`, which would have followed a byte-identical copy. The final search for that consumer is a disc-wide sweep of **every** load at offset 0x24 with
+no idiom filter: 385 sites, of which 15 carry model-shaped context. All are accounted for —
+the two packet-fillers already read (`0x80017998`, `0x80017F30`), two EXE false positives
+(`0x8001F438` is a struct copy, `0x8003AD50` a `longjmp`-style register restore), and eleven
+in mode overlays, none of which drives a warp room. **No further reader exists to find by
+static means**, and the mechanism stays **?unknown?** — but the writer's rule is now exact and
+minimal: **`0x24` must not move; `0x20` must not move (crash); `0x28`, `0x08`, `0x44`, `0x50`
+may.** The far-boundary disc's texture
 state would confirm `0x28`'s side of that line and is still the one unreported observation. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
