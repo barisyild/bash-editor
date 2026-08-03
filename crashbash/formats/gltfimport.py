@@ -372,6 +372,24 @@ def import_glb(
     pack = read_pack(pack_data) if pack_data is not None else None
     slot_of = _material_slots(glb, pack)
 
+    # Without a pack no material can resolve to a slot, so every mesh would be
+    # rebuilt untextured -- silently, and the result looks like a texture bug in
+    # the game rather than a missing argument here. It shipped one broken disc:
+    # four models came back flat-shaded because the pack was left out of the
+    # call. If the file names slots, the pack is not optional.
+    named = sum(1 for material in glb.json.get("materials", [])
+                if MATERIAL_SLOT.match(material.get("name", "")))
+    if named and not any(isinstance(k, int) for k in slot_of):
+        raise ValueError(
+            f"{named} of the file's materials name a texture slot, but none "
+            f"resolved"
+            + (" because no texture pack was given; pass the model's sibling "
+               ".tex so the slots can be matched" if pack is None else
+               " against the pack that was given, so the two do not belong "
+               "together")
+            + ". Importing anyway would rebuild every mesh untextured."
+        )
+
     # --- which glTF mesh replaces which model mesh ---------------------
     incoming: dict[int, dict] = {}
     for mesh in glb.json.get("meshes", []):
