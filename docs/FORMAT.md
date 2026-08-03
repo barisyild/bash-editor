@@ -1904,7 +1904,7 @@ their coordinates fall inside the room rather than around it: `warp_room1` spans
 x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent reaches ±19000 on the sky dome
 alone.
 
-**Everything above is corpus measurement.** Nothing here is traced to code, and three
+**Everything above is corpus measurement.** Nothing here is traced to code, and five
 separate routes to the block have now been searched without success:
 
 * **`base + [base+0x50]`**, the resident-image end. Looked for `lw rX, 0x50(rY)` followed by
@@ -1917,6 +1917,14 @@ separate routes to the block have now been searched without success:
   models with this block, so the loops run zero times and never reach it.
 * **The +0x0C list.** All eleven call sites of the entry lookup are read above; none yields
   an address in this region.
+* **A 2048-strided cursor**, which is what walking these sub-blocks would look like given that
+  every one of the 38 starts on a multiple of 0x800. Searched for `addiu rX, rX, 0x800` with
+  the same register on both sides across the executable and all 15 overlays: 15 sites in the
+  executable and 172 across the overlays, three of them in `warp.bin`. **None is a cursor.**
+  They bias a value rather than step a pointer — `warp.bin`'s 0x800B9604 is
+  `lh $v0, 2($v0)` then `addiu $v0, $v0, 2048` then `sh $v0, 18($a2)`, which is 0.5 added in
+  12-bit fixed point, and the other two have the same shape. A stride would have to be a
+  pointer that is then dereferenced; none of these is.
 
 * **`warp.bin` itself**, the obvious suspect, since it drives exactly these seven rooms. It
   is not the reader, and the reason is structural: **the overlay never holds a raw model

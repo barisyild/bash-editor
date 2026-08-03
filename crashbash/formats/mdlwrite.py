@@ -259,6 +259,28 @@ def _swatch_entry(data: bytes, mesh: Mesh) -> int:
     return seen.most_common(1)[0][0] if seen else 0
 
 
+def _pack_runs(values: list[int]) -> bytes:
+    """One entry per triangle, back into `(run << 9) | value` runs.
+
+    The mirror of the reader's expander: each entry covers `run + 1` triangles
+    and the run field is six bits, so a run tops out at 64. Writing one entry per
+    triangle is legal -- a run of 0 covers one -- but it is not what the game
+    ships, and it inflates the block by up to 55x: `warp_room1`'s mesh 1 states
+    662 triangles in 12 entries, 24 bytes, against 1324 uncompressed.
+    """
+    out = bytearray()
+    index = 0
+    while index < len(values):
+        value = values[index]
+        run = 1
+        while (index + run < len(values) and values[index + run] == value
+               and run < 64):
+            run += 1
+        out += struct.pack("<H", ((run - 1) << 9) | (value & 0x81FF))
+        index += run
+    return bytes(out)
+
+
 def build_blocks(mesh: NewMesh) -> dict:
     """The blocks and table extensions a mesh needs, as raw bytes."""
     faces = mesh.positions.shape[0]
@@ -335,10 +357,8 @@ def build_blocks(mesh: NewMesh) -> dict:
             colours += bytes((int(triple[0]), int(triple[1]), int(triple[2]), 0))
 
     if textured:
-        # One run-length entry per triangle: the run only ever compresses.
-        texture = struct.pack(
-            f"<{len(plan)}H",
-            *[int(mesh.textures[face]) & TEXTURE_INDEX_MASK for face, _ in plan],
+        texture = _pack_runs(
+            [int(mesh.textures[face]) & TEXTURE_INDEX_MASK for face, _ in plan]
         )
         uvs = bytes(
             np.stack([mesh.uvs[face, list(corners)] for face, corners in plan])
@@ -348,7 +368,7 @@ def build_blocks(mesh: NewMesh) -> dict:
         )
     else:
         # Not zeros: zero is texture slot 0. See `_swatch_entry`.
-        texture = struct.pack(f"<{len(plan)}H", *([mesh.swatch] * len(plan)))
+        texture = _pack_runs([mesh.swatch] * len(plan))
         uvs = b""
 
     return {
