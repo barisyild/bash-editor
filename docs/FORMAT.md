@@ -652,9 +652,17 @@ band led to **the preview player itself, `0x800B6FD4`**: it takes the kind-3 ins
 a per-frame workspace through `0x800264E8`, feeds `[instance+84]`'s `+16/+24` into
 `0x8001463C` for facing-angle math, and drives the ping-pong cursor whose tick selects a
 **28-byte segment** through `0x8001E41C` — now read: records at `track+0x4C`, end-tick at
-`+12`, skip flag `0x2000`, a tick-to-segment lookup. The workspace's track pointer at `+12` is
-assigned somewhere in the one unread span left, `0x800B7060..0x800B7250` — whatever fills it
-is one dereference from §8.6's reader. The prologue did yield one solid cross-check on the way: it
+`+12`, skip flag `0x2000`, a tick-to-segment lookup. The workspace's track pointer at `+12` is assigned by the initialiser at `0x800B6EC4` —
+`[ctx+0x2C] + 4·i`, self-relative: **a `+0x0C` list entry**, the solve recorded in §14. The
+player's segment modes are read too: mode 1 calls **`0x80025FAC`**, now read — an animation
+*selector* that takes a slot id, indexes the pointer table at its struct's `+16`, and installs
+the chosen sequence at `+12` — and mode 2 ends the shot. The slot it passes is the viewport
+mode, and the struct it drives is a **TEX-pack flipbook player**: the preview *images* come
+from `level.tex`'s flipbook machinery (§10.7), not from the §8.6 block at all. That resolves
+the picture into two halves: **§8.6 sub-blocks are the preview sign geometry** — vertex and
+index arrays parsed once at init, by the position-anchored reader the block-shift probe
+exposed — and the animated content on the signs is TEX flipbook data selected per door. What
+the block-shift probe broke was the signs themselves. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
 101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
