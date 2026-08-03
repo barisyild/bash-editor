@@ -3484,9 +3484,19 @@ are not only undocumented format; they are also where a reader is quietly skippi
   reading a model-only offset, and two of them settle it: `crate.bin` at 0x800B4BDC loads
   `[owner+0x0C]` and then reads `[model+0x00]`, `[model+0x54]` and `[model+0x58]` — the
   stamp, the mesh count and the first header. `papu.bin` 0x800B5130 and `mallet.bin`
-  0x800B5ECC do the same kind of thing. So a mode overlay **can** read an MDL directly, the
-  search space for an unread field's reader is the whole disc rather than two files, and what
-  those ten sites do with what they read is unread.
+  0x800B5ECC do the same kind of thing. So a mode overlay **can** read an MDL directly, and
+  the search space for an unread field's reader is the whole disc rather than two files.
+
+  All ten were then followed, and **none reads a model field this document does not already
+  record.** `crate.bin` takes the mesh count and dereferences mesh 0's runtime slot at
+  `model+0x58` (§3), testing `[slot+0x1A]` against 1, 4 or 5. `papu.bin` and `mallet.bin`
+  read 0x10, 0x18 and 0x54; `oxide.bin` reads 0x1C; `menu.bin` reads 0x4C. Two sites *looked*
+  like they read the header's 0x30 and 0x34 — the fields listed above as having no reader —
+  and both were the scanner's fault rather than the game's: at `polar.bin` 0x800C2250 the
+  reads go through `$a1`, loaded separately at 0x800C224C, and the code **writes back** to
+  `[a1+0x2C]`, which a file image zero in 400/400 could not survive. The same misattribution
+  produced `warp.bin`'s apparent 0x04 and 0x08. A register-attribution bug in a scan is its
+  own kind of false positive, and it is worth the same suspicion as a false negative.
 * The **code overlays** are readable now, which is how §9.1's name tables and §9.11's node
   handlers were found, but only their entry conditions are mapped. `overlays/modes/*.bin` is
   raw MIPS with no header stating its link address; the address is recovered by sweeping
