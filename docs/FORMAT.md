@@ -1499,12 +1499,23 @@ separate routes to the block have now been searched without success:
 * **The +0x0C list.** All eleven call sites of the entry lookup are read above; none yields
   an address in this region.
 
+* **`warp.bin` itself**, the obvious suspect, since it drives exactly these seven rooms. It
+  is not the reader, and the reason is structural: **the overlay never holds a raw model
+  base.** A model is always reached as `[owner+0x0C]`; eleven sites in `warp.bin` load a
+  `+0x0C` and then read fields through it, three of those touch an offset an MDL header uses,
+  and all three were read — 0x800B5EDC and 0x800B72D0 index two-field runtime structs, and
+  0x800B70F8 hands its pointer straight to the engine at 0x8001E41C and works on what comes
+  back. Everything the overlay knows about a level arrives through the engine's runtime
+  records: it resolves an object once (0x800BB60C), draws once (0x800BBEBC) and asks the
+  +0x0C list six times. It never has the file, so it cannot be reading this out of it.
+
 So: **I could not validate that anything reads it, and that is not evidence it is unused.**
-242 KB in seven files, with a header identical in 7/7 down to its constants, is not what
-dead space looks like. The reading that would be tempting — §8.4 shows a level carries no
-collision volumes, so a floor must be described somewhere, and this is room-shaped data in
-the only files that are rooms — remains **untested**, and the place to test it is what
-`warp.bin` does with a model base, since it drives exactly these seven rooms.
+242 KB in seven files, with a header identical in 7/7 down to its constants and two
+equal-sized arrays inside it, is not what dead space looks like. The tempting reading — §8.4
+shows a level carries no collision volumes, so a floor must be described somewhere, and this
+is room-shaped data in the only files that are rooms — remains **untested**. With `warp.bin`
+ruled out, whatever reads it would have to be `gameeng.bin` or the executable, and both have
+already been scanned for all three address routes above.
 
 ---
 
@@ -3458,6 +3469,13 @@ are not only undocumented format; they are also where a reader is quietly skippi
   `group.bytes` sizes both the buffer and the CdRead, but the splitter at 0x800126F4 places
   entry *i* at `(sector[i] − sector[first]) * 2048`, which for group 0 reaches sector 6519
   while the buffer holds 6516.
+* **What a mode overlay can even see.** `warp.bin` was read far enough to answer one
+  structural question, and the answer generalises: it **never holds a raw model base**.
+  Everything it knows about a level arrives through the engine's runtime records — it
+  resolves an object once, draws once, and asks the +0x0C list six times. If that is how the
+  mode overlays work generally, then no unread field of an MDL can have a mode overlay as its
+  reader, and the search for one narrows to `gameeng.bin` and the executable. Only `warp.bin`
+  was checked; the other thirteen were not.
 * The **code overlays** are readable now, which is how §9.1's name tables and §9.11's node
   handlers were found, but only their entry conditions are mapped. `overlays/modes/*.bin` is
   raw MIPS with no header stating its link address; the address is recovered by sweeping
