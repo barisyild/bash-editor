@@ -1458,8 +1458,14 @@ depth sort the piece is placed. The values fit — 256, 512, 384, 128, 51 — an
 awkward one: 93 records hold 0xFFB4, which `lh` sign-extends into a value `sltu` can never
 find smaller, so those placements are bounds-checked out and draw nothing.
 
-What the segment length is *set from* is not traced, so the absolute scale of an index is
-?unknown?. The meaning is not.
+And the segment length is **not in this format at all**, which is the right way for that
+question to end. `s1` is 0x80018B08's own argument, stored to `ctx+0x10` on entry, and the
+routine has **45 callers** — one in `oxide.bin`, six in `warp.bin`, sixteen in `menu.bin`, one
+in `crate.bin` and twenty in `gameeng.bin` — each handing it a static render descriptor from
+its own data (gameeng's 0x8008FBA0 passes 0x8009EAC4). So the ordering table's segment is
+chosen by whatever pass is drawing, per view, and an index's absolute scale is a property of
+the renderer rather than of the file. A placement states which bucket it wants; the engine
+states how many there are.
 
 ### The id is the same id the draw dispatcher takes
 
