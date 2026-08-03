@@ -4334,15 +4334,22 @@ are not only undocumented format; they are also where a reader is quietly skippi
   resolves both fields live — which is precisely what makes the scramble a paradox. The open
   observations that would decide it are named in §2.1. I could not validate the mechanism;
   the behaviour itself is validated eleven times over.
-* **The §8.6 sub-block locator** — the half of the preview reader still untraced. The model
-  side is solved and data-validated 38/38 (the index beside each door's object record, §8.6),
-  the consuming chain is read to the classifier and the generic entity layer (`+84`
-  owner/context, `+72` init callback), and the locator — index *n* to sub-block address —
-  survives a completed sweep: all 27 door-array references classified, all 8 owner-global
-  sites in `gameeng.bin` identified, the pointer-escape scan empty. Behaviourally it ignores
-  the live header (both block movers lost the previews; leaving the block in place restored
-  them, hardware-tested). I could not validate where it gets the address; the next instruments
-  are cross-reference tooling or a RAM watch.
+* ~~**The §8.6 sub-block locator**~~ — **SOLVED, instruction level, end to end.** The word
+  beside a door's object record is a **1-based row index into the §8.3 chunk-descriptor table
+  at `T(0x3C)`**, whose row 0 is a null sentinel — which is why the index is 1-based. Row *k*
+  is `[start, end)` **file offsets** of sub-block *k* (verified across all seven carriers:
+  starts match one for one, each end is the next start), with runtime slots at `+8` (buffer)
+  and `+12` (handle), zero in the file — the same pattern as the animation blobs' resident
+  slot. The reader: `warp.bin`'s per-door update at `0x800B551C` reads `[door+36]` and calls
+  **`0x800163E0(owner, n)`** — resolve row *n*, and if its slots are empty, schedule
+  `0x800133C8` for `[start, end)` from **disc** — then polls the buffer through
+  **`0x80016450`**. That is why the block is position-anchored: the offsets live in the
+  resident descriptor rows, not the moved header — the block-shift probe moved the block but
+  not the rows, so the stream pulled the old position and the signs vanished; the graft build
+  leaves both in place and they came back. §2.1's `0x3C` site list had contained these
+  functions all along. A writer may therefore relocate the §8.6 block **if it patches the
+  descriptor rows to match** — and the pinned graft, which moves neither, remains the simple
+  path.
 * **One pending observation** closes two smaller questions at once: the far-boundary probe's
   textures. Intact confirms the residency model's prediction and pins the uv-move scramble on
   `0x24`; broken pins it on `0x28`. The image sits in `out/` and has only ever been reported
