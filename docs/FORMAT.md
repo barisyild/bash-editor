@@ -3197,6 +3197,31 @@ texture window wraps most naturally. Treat it as *likely*, not settled.
 the game share identical geometry while each uses one distinct texture (`mdl.find_texture_flipbooks`);
 those are driven by gameplay code writing a display id, not by any table in the data.
 
+## 10.6 The tail: every pack ends on an 8-byte boundary
+
+This was the last unclaimed byte in the TEX corpus — 2892 of them, spread over 358 of the 400
+packs, which the coverage walk kept reporting as a hole. It is a run of zeros after the last
+structure in the file, and it is now measured exactly:
+
+| Zeros needed to reach a multiple of 8 | Zeros actually there | Packs |
+| --- | --- | --- |
+| 0 | 0 | 42 |
+| 0 | 8 | 263 |
+| 4 | 4 | 44 |
+| 4 | 12 | 51 |
+
+**400 of 400 packs have a length that is a multiple of 8**, and the run never exceeds 12 bytes
+and is entirely zero in 358/358. So the tail is the alignment pad, plus a further eight zero
+bytes in 314 of the 400. Why those 314 carry the extra eight and the other 86 do not is
+?unknown?; it does not track the pack's texture count, palette count or which structure ends
+last.
+
+**No reader was traced for these bytes and no reader would need to be** — nothing points at
+them, and a pack with none of them (42 of them) loads the same way. That is a search that came
+back empty, not proof the loader ignores them. `tools/coverage.py` claims the run only after
+testing that it is zero and shorter than 16 bytes, never by position, so a real structure
+sitting at the end of some future file still shows up as a hole.
+
 ---
 
 # 11. Rendering

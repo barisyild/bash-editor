@@ -10,12 +10,13 @@ missed. Run it after changing the spec, and again after changing the readers:
 The number it prints is the honest state of §14. It is not a test: a byte being
 claimed says the format names it, not that the naming is right.
 
-Both corpora sit at 99.98 %. What is left is deliberately not special-cased here,
-because it is two named files rather than a structure: `gamelogo_text.mdl` keeps
-a byte-for-byte duplicate of its own mesh block that no header points at, and
-`intro_eurocom.mdl` has 160 bytes of 20-byte records past an empty sub-object
-array. Both are identified in §14; a walker that claimed them by name would hide
-the next file like them.
+TEX is at 100 %: its last hole was the zero tail of §10.6, and that is claimed by
+testing the bytes, not by naming the files. MDL sits at 99.98 %, and what is left
+is deliberately not special-cased, because it is two named files rather than a
+structure: `gamelogo_text.mdl` keeps a byte-for-byte duplicate of its own mesh
+block that no header points at, and `intro_eurocom.mdl` has 160 bytes of 20-byte
+records past an empty sub-object array. Both are identified in §14; a walker that
+claimed them by name would hide the next file like them.
 """
 from __future__ import annotations
 
@@ -264,6 +265,15 @@ def cover_tex(data: bytes) -> tuple[bytearray, Counter]:
             at = animation + 4 + scroll_ptr
             if at + 4 <= len(data):
                 claim(at, at + 4 + 0x10 * u32(at), "scroller records")
+
+    # §10.6. Every pack ends on an 8-byte boundary and the zeros that get it
+    # there are claimed here -- but only after testing them, never by position,
+    # so a real structure at the end of a file still shows up as unclaimed.
+    tail = len(data)
+    while tail and not marks[tail - 1] and not data[tail - 1]:
+        tail -= 1
+    if 0 < len(data) - tail <= 12:
+        claim(tail, len(data), "tail padding")
 
     return marks, owners
 
