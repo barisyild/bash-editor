@@ -452,11 +452,33 @@ fetching a clip's resident blob. The full chain is now: `warp.bin` bit-15 walk �
 transform → `0x80019A60` draw-by-id → namespace dispatch (§2.3) → packet builders → live
 `T(0x20)`.
 
-Which means the pinning consumer has survived every read so far, and the honest state is this:
-**every link of the level draw chain that has been read resolves the model through the live
-header, and the code that behaves otherwise — proven to exist by the uv-move probe — has not
-been found.** The unread remainder is the interior of `0x80019A60`'s mesh-namespace paths and
-`0x8002F254`'s packet arena. Not found is not absent; the probes show it is there. The in-file runtime-slot pattern also names a
+`0x80019A60`'s namespace paths are read now too, and they hand back three decodes and one
+correction to this section's own reasoning:
+
+* The `0x2000` path bound-checks against `[model+0x54]` and takes its header at
+  `model + 52·i + 36` — the **1-based** numbered-mesh bias of §2.3, now confirmed at
+  instruction level rather than by corpus fit.
+* The `0x5000` path resolves through `0x800159C4(id, model)`, the object resolver.
+  Both paths then run `0x8001AF2C` (a bounds test on `T(mesh+0x10)`), `0x80019094`, and
+  `0x800193A8(packet, vertices, T(mesh+0x14))` — the geometry builder of §12's table, its
+  callers now traced.
+* The `0x3000` namespace, unnamed until now, draws **no mesh at all**: it is a billboard. It
+  perspective-transforms one point, builds its colour from the instance's `+118` nibble (or a
+  neutral default), bound-checks against the owner global's `+0x46`, takes the **56-byte
+  runtime texture descriptor** at `[owner+0x18] + 56·(id & 0xFFF)` — §6.2's descriptor array,
+  reached from its other end — and hands it to `0x80029D28`.
+
+And the correction: **the uv-move probe moved `0x28` as well as `0x24`, so its scrambled screen
+does not separate the two.** The shipped layout ends the UV table exactly at `T(0x28)`, so a
+fetch addressed from the table's end is as consistent with the scramble as one addressed from
+`0x24` — and the far-boundary probe, which moved `0x28` alone, was only ever reported as
+*loading*; nobody looked at its textures. Whether the scramble belongs to `0x24` or `0x28` is
+**?unknown?** until that one observation is made.
+
+The pinning consumer has survived every read. Every link of the level draw chain read so far
+resolves the model through the live header; the code that behaves otherwise — proven to exist
+by the uv-move probe — has not been found. The unread remainder is `0x80019094`, `0x8001AF2C`,
+`0x80029D28` and `0x8002F254`. Not found is not absent; the probes show it is there. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
