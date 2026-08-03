@@ -102,10 +102,21 @@ class Transplant:
 
 
 def _table_bounds(data: bytes, model: Model) -> tuple[int, int, int]:
-    """Where the colour table starts, where the UV table starts, and its length."""
+    """Where the colour table starts, where the UV table starts, and its length.
+
+    The length is the **span** `T(0x24)..T(0x28)`, not the reader's entry count.
+    Those two agree in only 168 of 373 models: the reader stops at the last entry
+    any triangle names, and the table often runs further. Taking the count instead
+    made the writer copy a short prefix and then lay the new mesh's UVs over the
+    rest, so every *other* mesh's `face_uv_index` pointed into rewritten data --
+    205 models would lose between 2 and 4748 bytes of live UVs that way, the warp
+    rooms and hubs worst of all. It is what put the wrong texture on a rebuilt
+    warp room, and rebuilding one mesh of `warp_room1` crashed the game.
+    """
     colour_start = PTR_COLOUR_TABLE + struct.unpack_from("<i", data, PTR_COLOUR_TABLE)[0]
     uv_start = PTR_UV_TABLE + struct.unpack_from("<i", data, PTR_UV_TABLE)[0]
-    return colour_start, uv_start, len(model.uvs) * UV_ENTRY_SIZE
+    uv_end = PTR_MODEL_POOL + struct.unpack_from("<i", data, PTR_MODEL_POOL)[0]
+    return colour_start, uv_start, max(0, uv_end - uv_start)
 
 
 def _mesh_blocks(mesh: Mesh) -> tuple[int, int, int]:
