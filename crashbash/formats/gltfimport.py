@@ -22,6 +22,7 @@ matched to the existing colours instead.
 from __future__ import annotations
 
 import re
+import struct
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -346,7 +347,7 @@ def import_glb(
     model_data: bytes,
     pack_data: bytes | None,
     other_pack_users: dict[int, set[int]] | None = None,
-    pin_tables: bool = False,
+    pin_tables: bool | None = None,
 ) -> Report:
     """Rebuild `model_data`'s meshes and clips from the glTF file at `path`.
 
@@ -355,6 +356,19 @@ def import_glb(
     by any texture outside the imported slots is treated as shared.
     """
     report = Report()
+    # The seven §8.6 carriers announce themselves: their chunk-descriptor count
+    # at 0x38 is non-zero in exactly those files and no others (7/400). Their
+    # shared tables and their §8.6 block are pinned on hardware, so the graft
+    # layout is not optional there -- engage it whenever the caller did not
+    # decide explicitly, and say so in the report.
+    if pin_tables is None:
+        pin_tables = struct.unpack_from("<i", model_data, 0x38)[0] > 0
+        if pin_tables:
+            report.warnings.append(
+                "§8.6 carrier detected: pinned-table graft layout engaged; "
+                "colours map to existing entries and the shared tables stay "
+                "in place"
+            )
     glb = read_glb(path)
 
     # The shot rides in `extras`, and it goes back first. Every offset there was
