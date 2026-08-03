@@ -489,21 +489,26 @@ address happens to survive. §8.6's index lists were checked as a possible secon
 are not: their values run to 65521, far past the table's 2770 entries, so they index something
 else entirely.
 
-One avenue remained and it closes as **inconclusive by construction**, which is worth saying
-rather than dressing up. If the loader rewrote `model+0x24` in memory — the way it fills the
-descriptor and mesh runtime slots — a live resolve would read something other than the file's
-value and every observation would follow. Scanning for stores to `+0x20/0x24/0x28` returns
-**283 sites**, and they cannot be filtered: those three offsets are generic struct offsets all
-over the engine (runtime contexts, entities, GTE vectors), and the sampled hits are exactly
-that — `0x8001DED4`, for instance, writes `ctx+0x24`, not a model. Distinguishing a model base
-from any other struct base needs data-flow analysis this project does not have.
+One hypothesis remained: that the loader **rewrites `model+0x24` in memory**, the way it fills
+the descriptor and mesh runtime slots — then a live resolve would read something other than
+the file's value and every observation would follow. A plain scan for stores to
+`+0x20/0x24/0x28` cannot test it (283 sites, and those offsets are generic struct offsets all
+over the engine), so the test is a **forward taint**: paint the owner global at `0x80056998`,
+paint what `[owner+0x0C]` yields as a model, propagate through register copies, kill on
+redefinition and on the caller-saved set at each `jal`, and report every access through a
+proven model base. Run over the executable and all 16 overlays it finds **six loads and zero
+stores** — the six being exactly the packet-fillers already read (`0x8001784C`, `0x80017994`,
+`0x80017998`, `0x80017B88`, `0x80017DB4`, `0x80017F30`), which is the sanity check that the
+tracker works. **Nothing on the disc writes a model's table pointers.** The loader-rewrite
+hypothesis is refuted, not merely unsearched.
 
-So the writer's rule stands exactly as measured, with its reason **?unknown?** after every
-static avenue this project can reach — 385 loads swept and accounted for, 283 stores
-unfilterable, no hard-coded offsets, no table overrun, four hardware probes on one variable:
-**`0x20` and `0x24` must not move; `0x28`, `0x08`, `0x44`, `0x50` may.** The next instrument
-is dynamic — a RAM watch on `model+0x24` across the load, which would settle the
-loader-rewrite question in one observation. The far-boundary disc's texture
+So the writer's rule stands exactly as measured, and its reason is **?unknown?** with the
+static ledger complete: 385 loads swept, a taint pass finding six real readers and no writer,
+no hard-coded offsets, no table overrun, four hardware probes isolating one variable —
+**`0x20` and `0x24` must not move; `0x28`, `0x08`, `0x44`, `0x50` may.** Every reader that
+exists resolves live and would follow a byte-identical copy; the hardware says it does not.
+The remaining instrument is dynamic observation, and the contradiction is recorded as a
+contradiction rather than resolved by preference. The far-boundary disc's texture
 state would confirm `0x28`'s side of that line and is still the one unreported observation. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
