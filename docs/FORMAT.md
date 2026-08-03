@@ -4496,9 +4496,30 @@ are not only undocumented format; they are also where a reader is quietly skippi
   each carrying 2,048 to 12,304 bytes of colour table that no triangle in the numbered meshes
   reaches. Something else consumes those entries in exactly the files where moving `0x24`
   does damage — the strongest circumstantial support the span reading could have, and a
-  pointer at who the unfound consumer serves. **And the consumer is found.** §8.6's second array — the `p2..p3` list of every sub-block —
-  indexes the shared **colour table**, in precisely the band the numbered meshes leave spare.
-  Measured across all seven carriers and all 38 sub-blocks:
+  pointer at who the unfound consumer serves. **SOLVED: a §8.6 sub-block is a mesh.** Its 0x34 bytes are a §4.1 mesh header, read by the
+  ordinary self-relative rule, and every field lands where §4 says it should:
+
+  | Field | §4.1 meaning | Measured over 38 sub-blocks |
+  | --- | --- | --- |
+  | `+0x14 == 32` | `ptr_strips` | `T = 0x34` — the strip list begins immediately after the header, **38/38** |
+  | `+0x10` | `ptr_bounds`, pool at `T + 0x14` | identical to the "`[+0x10] + 0x24`" rule this section measured blind |
+  | `+0x18` | `ptr_uv_index` | every entry inside the model's UV table, **38/38** |
+  | `+0x1C` | `ptr_texture` | the run-length list, whose `(run << 9) \| slot` encoding is why its values reach 33,944 |
+  | `+0x20` | `ptr_colour_index` | every entry inside the model's colour table, **36/38** |
+  | `+0x24` | `ptr_end` | equal-length uv and colour arrays, one u16 per triangle, **36/38** |
+
+  That dissolves this section's oldest puzzles at a stroke. The "two equal arrays with a
+  smaller one between them" are the **uv-index and colour-index arrays with the texture runs
+  between them** — equal because each holds one u16 per triangle. The vertex "8-byte records"
+  are the §4.2 vertex pool. The `+0x08` count is the triangle count. And the pinning follows
+  without a hypothesis: **the sign meshes are drawn by the ordinary mesh path and index the
+  model's shared UV and colour tables**, so moving `0x20` or `0x24` moves the tables out from
+  under geometry that is streamed in separately — which is exactly what the eleven probes
+  measured and what `tables2` confirmed by crashing.
+
+  The colour-index array was found first, from the data side, before the header was recognised
+  — that measurement is kept below because it stands on its own and because it is what led
+  here. It indexes precisely the band the numbered meshes leave spare:
 
   | Model | Spare band | `p2..p3` values | In the spare band | In the table | Outliers |
   | --- | --- | --- | --- | --- | --- |
