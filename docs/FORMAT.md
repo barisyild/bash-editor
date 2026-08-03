@@ -618,7 +618,11 @@ be found or excluded. The first cluster is read and excluded: `0x800B64E0..0x800
 hand-offs into `gameeng.bin` at `0x80095A04`/`0x80095E38`. That hand-off is itself the lead:
 the door flow delegates into the engine overlay, which also carries eight owner-global
 references — the preview machinery plausibly lives in `gameeng.bin`, and its eight sites are
-the next haystack after `warp.bin`'s remaining clusters.
+the next haystack after `warp.bin`'s remaining clusters. The first delegate is read and
+identified: `0x80095A04(n)` indexes a **156-byte per-slot array at `0x800A0E78`**, frees the
+slot's instance list through `0x8001D334([slot+108])` and clears bit 15 of its `+12` flags — a
+viewport shutdown, the door flow closing screens on entry. Not the locator; one more named
+piece of the engine's slot machinery.
 
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
