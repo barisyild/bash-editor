@@ -62,17 +62,27 @@ They are not style preferences.
   inserted length. Appending instead breaks both: a warp room has no clips to
   strip, so the only thing between `T(0x44)` and EOF is §8.6's block, and the
   new geometry lands inside it. `warp_room1` built that way would not load.
-- **In the seven §8.6 carriers the shared colour and UV tables are pinned, and
-  the §8.6 block must not move either** (§2.1's probe ledger). Repointing
-  `0x20` crashes the room; repointing `0x24`/`0x28` scrambles every textured
-  surface; moving the block — even byte-identical, with `0x44`/`0x50`
-  following — loses the map previews, whose consumer finds it by position. Use
-  `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)`: the **graft
-  layout**, hardware-proven by `safeadd2` — the file stays byte-identical
-  through its old EOF except the rebuilt mesh's header and `0x08`/`0x50`, new
-  blocks go *after* the block under a grown sector-aligned `0x50`, colours map
-  to the nearest existing entry, and textured triangles need their exact UV
-  triple already in the table.
+- **In the seven §8.6 carriers the shared tables are pinned and the §8.6 block
+  must keep its file offset** (§2.1's fourteen-probe ledger). Repointing `0x20`
+  crashes the room; repointing `0x24` **alone** scrambles every textured
+  surface — three bytes of the file, a byte-identical copy, everything else
+  untouched — and doing it with `0x28` following or with `0x50` grown scrambles
+  too. Moving the block loses the map previews, and §8.6's solve says why: each
+  door's object record carries a **row index into the `T(0x3C)` descriptor
+  table**, and those rows hold the sub-block's *file offsets*, streamed from
+  disc by `0x800163E0` / polled by `0x80016450` / released by `0x8001636C`. So
+  the block may move only if those rows move with it.
+  Use `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)` — engaged
+  automatically now, since a carrier announces itself by a non-zero `i32@0x38`
+  (7/400). It emits the **graft layout**, hardware-proven by `safeadd2` and
+  `safeadd3`: the file stays byte-identical through its old EOF except the
+  rebuilt mesh's header and `0x08`/`0x50`, new blocks go after the §8.6 block
+  under a grown sector-aligned `0x50`, colours map to the nearest existing
+  entry, and textured triangles need their exact UV triple already in the
+  table. *Why* `0x24` is pinned is still unfound: every reader traces to a live
+  resolve that a byte-identical copy would satisfy, and a disc-wide sweep of all
+  385 loads at that offset accounts for every one. Searched and not found is not
+  the same as absent.
 - **Import needs the model's sibling `.tex`.** Without it no material resolves
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
