@@ -53,6 +53,7 @@ PTR_MODEL_POOL = 0x28
 # and these two move with it.
 PTR_CLIP_TABLE = 0x44
 RESIDENT_SIZE = 0x50  # base-relative, not self-relative
+SECTOR = 0x800
 
 MESH_HEADER_START = 0x58
 COLOUR_ENTRY_SIZE = 4
@@ -423,7 +424,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     attachment_new = append(source.attachment) if source.attachment else 0
     end_new = len(out)
     boundary = _carry_vector_pool(out, dest_data)
-    _rejoin_tail(out, tail, cut, boundary)
+    boundary = _rejoin_tail(out, tail, cut, boundary)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
     struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
@@ -527,7 +528,7 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     colour_index_new = append(colour_index)
     end_new = len(out)
     boundary = _carry_vector_pool(out, dest_data)
-    _rejoin_tail(out, tail, cut, boundary)
+    boundary = _rejoin_tail(out, tail, cut, boundary)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
     struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
@@ -558,7 +559,7 @@ def _split_at_clip_table(data: bytes) -> tuple[bytearray, bytes, int]:
     return bytearray(data[:cut]), bytes(data[cut:]), cut
 
 
-def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> None:
+def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> int:
     """Put the tail back after the inserted geometry and move what named it.
 
     Only two fields name anything past the insertion point: `0x44`, which is
@@ -566,13 +567,25 @@ def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> None:
     length from the file's base. Every pointer *inside* the tail is self-relative
     within it and survives the shift untouched, and `write_clips` recomputes each
     descriptor's mesh pointer afterwards from the header's own offset.
+
+    **The insertion is padded to a whole sector when `0x50` was sector-aligned.**
+    Eight shipped models have `i32@0x50` a multiple of 0x800, and seven of them
+    are the hub and warp rooms, where it is also exactly where §8.6's block
+    begins. §1.1's byte-range reader can only start on a 0x800 boundary, so
+    shifting that field by an arbitrary amount leaves it naming a place the
+    reader cannot start from. Rebuilding one mesh of `warp_room1` -- changing no
+    geometry at all -- crashed the game until this padding was added.
     """
+    resident = struct.unpack_from("<i", out, RESIDENT_SIZE)[0]
+    if resident % SECTOR == 0 and resident >= cut:
+        out.extend(b"\x00" * (-(boundary - cut) % SECTOR))
+        boundary = len(out)
     inserted = boundary - cut
     out.extend(tail)
     struct.pack_into("<i", out, PTR_CLIP_TABLE, boundary - PTR_CLIP_TABLE)
-    resident = struct.unpack_from("<i", out, RESIDENT_SIZE)[0]
     if resident >= cut:
         struct.pack_into("<i", out, RESIDENT_SIZE, resident + inserted)
+    return boundary
 
 
 def _carry_vector_pool(out: bytearray, source: bytes) -> int:
