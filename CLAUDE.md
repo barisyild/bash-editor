@@ -81,6 +81,15 @@ They are not style preferences.
   cylinder read live by gameplay. Zeroing it let the character walk through the
   crates. Carry the replaced mesh's own block through a transplant. A
   character's *second* mesh is its spin body, with a volume of its own.
+- **A zero texture-run entry means slot 0, not "no texture"** (§6.2). Of the 897
+  meshes whose every strip flag says untextured, none writes a zero list; they
+  name a swatch palette instead, and 1776 of the archive's 5989 meshes carry one.
+  Clearing the list aims every triangle at a real slot with no CLUT behind it.
+- **The UV table's length is the span `T(0x24)..T(0x28)`**, not the reader's
+  count of entries — the two agree in only 168 of 373 models, because the reader
+  stops at the last entry a triangle names. Copying by the count truncates the
+  table and overwrites UVs that other meshes index; 205 models lose between 2 and
+  4748 bytes that way.
 - **Texture slots may only be taken when the mesh being replaced is their sole
   sampler** (§10.3). "No mesh samples it" proves nothing — the menu draws its
   character-select portraits from code, and overwriting those slots corrupted

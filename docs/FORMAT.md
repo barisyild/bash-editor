@@ -798,6 +798,19 @@ at +0x0C and a UV origin at +0x10. So bit 15 means: *sample the pack's last text
 "swatch"), but colour it with palette `index`.* That is how one mesh paints itself in several
 colour schemes from a single small image. **confirmed**
 
+> **A zero entry is not "no texture" — it is texture slot 0.** This matters to a writer, and
+> the corpus is unambiguous about it: of the **897 meshes whose every strip flag says
+> untextured, not one writes a zero list**. 227 name a swatch palette from end to end and the
+> other 670 mix swatch entries with texture ones. Over the whole archive **1,776 of 5,989
+> meshes, in 340 models, carry at least one swatch entry** — 30 % of everything drawn.
+>
+> So "the mesh has no texture" is expressed by pointing every triangle at the swatch with a
+> palette, never by clearing the list. A writer that fills it with zeros aims each triangle at a
+> real slot with no CLUT behind it; `warp_room1`'s mesh 1 carries `0x8000 | 152` on 662 of its
+> 663 triangles, and rebuilding it with zeros made a cutscene draw whatever was already in VRAM.
+> The run *structure* cannot survive a rebuild — re-striping reorders the triangles it counts —
+> but the palette can, so `mdlwrite` carries the entry the mesh's own list uses most.
+
 Runtime descriptor strides, from the two accessors:
 
 ```
