@@ -4527,7 +4527,16 @@ are not only undocumented format; they are also where a reader is quietly skippi
   `0x44`, `0x50` untouched — and the room **crashes**. So the harm is not a stretched length;
   it is the tables' *position*, and now there is a consumer that cares about position for a
   reason the packet path never could: **§8.6's sub-blocks are streamed from disc into fresh
-  allocations and coloured from the shared table.** Whatever binds their colour indices to
+  allocations and coloured from the shared table.** One probe tests the colour claim without needing that code at all. **spare-paint** repaints
+  every non-black entry of `warp_room1`'s spare band — 1,025 of the 1,101 entries from 3415 to
+  4515 — bright magenta and changes nothing else: same file size, every byte outside the
+  colour table identical, entries 0..3414 untouched. No numbered mesh reaches that band, so
+  the room must look exactly as it shipped; if the map previews turn magenta, the binding is
+  proven from the data side and the missing code's *effect* is established even while its
+  location is not. If nothing changes anywhere, this section's central finding is wrong and
+  says so.
+
+  Whatever binds their colour indices to
   that table is resolved somewhere this document has not traced — at stream-in, in the
   sign-packet builder that no signature scan has found — and a table that has moved leaves
   that binding pointing at the old address. It fits the whole ladder: moving `0x20` or `0x24`
