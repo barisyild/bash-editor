@@ -599,8 +599,14 @@ header (both movers lost the previews with `0x44`/`0x50` moved consistently), th
 `menu.bin`), a per-room sector table (`[82, 72, 88, 81, 81]` as u32 or u16: absent; the one
 `82` in `warp.bin` sits in a consecutive-integer id run), and `warp.bin`'s seven `+36`-shaped
 struct writes (zeros, constants 12 and 4096, and one resolver result — none a load length).
-One new address fell out of that last scan: `0x800B52A8` calls **`0x80015984(id, model)`**
-per door and stores the result — a sibling of the object resolver at `0x800159C4`, unread.
+One new address fell out of that last scan and is read now: `0x800B52A8` calls
+**`0x80015984(id, model)`** per door and stores the result. The function is an object-slot
+word fetch — `slot = (id − 1) & 0xFFF`, record at `T(model+0x1C) + 12·slot`, return the word
+at `record + 12` — and its neighbour `0x800159C4` is the familiar resolver, same slot
+arithmetic and then `0x8001DD20(record + 4)`. Two accessors to §8.3's object table, both
+confirming the 12-byte stride and the 1-based slot at instruction level. What `warp.bin` does
+with the fetched word is the open end of this lead: the per-door data trail now points at the
+word *after* each door's object record.
 
 That closes the writer's question for these rooms into a concrete safe recipe, every step of
 which is probe-backed: placement and scene fields may be edited in place (scene-only probe); an
