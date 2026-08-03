@@ -1248,9 +1248,21 @@ with a sub-object — and each begins at the sub-object's **+0x14 target** and e
 **`T(0x44)`**, both in 73/73. It is the last block before the clip table, 82,300 bytes over
 the archive, up to 5144 in `dash_dot`.
 
-Its head is regular. The first word is a count and the second is `4 × count` in **73/73**;
-the count is 0 in 43 models, 5 in 13, 1 in 8, 4 in 7 and 3 in 2. The `+0x18` pointer lands
-inside it in 73/73, four bytes past where `+0x14` does.
+Its head is an offset array with a sentinel, and that much is measured exactly. The first
+word is a count and the second is `4 × count` in **73/73** — the array's byte length. Then
+`count` i32 follow, and of the 107 across the corpus:
+
+* the **last of each block is negative in 30/30** — a terminator, not an offset;
+* every other one, **77 of 77**, is a non-negative offset that lands inside the block.
+
+So a block with a count of *n* carries *n−1* offsets. The count is 0 in **43 of the 73**
+models, and **36 of those blocks are exactly 8 bytes** — the two head words and nothing else.
+The other seven zero-count blocks still run 236 to 1616 bytes, so the count does not size the
+block. The `+0x18` pointer lands inside it in 73/73, four bytes past where `+0x14` does.
+
+What the offsets reach is unread. Sampling `dash_dot/arena` at its first three gives triples
+of the order of −5214, 4897, −3444, 1267 — coordinate-scale, but that is a look at three
+places and not a decode.
 
 **Nothing found reads it, and the binder demonstrably does not.** 0x8001DE18 resolves the
 sub-object's +0x0C, +0x10, +0x1C and +0x20 and passes over +0x14 and +0x18 entirely — that
