@@ -587,9 +587,20 @@ block also moved `0x20`/`0x24`**, so "the block cannot move" was never establish
 independently — it was an artifact of a theory since refuted. The block-shift probe fills the
 hole: the block moved 2048 bytes with byte-identical content, `0x44` and `0x50` bumped to
 follow, and exactly **two bytes** of the file below the cut differ — the second byte of each of
-those words. Loads → the block is freely movable and the fixed-offset-streamer story dies;
-crashes → the block's position matters to something, and that something is §8.6's reader
-showing itself behaviourally. Result pending.
+those words. **It loads.** The block is movable — shifted 2048 bytes with `0x44`/`0x50`
+following, the room runs — and the fixed-offset-streamer story is dead. Note the limit of the
+result: it does not prove a reader follows the header, only that nothing objects to the move
+(no reader at all would also load). What it proves for a writer is what matters: **the §8.6
+block may be relocated wholesale**, so the space in front of it can be opened.
+
+That closes the writer's question for these rooms into a concrete safe recipe, every step of
+which is probe-backed: placement and scene fields may be edited in place (scene-only probe); an
+existing mesh may be rebuilt in place when its blocks fit the original footprint, which the
+run-length texture encoding makes routine (the no-op rebuild's blocks now fit); the block may
+be pushed outward to open room for new geometry (this probe); and new triangles must take their
+colours and UVs **from the existing shared tables** — the dedup already reuses entries — so
+that `0x20`/`0x24` never move, which is the one operation still forbidden. Growing the shared
+tables themselves stays blocked until the pinning mechanism is understood.
 
 The same page of code answered a question the residency hypothesis had left open. `0x800131B0`
 is the allocator's pre-check, and on a failed fit it calls `0x80017640` — a scavenger that
