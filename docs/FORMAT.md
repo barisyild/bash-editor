@@ -4484,6 +4484,14 @@ are not only undocumented format; they are also where a reader is quietly skippi
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
+
+  Applying that rule to all seven carriers is **inference, not measurement** — every probe
+  ran on `warp_room1` — but the inference has a measured basis: all seven share the layout
+  exactly. Colour table then UV table then a degenerate pool, with `T(0x28) == T(0x08)` in
+  7/7, and every one draws overwhelmingly textured geometry (34/39 to 119/124 meshes carry
+  real UV indices), so every one has the same thing to lose. Extending the pin is the
+  conservative reading of a shared structure, and it is labelled as such rather than as seven
+  measurements.
 * ~~**The §8.6 sub-block locator**~~ — **SOLVED, instruction level, end to end.** The word
   beside a door's object record is a **1-based row index into the §8.3 chunk-descriptor table
   at `T(0x3C)`**, whose row 0 is a null sentinel — which is why the index is 1-based. Row *k*
