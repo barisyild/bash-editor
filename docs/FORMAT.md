@@ -4301,9 +4301,14 @@ are not only undocumented format; they are also where a reader is quietly skippi
   an idle slot shaped like a door entry — the `+0x04` id field sits in the same 1615..1650
   band the live doors use, everything else zero, and the hubs carry most of them. **Key 3**
   is a per-carrier singleton: exactly one per hub and warp room, uniform payload
-  `[2, 1888, 0, 3, …]` — one special entry per room, its consumer unfound. What remains of
-  this item: key 99's single entry, key 3's consumer, and the field-level meaning of the
-  segment words beyond the ones named — the *machinery* is traced end to end.
+  `[2, 1888, 0, 3, …]` — one special entry per room, its consumer unfound. The segment's words are now censused across all 49 track entries and split into two exact
+  classes: **keys 203/204 (37 entries) run 53 ticks with the `0x2000` flag set**, and **keys
+  200..202 (12 entries) run 5,709..15,948 ticks unflagged** — 19+18 = 37 and 4+5+3 = 12, the
+  key populations exactly. Per field: `+0x00/+0x04/+0x08` a room-scale position triple (y
+  mostly negative, cameras above a y-down floor), `+0x0C` the end tick equalling the header's
+  `+0x04` bound in the short class, `+0x10` and `+0x18` zero in 49/49, `+0x14` exactly `0x2000`
+  or 0. What remains of this item: key 99's single entry, key 3's consumer, and what
+  distinguishes the two classes in behaviour — the *machinery* is traced end to end.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
