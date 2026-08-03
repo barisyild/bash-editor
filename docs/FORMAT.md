@@ -423,8 +423,17 @@ read of `[start, end)` through `0x800133C8` — with its teardown twin at `0x800
 blobs and zeroing the slots. A clean instruction-level cross-confirmation of §9.2, and a no-op
 in the seven §8.6 carriers, whose clip count at `0x40` is zero. So **the model-init chain has
 been read end to end and none of it touches `0x20`/`0x24`** — the resolver, which the uv-move
-probe proves exists, is not in the init path. What remains unsearched is the per-frame render
-setup and the mode overlay side. The in-file runtime-slot pattern also names a
+probe proves exists, is not in the init path.
+
+The per-frame packet path is read now too, and it is also innocent. The known `0x20` site at
+`0x80017B88` traces back to `lw $v1, ($at 0x80056998); lw $v1, 0x0C($v1)` — the **current-owner
+global**, dereferenced to the live model base, with `T(0x20)` resolved fresh per packet. A mesh
+drawn through this path would follow a relocated colour table without complaint. So the consumer
+that crashes on a moved `0x20` and scrambles on a moved `0x24` is in neither the init chain nor
+the packet builder — which corners it in the level-specific draw path. That is the same corner
+§8.6's unfound reader lives in, and the block's own content — vertex arrays and index lists —
+is the shape of render data. **The two unfound readers are plausibly one and the same code**;
+that is an inference from position, not a trace, and it is the remaining place to look. The in-file runtime-slot pattern also names a
 candidate mechanism for both symptoms: if slots reached through one route are written by the
 loader while the draw path reads them through another, a byte-identical relocated copy holds
 zeros where the loader wrote live pointers — a null pointer on the `0x20` route, garbage
