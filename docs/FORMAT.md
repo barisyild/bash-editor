@@ -4496,20 +4496,45 @@ are not only undocumented format; they are also where a reader is quietly skippi
   each carrying 2,048 to 12,304 bytes of colour table that no triangle in the numbered meshes
   reaches. Something else consumes those entries in exactly the files where moving `0x24`
   does damage — the strongest circumstantial support the span reading could have, and a
-  pointer at who the unfound consumer serves. §8.6's own arrays were the obvious candidate
-  and they are **not** it, tried two ways. Raw, their values reach 33,944 to 65,408 across the
-  seven — one to two orders of magnitude past the 2,213–6,314 colour entries and 854–3,710 UV
-  entries those files hold. Masked to 13 bits, the way a mesh's colour index is (§5.2), they
-  land in a tight band of **7,711–8,064 in all seven** regardless of how big that file's
-  colour table is: above every table (largest is 6,314) and clustered far too narrowly to be
-  indices into tables that differ by a factor of three. Whatever those u16 encode, it is
-  neither shared table, and the spare colour entries stay unclaimed.
+  pointer at who the unfound consumer serves. **And the consumer is found.** §8.6's second array — the `p2..p3` list of every sub-block —
+  indexes the shared **colour table**, in precisely the band the numbered meshes leave spare.
+  Measured across all seven carriers and all 38 sub-blocks:
 
-  **tables2** tests it directly: colour and UV copied *together* to EOF with both spans
-  preserved to the byte, `0x08`, `0x44` and `0x50` untouched. Correct textures → the length
-  is the mechanism and the pin becomes "the spans must stay intact", which a writer can
-  satisfy while relocating; still scrambled → something about position itself matters and the
-  hunt returns to dynamic observation. The
+  | Model | Spare band | `p2..p3` values | In the spare band | In the table | Outliers |
+  | --- | --- | --- | --- | --- | --- |
+  | `demo_hub1` | 1717..2230 | 536 | 366 | 435 | 101 |
+  | `demo_hub2` | 1699..2212 | 536 | 366 | 435 | 101 |
+  | `warp_room1` | 3413..4515 | 1148 | 925 | 1042 | 106 |
+  | `warp_room2` | 3754..5005 | 1354 | 917 | 1185 | 169 |
+  | `warp_room3` | 4019..6271 | 2320 | 1972 | 2109 | 211 |
+  | `warp_room4` | 3236..6313 | 3864 | 3451 | 3744 | 120 |
+  | `warp_room5` | 3030..4554 | 1470 | 1275 | 1366 | 104 |
+
+  Between 68 % and 89 % of every list lands inside the spare band, 91–97 % inside the table at
+  all, and `warp_room1`'s first sub-block shows the shape plainly: 264 consecutive values
+  running 3415…3649, just above the meshes' reach of 3412. An earlier revision here ruled the
+  arrays out on their *maxima* — which are a handful of sentinels like the single `0x8098` in
+  that same list — and that was a statistic standing in for a look at the data. The sign
+  geometry is coloured from the model's own table, which is why the carriers carry 2,048 to
+  12,304 bytes of it that nothing else touches.
+
+  **tables2 refuted the span reading, and the finding above explains why it had to.** The
+  probe copied colour and UV *together* with both spans preserved to the byte and `0x08`,
+  `0x44`, `0x50` untouched — and the room **crashes**. So the harm is not a stretched length;
+  it is the tables' *position*, and now there is a consumer that cares about position for a
+  reason the packet path never could: **§8.6's sub-blocks are streamed from disc into fresh
+  allocations and coloured from the shared table.** Whatever binds their colour indices to
+  that table is resolved somewhere this document has not traced — at stream-in, in the
+  sign-packet builder that no signature scan has found — and a table that has moved leaves
+  that binding pointing at the old address. It fits the whole ladder: moving `0x20` or `0x24`
+  breaks it and the room dies or draws garbage, moving `0x28`/`0x08`/`0x50` does not touch it,
+  and `safeadd2`, which relocates only mesh-owned blocks, is untouched by it.
+
+  That is a **hypothesis with a named mechanism and a named suspect**, not a solved
+  mechanism: the binding site itself is still unfound, and §11.9's hunt for the sign-packet
+  builder is the same hunt. What is now certain is where to look — inside the code that turns
+  a streamed sub-block into packets — and that the seven carriers are exactly the files where
+  it matters. The
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
