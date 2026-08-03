@@ -4512,7 +4512,11 @@ are not only undocumented format; they are also where a reader is quietly skippi
 
   Between 68 % and 89 % of every list lands inside the spare band, 91–97 % inside the table at
   all, and `warp_room1`'s first sub-block shows the shape plainly: 264 consecutive values
-  running 3415…3649, just above the meshes' reach of 3412. An earlier revision here ruled the
+  running 3415…3649, starting **three entries** above the meshes' reach of 3412 — the exact
+  gap a colour index leaves, since each one covers three consecutive entries. The colour table
+  is also the only candidate that fits: of that sub-block's 288 values, **287 fall inside the
+  colour table (4516 entries), 21 inside the UV table (2770) and 12 inside its own vertex
+  array (755)** — 100 % against 7 % against 4 %. An earlier revision here ruled the
   arrays out on their *maxima* — which are a handful of sentinels like the single `0x8098` in
   that same list — and that was a statistic standing in for a look at the data. The sign
   geometry is coloured from the model's own table, which is why the carriers carry 2,048 to
