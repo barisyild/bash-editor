@@ -552,7 +552,25 @@ to `i32@0x50`, let the compactor reuse the tail — has no instruction-level sup
 and not found, which is not evidence of absence, but the honest state is that the *trigger* for
 the tail becoming garbage is still untraced. What stands without it: the probes' behaviour, the
 compactor's existence, and the blob machinery's refetch-from-disc — the tail is demonstrably
-not usable memory, by a mechanism not yet read. Full size means the game loads everything and
+not usable memory, by a mechanism not yet read.
+
+Two later reads sharpened the picture and then sharpened the problem. The level load is
+**two-stage**: `0x80013650([owner+4], callback)` first — length `[handle+4]`, and the handle's
+shape (seek from `[+0]`, length from `[+4]`) is the file table row's — then the callback
+`0x8001DF74` unlocks the block through `0x80011544`, runs three inits on `owner+0x10`, and
+enqueues the **second** load with `a2 = [owner+0x24]`, so that field is most plausibly the
+*companion file's* length, not the model's. And the group preloader loads a **contiguous
+sector run and splits it in place**: one read spanning the group, then per entry
+`0x80011828(base, (sector[i] − sector[first]) << 11)` and the shrink primitive at the row's
+byte size.
+
+**Which leaves a paradox, stated as one.** If the model's load length is the table row's byte
+size, the whole file — relocated tables included — is in RAM, the packet builders resolve
+live, and the uv-move scramble has no mechanism again. Every explanation eliminated so far is
+recorded above; what would settle it next is a check of this project's own build against every
+table the game reads (are the *group* extents patched as faithfully as the entry rows?), and
+after that, dynamic observation. The scramble is real, reproducible, and as of this reading
+**unexplained** — which is the honest word for it. Full size means the game loads everything and
 frees the tail after init, which the compactor then moves live data over; resident size means a
 short read. Either way the probes' garbage is explained; which mechanism it is stays
 **?unknown?** until that provenance is read.
