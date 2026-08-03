@@ -4307,6 +4307,19 @@ are not only undocumented format; they are also where a reader is quietly skippi
   resolves both fields live — which is precisely what makes the scramble a paradox. The open
   observations that would decide it are named in §2.1. I could not validate the mechanism;
   the behaviour itself is validated eleven times over.
+* **The §8.6 sub-block locator** — the half of the preview reader still untraced. The model
+  side is solved and data-validated 38/38 (the index beside each door's object record, §8.6),
+  the consuming chain is read to the classifier and the generic entity layer (`+84`
+  owner/context, `+72` init callback), and the locator — index *n* to sub-block address —
+  survives a completed sweep: all 27 door-array references classified, all 8 owner-global
+  sites in `gameeng.bin` identified, the pointer-escape scan empty. Behaviourally it ignores
+  the live header (both block movers lost the previews; leaving the block in place restored
+  them, hardware-tested). I could not validate where it gets the address; the next instruments
+  are cross-reference tooling or a RAM watch.
+* **One pending observation** closes two smaller questions at once: the far-boundary probe's
+  textures. Intact confirms the residency model's prediction and pins the uv-move scramble on
+  `0x24`; broken pins it on `0x28`. The image sits in `out/` and has only ever been reported
+  as *loading*.
 
 **MDL mesh header**
 
