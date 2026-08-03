@@ -4454,15 +4454,28 @@ are not only undocumented format; they are also where a reader is quietly skippi
   The pool is the position source animation keyframes index; +0x08 is a frame count and +0x0C
   points at the mesh a clip drives.
 
-* **Why the colour and UV tables are pinned in `warp_room1`** — the largest unknown this
-  document currently carries, and the best-instrumented. Repointing `0x20` crashes the room
-  and repointing `0x24`/`0x28` scrambles every textured surface, established by a ladder of
-  eleven hardware probes whose one-variable deltas are tabulated in §2.1. The mechanism is
-  **unexplained after static reading**: every explanation tried is listed there with what
-  killed it, thirty-one engine functions are mapped in §11.9, and every traced consumer
-  resolves both fields live — which is precisely what makes the scramble a paradox. The open
-  observations that would decide it are named in §2.1. I could not validate the mechanism;
-  the behaviour itself is validated eleven times over.
+* **Why the colour and UV tables are pinned in `warp_room1`** — the one substantial unknown
+  this document still carries, and the most heavily instrumented thing in it. The *facts* are
+  settled: repointing `0x20` crashes the room, and repointing **`0x24` alone** scrambles every
+  textured surface — three bytes of the file, a byte-identical copy, everything else
+  untouched. Fourteen hardware probes tabulate it in §2.1, including four that isolate `0x24`
+  against every field that might bound it (`0x28` following, `0x50` grown, `0x08` grown).
+
+  The *mechanism* is **?unknown?**, and every candidate has been killed rather than left
+  open: the resident boundary (uvmove2 on hardware), the layout boundary (uvmove4), a
+  hard-coded address (no literal occurrence of any table offset disc-wide), an index overrun
+  (6772 indices peak at 1686 against 2770 entries), §8.6's lists as a second consumer (their
+  values reach 65521), and a loader that rewrites the field in memory (a forward taint from
+  the owner global finds **six readers and zero writers** across the executable and all 16
+  overlays — the six being exactly the packet-fillers already read, which is the tracker's own
+  sanity check). All 385 loads at offset 0x24 on the disc are swept and accounted for.
+
+  So every reader that exists resolves the pointer live and would follow a byte-identical
+  copy, and the hardware says it does not. That is recorded as a **contradiction**, not
+  resolved by preferring one side; the remaining instrument is dynamic observation. The
+  writer's rule is exact, and since it cannot be explained it is now *enforced*:
+  `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
+  refuses them outright.
 * ~~**The §8.6 sub-block locator**~~ — **SOLVED, instruction level, end to end.** The word
   beside a door's object record is a **1-based row index into the §8.3 chunk-descriptor table
   at `T(0x3C)`**, whose row 0 is a null sentinel — which is why the index is 1-based. Row *k*
