@@ -624,8 +624,12 @@ slot's instance list through `0x8001D334([slot+108])` and clears bit 15 of its `
 viewport shutdown, the door flow closing screens on entry. Not the locator; one more named
 piece of the engine's slot machinery. The `0x800B6Axx` cluster is read and excluded too — door
 state and lock flow (a key-type-5 test against the entry at `[door+20]`, the `[door+32]` flag,
-HUD branches), with `+36` unread throughout. The remaining unread candidates are the
-`0x800B7Axx` cluster and `gameeng.bin`'s seven other owner-global sites.
+HUD branches), with `+36` unread throughout. The `0x800B7Axx` cluster closes the sweep: small
+accessor helpers — current door's key type from `[door+20]+2`, the `[door+32]` flag — and the
+two-viewport shutdown pair. **All 27 of `warp.bin`'s door-array references are now classified
+— classifier, interaction, state, getters, shutdown — and not one reads `+36` back.** The
+index the classifier stores is consumed outside the overlay: the door struct escapes through
+calls, and the one remaining haystack is `gameeng.bin`'s seven other owner-global sites.
 
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
