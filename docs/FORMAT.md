@@ -1768,7 +1768,37 @@ model §2.1 already records as rounding its 0x50 up.
 > The alignment measurement stands; the inference built on it does
 > not, and the failed searches are still just failed searches.
 
-Its header is the same in all seven:
+### The block is a sequence, not one structure
+
+The header below is the **first of several**. The same 0x34 bytes recur inside the block, always
+on a 4096-byte boundary, and the signature that finds them is specific enough to be worth
+stating: `u16@+0x0A == 4`, `u16@+0x0C == 4`, `i32@+0x14 == 32`, and four ascending offsets
+`p0 < p1 ≤ p2 < p3` whose first and last gaps are *exactly* equal.
+
+| Model | Block | Sub-blocks | Their `+0x08` counts | Bytes inside one |
+| --- | --- | --- | --- | --- |
+| `demo_hub1` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) |
+| `demo_hub2` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) |
+| `warp_room1` | 28,600 | 5 | 289, 206, 167, 258, 236 | 27,068 (95 %) |
+| `warp_room2` | 31,564 | 4 | 236, 336, 186, 205 | 20,064 (64 %) |
+| `warp_room3` | 54,144 | 5 | 437, 262, 400, 235, 307 | 39,936 (74 %) |
+| `warp_room4` | 67,324 | 3 | 360, 355, 943 | 25,732 (38 %) |
+| `warp_room5` | 35,260 | 4 | 183, 253, 387, 232 | 21,568 (61 %) |
+
+**27 sub-blocks in all.** Of the 63 page boundaries in the seven blocks, 27 start one, 20 fall
+inside one, and **16 are neither** — so this partitions most of the material but not all of it,
+and `warp_room4` in particular leaves 62 % unaccounted. Where those 16 sit is recorded rather
+than explained.
+
+Counts recur across models — 167 and 206 each appear in three of the seven — but **no two of the
+27 are byte-identical**, so what repeats is the size of the thing, not the thing.
+
+Taking the sub-block length as `p3 + (p3 − p2)` and stepping to the next page walks
+`demo_hub1`, `demo_hub2` and `warp_room1` from end to end and stops short on the other four, so
+that length rule is right for some sub-blocks and not general. It is written here as the rule
+that was tried, not as the layout.
+
+Its first header, and the shape every one of the 27 shares:
 
 | Offset | Type | Measured |
 | --- | --- | --- |
@@ -1777,13 +1807,17 @@ Its header is the same in all seven:
 | +0x0A, +0x0C, +0x0E | u16 | **4, 4, 1 in 7/7** |
 | +0x10 | i32 | 104, 120, 124, 128, 132, 212 |
 | +0x14 | i32 | **32 in 7/7** |
-| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7. **The first and last gaps are equal in 7/7** — `p3 − p2 == p1 − p0` exactly, 332/364/716/872/468/576 bytes — so the block holds two arrays of the same size with a smaller one between them. Both are even and both are within two bytes of `2 × [+0x08]`, which is consistent with u16 entries and one or two short of the count; that last part is a fit, not a measurement. |
+| +0x18..+0x24 | i32 ×4 | four ascending offsets, every one landing inside the block in 7/7. **The first and last gaps are equal in 7/7** — `p3 − p2 == p1 − p0` exactly, 332/364/716/872/468/576 bytes — so a sub-block holds two arrays of the same size with a smaller one between them. Both are even, and dividing by 2 gives `[+0x08] − 1` in five of the seven and `[+0x08] − 2` in the other two (`warp_room4`, `warp_room2`) — measured now rather than fitted, and the one-or-two shortfall is itself unexplained. |
 | +0x28..+0x30 | i32 | 0 in 7/7 |
 
 What the offsets reach has the **shape** of geometry, which is as far as measurement goes.
 The first is 8-byte records laid out like a vertex record (§4.2) — `demo_hub1` opens
 `636, −171, 3169, 0` then `557, 4, 3065, 1` — and the other three are lists of small ascending
-integers, the shape an index list has. Between 42 and 109 of those records per model, and
+integers, the shape an index list has. Those records **start well before `p0`**, not at it: at
+`p0 − 48` `demo_hub1` is still reading `(783, −57, 2740, 1)`, `(791, −103, 2739, 0)`,
+`(624, −19, 2818, 0)`, and three more follow `p0` itself before the small integers begin. So
+`p0` is a point inside the vertex run rather than its start, and where the run does start is
+?unknown?. Between 42 and 109 of those records per model, and
 their coordinates fall inside the room rather than around it: `warp_room1` spans
 x[3, 1892] y[−3949, 1893] z[−119, 1894] where its drawn extent reaches ±19000 on the sky dome
 alone.
