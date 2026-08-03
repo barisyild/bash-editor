@@ -1235,7 +1235,7 @@ the piece.
 | +0x18 | i32 ×3 | 4096, 4096, 4096 in 2689/2689 — a scale of 1.0 that no code site reads. | *likely* (scale) |
 | +0x28 | MATRIX | 3×3 rotation in 3.12 fixed point, pad, then `t[3]` repeating +0x04. | **confirmed** |
 | +0x48 | MATRIX | A second one, byte-identical to the first in 541/2689. Not read by the loader. | **confirmed** (shape) / ?unknown? (use) |
-| +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
+| +0x74..+0x77 | u8 ×4 | **Searchable tags.** 0x8001DCE0 walks the runtime chain and returns the first record whose *n*-th of these bytes matches a value, so a placement can be found by them. In a warp room the first two are a unique two-part key; see below. +0x76 is 0 in 2688/2689 and +0x77 in 2689/2689. | **confirmed** |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
 | +0x9C | u16 | **The ordering-table index the placement draws into** — its depth bucket — bounds-checked against the segment's last index before the textured path is entered. Flag bit 25 says the record carries one; without it the index is 1. See below. | **confirmed** |
 | +0x9E | u16 | **Traced end to end, and never exercised.** Copied to runtime +0x8A; 0x80019A9C reads it back and writes it to the global at 0x80056AC4, gated on flag bit 30; 0x800190E4 is that global's only reader and tests it for non-zero as one condition among several on a draw path. The data never takes the path: the field is **0 in 2689/2689** records and **bit 30 is clear in 2689/2689**. | **confirmed** (where it goes and what tests it) / ?unknown? (what it would mean) |
@@ -1402,6 +1402,50 @@ frame; nothing read so far settles which. And the cutscene path passes 0x800153B
 `a0` (§9.11.6) while `gameeng.bin` passes the point that ends up in the eye slot as `a1`, so
 one of the two takes the difference the other way round. Everything else in the entry is
 ?unknown?.
+
+### The tags at +0x74, and how a warp room finds a door
+
+The engine can look a placement up by these bytes. `0x8001DCE0` takes a byte index and a
+value, walks the runtime records along the `+0x5C` chain the loader built, and returns the
+first whose selected tag matches:
+
+```
+8001DCE0  lw    $v1, 0x1c($v0)    ; the runtime record array
+8001DCEC  addu  $v0, $v1, $a0     ; a0 selects which of the four bytes
+8001DCF0  lbu   $v0, 0x64($v0)
+8001DCF8  beq   $v0, $a1, ...     ; a1 is the value wanted
+8001DD00  lw    $v1, 0x5c($v1)    ; otherwise the next record
+```
+
+`warp.bin` uses the first two, and bounds them:
+
+```
+800B51EC  lbu   $v0, 0x65($s2)
+800B51F4  addiu $s1, $v0, -1
+800B51F8  sltiu $v0, $s1, 0xc     ; +0x75 is 1..12
+800B5204  lbu   $v0, 0x64($s2)
+800B520C  addiu $v1, $v0, -1
+800B5210  sltiu $v0, $v1, 5       ; +0x74 is 1..5
+```
+
+The corpus says what they key. In `warp_room1` every placement carrying a tag has a
+**unique (+0x75, +0x74) pair**, and the pattern is plainly a room's doors:
+
+| +0x75 | +0x74 present | objects |
+| --- | --- | --- |
+| 1..5 | 1, 2 and 4 | three placements each — 0x5003/0x5002/0x5012 for slot 1, and so on |
+| 10, 11 | 1 and 2 | two each |
+| 20 | 5 | one |
+
+Every warp room does the same, with `+0x75` running 1..N for its own N level slots —
+five in `warp_room1`, six in `warp_room2` and `warp_room5`, seven in `warp_room3`, eight in
+`warp_room4` — and 10, 11, 12 and 20 for the ones that are not level slots. `+0x74` is
+always 1, 2 or 4 on a level slot, so a slot is three placements the game can address
+separately.
+
+What each part *is* on screen is ?unknown? — that would need the emulator, not the file. What
+is settled is the addressing: two tags, a unique key, and an engine call that finds a
+placement by them.
 
 ### Flag bit 25 and the threshold at +0x9C
 
