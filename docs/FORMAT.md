@@ -3927,6 +3927,60 @@ punch holes in the animation.
 
 ---
 
+# 11.9 The engine functions read while tracing
+
+One line per function actually read at instruction level, so the next search starts from a map
+instead of from scratch. Addresses are NTSC-U EXE unless marked as an overlay.
+
+**IO and loading**
+
+| Address | Role |
+| --- | --- |
+| `0x80013650` | Entry-load front door: enqueue with length `[handle+4]`; handle shaped like a file-table row |
+| `0x80013034` | Async IO enqueuer: 7-field request from free list `[0x80050F3C]` into queue `0x80050628+0x0C/0x10` |
+| `0x8001316C` | Matching dequeuer |
+| `0x80013290` | Synchronous wrapper (spin + completion flag `0x80069E7C`) — **no caller found anywhere** |
+| `0x80012FFC` | Queue poll |
+| `0x8001231C` | CD state machine: dispatches completions to `[req+16]` callback or result slot |
+| `0x800121F8` | Request allocation stage: length `[req+8]` rounded to whole sectors; `[+24]` = caller's buffer |
+| `0x80012690`-band | Group preloader: reads one contiguous sector run, splits per entry at `(sector[i]−sector[first])·2048` |
+| `0x80016434/66B8/68E0/6BDC/6C64` | The five `0x800133C8` callers — every one a clip-blob fetcher (§9.2) |
+| `0x80016928` | Blob teardown: frees blobs, zeroes `+0x14` slots |
+
+**Heap**
+
+| Address | Role |
+| --- | --- |
+| `0x8004E0F0` | The heap; file table at `0x8004E110`, group table after it |
+| `0x80011654` / `0x80011748` | The two allocators — near-twins on the same heap |
+| `0x800131B0` | Alloc pre-check: fit → scavenger → compactor → retry |
+| `0x80011498` | Shrink-and-free: trims a block, frees the remainder (4 callers: 3 group trims + blob loader) |
+| `0x80011544` | Block unlock |
+| `0x80011D28` | **Heap compactor** |
+| `0x80017640` | Scavenger: frees packet caches |
+
+**Model init and draw**
+
+| Address | Role |
+| --- | --- |
+| `0x8001DE18` | Ctx builder: caches absolute pointers; writes model base into file at `T(0x3C)+0x0C` |
+| `0x8001D6B4` | §8.5 instance builder: 168-byte runtime records |
+| `0x8001682C` | §9.2 resident-blob scheduler (no-op when `0x40` is 0) |
+| `0x8001D894` | Per-instance transform setup; sets owner global; OT depth from instance `+104` (§8.5 `+0x9C`) |
+| `0x8001DAF8` | Engine-side draw-all-instances |
+| `0x80019A60` | **Draw-by-id**: §2.3 namespace dispatch — `0x2000` headers at `model+52·i+36` (1-based), `0x5000` via `0x800159C4`, `0x3000` billboard from descriptor `[owner+0x18]+56·id` → `0x80029D28`, `0x1000/0x4000` clips |
+| `0x80019094` | Packet cache get-or-build; fills `mesh+0x00`; double-buffered by frame parity |
+| `0x80018694` | Cache-struct allocator (pool `0x80056860`) |
+| `0x800184F0` / `0x800180BC` | Packet builders: pool `0x80056850`, then `0x80017EE8` + `0x80017D90` once per mesh |
+| `0x80017EE8` | Texture&UV packet builder; resolves `model+0x24` **live** at `0x80017F30` via `[[0x80056998]+0x0C]` |
+| `0x80017B08` | Colour/strip builder prologue; same live owner-global resolve |
+| `warp.bin 0x800BBE60` | Per-placement draw: bit-15 test, model from `[struct+0x6C]+0x0C`, calls `0x8001D894` then `0x80019A60` |
+| `warp.bin 0x800BA410` / `0x800BBD24` | Mode loop / packet patcher (owner-global users) |
+
+**Globals**: `0x80056998` current owner (`+8/+12` params, `+0x10` descriptor array, `+0x40`
+arena, `+0x46` bound); `0x8005AB50` current ctx; `0x80056850/60` packet pools; `0x80069E7C` IO
+completion flag.
+
 # 12. Where the shipped Python disagrees with this spec
 
 Read as a to-do list. Line numbers are from the files as of this writing.
