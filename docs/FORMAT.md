@@ -1775,28 +1775,37 @@ on a 4096-byte boundary, and the signature that finds them is specific enough to
 stating: `u16@+0x0A == 4`, `u16@+0x0C == 4`, `i32@+0x14 == 32`, and four ascending offsets
 `p0 < p1 ≤ p2 < p3` whose first and last gaps are *exactly* equal.
 
-| Model | Block | Sub-blocks | Their `+0x08` counts | Bytes inside one |
-| --- | --- | --- | --- | --- |
-| `demo_hub1` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) |
-| `demo_hub2` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) |
-| `warp_room1` | 28,600 | 5 | 289, 206, 167, 258, 236 | 27,068 (95 %) |
-| `warp_room2` | 31,564 | 4 | 236, 336, 186, 205 | 20,064 (64 %) |
-| `warp_room3` | 54,144 | 5 | 437, 262, 400, 235, 307 | 39,936 (74 %) |
-| `warp_room4` | 67,324 | 3 | 360, 355, 943 | 25,732 (38 %) |
-| `warp_room5` | 35,260 | 4 | 183, 253, 387, 232 | 21,568 (61 %) |
+A sub-block's own extent is what its header declares: from its page-aligned start to
+`p3 + (p3 − p2)`, the end of its last array. Everything else in the block is one of two other
+things — the slack from that end to the next page boundary, or a region no sub-block reaches at
+all. All three columns are byte counts and the three add up to the block exactly, 7/7.
 
-**27 sub-blocks in all.** Of the 63 page boundaries in the seven blocks, 27 start one, 20 fall
-inside one, and **16 are neither** — so this partitions most of the material but not all of it,
-and `warp_room4` in particular leaves 62 % unaccounted. Where those 16 sit is recorded rather
-than explained.
+| Model | Block | Sub-blocks | Their `+0x08` counts | Inside a sub-block | Slack to the next page | Reached by none |
+| --- | --- | --- | --- | --- | --- | --- |
+| `demo_hub1` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) | 1,136 | **0** |
+| `demo_hub2` | 12,932 | 3 | 167, 206, 168 | 11,796 (91 %) | 1,136 | **0** |
+| `warp_room1` | 28,600 | 5 | 289, 206, 167, 258, 236 | 27,068 (95 %) | 1,532 | **0** |
+| `warp_room2` | 31,564 | 4 | 236, 336, 186, 205 | 20,064 (64 %) | 4,512 | 6,988 |
+| `warp_room3` | 54,144 | 5 | 437, 262, 400, 235, 307 | 39,188 (72 %) | 5,868 | 9,088 |
+| `warp_room4` | 67,324 | 3 | 360, 355, 943 | 25,732 (38 %) | 4,728 | 36,864 |
+| `warp_room5` | 35,260 | 4 | 183, 253, 387, 232 | 21,568 (61 %) | 5,500 | 8,192 |
+
+**27 sub-blocks in all**, and in `demo_hub1`, `demo_hub2` and `warp_room1` they account for the
+block completely: every byte is either inside one or slack before the next page. The other four
+leave 6,988 to 36,864 bytes that no sub-block reaches — `warp_room4`'s share is nine whole
+pages. Of the 63 page boundaries, 27 start a sub-block, 20 fall inside one, and 16 are neither.
+
+`warp_room3` is the one model where two extents **overlap**, by 748 bytes, so the length rule
+`p3 + (p3 − p2)` cannot be right for both of the sub-blocks involved. Its 72 % is the marked
+figure; summing the declared lengths there would double-count and give 74 %.
 
 Counts recur across models — 167 and 206 each appear in three of the seven — but **no two of the
 27 are byte-identical**, so what repeats is the size of the thing, not the thing.
 
 Taking the sub-block length as `p3 + (p3 − p2)` and stepping to the next page walks
-`demo_hub1`, `demo_hub2` and `warp_room1` from end to end and stops short on the other four, so
-that length rule is right for some sub-blocks and not general. It is written here as the rule
-that was tried, not as the layout.
+`demo_hub1`, `demo_hub2` and `warp_room1` from end to end — the same three the table shows
+nothing left over in — and stops short on the other four. So that length rule is right for some
+sub-blocks and not general. It is written here as the rule that was tried, not as the layout.
 
 Its first header, and the shape every one of the 27 shares:
 
