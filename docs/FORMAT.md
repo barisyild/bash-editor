@@ -450,9 +450,21 @@ shipped models keep every shared table and the geometry boundary at or below `i3
 same moment** (packet build), yet the mesh blocks read correctly and the byte-identical UV
 table does not. The UV consumer's address source therefore differs from the vertex fetch and
 from the traced live resolve at `0x80017F30` — that site is evidently not the consumer that
-matters for these meshes. The split that remains is `0x24` against `0x28`, and two probes
-cover it: **uvmove3** (only `0x24` repointed, `0x28` untouched) and the far-boundary disc
-(only `0x28`/`0x08` moved), whose texture state is still the unreported observation. A mesh
+matters for these meshes. The split is resolved: **uvmove3 repointed `0x24` alone — three bytes of the file, a
+byte-identical copy, `0x28` and `0x50` and everything else untouched — and the textures
+scramble.** So `0x24` is fatal on its own, in every configuration tried: with `0x28`
+following (uv-move), with `0x50` grown over the copy (uvmove2), and by itself (uvmove3).
+
+That gives the sharpest structural statement this investigation has reached, because
+`safeadd2` is its exact counterpart: **pointers in a mesh header relocate fine — its strips,
+vertices, uv-index, texture runs and colour indices all moved to EOF and draw correctly —
+while the model header's shared-table pointer does not.** Same file, same region, same packet
+build, opposite outcomes. Whatever consumes the UV table is not reached through the
+mesh-relative path that the vertex data is, and it is not the live `T(0x24)` resolve at
+`0x80017F30`, which would have followed a byte-identical copy. The mechanism stays
+**?unknown?** — but the writer's rule is now exact and minimal: **`0x24` must not move; `0x20`
+must not move (crash); `0x28`, `0x08`, `0x44`, `0x50` may.** The far-boundary disc's texture
+state would confirm `0x28`'s side of that line and is still the one unreported observation. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
 The level's own draw chain is mapped one link further. `warp.bin` references the owner global at
