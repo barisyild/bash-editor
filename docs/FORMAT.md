@@ -162,6 +162,27 @@ The sector reaches the CD at exactly one place:
 `0x800637B8` has exactly two references in the whole image: this read, and the write at
 0x80027A24 fed by `CdSearchFile("\CRASHBSH\CRASHBSH.DAT;1")`. **confirmed**
 
+### Who calls it, and why every sub-file starts on a sector boundary
+
+That `$s2` is the reader's second argument — a **relative sector inside the entry** — so the
+path can begin a read part-way through a file. It has exactly **two callers** in the executable
+and none in `gameeng.bin` or the 14 mode overlays:
+
+| Caller | Relative sector | What it reads |
+| --- | --- | --- |
+| 0x8001358C | `addu $a1, $zero, $zero` — always 0 | a whole entry from its start |
+| 0x800124E0 | `sra $a1, $a1, 0xb` — a byte offset divided by 2048 | **any byte range inside an entry** |
+
+The second one takes a three-word request — `+0x00` the entry, `+0x04` a byte offset, `+0x08` a
+byte length — and turns it into sectors, rounding the length up with `addiu $a3, $v1, 0x7ff`
+before its own `sra $a3, $a3, 0xb`. The offset gets no such rounding: it is shifted straight
+down, so **a read can only begin on a 2048-byte boundary**.
+
+That explains a measurement §8.2 records without a cause. Every one of the 1037 sub-file starts
+is 0x800-aligned, and it has to be: this is the only way a sub-file is fetched, and the loader
+cannot express a start that is not a whole sector. It also means the alignment of the §8.6 hub
+block is **not evidence about that block** — anything loaded this way would look the same.
+
 Sector size 2048 is also the unique multiplier that makes the table self-consistent: with
 M = 2048 all 992 entries fit inside the DAT with zero overlaps and 840 bytes of slack;
 M = 1024 produces 939 overlaps, M = 512 produces 940, and M ≥ 2328 overshoots EOF by
@@ -993,6 +1014,11 @@ Corpus: 1037 records total; `start < end <= filesize` in **1037/1037**; `+0x14 =
 **1037/1037**; every start is 0x800-aligned in 1037/1037; and for the 225 models with
 sub-files the last payload ends exactly 4 bytes before EOF in 225/225.
 
+The alignment is **forced, not conventional**: the byte-range reader of §1.1 shifts a start
+offset straight down by 11 to get a sector and rounds only the length up, so a sub-file that did
+not begin on a 2048-byte boundary could not be fetched at all. A writer that moves a clip must
+keep it 0x800-aligned.
+
 ## 8.3 Object table (`model + 0x1C`)
 
 > `model+0x4C` used to be described here as a pointer array into this table. It is not — it is
@@ -1736,7 +1762,10 @@ model §2.1 already records as rounding its 0x50 up.
 > *past the resident image* and so nothing could reach it, which would have explained every
 > failed search below in one stroke. It does not: **all 1037 animation blobs in the archive
 > also start past `base + i32@0x50`**, and the game plainly reads those. Being past the
-> boundary rules nothing out. The alignment measurement stands; the inference built on it does
+> boundary rules nothing out. Nor does the alignment argue *for* the block being streamed: §1.1
+> shows the byte-range reader can only start on a 2048-byte boundary, so **everything** the game
+> loads this way is 0x800-aligned and the property distinguishes nothing.
+> The alignment measurement stands; the inference built on it does
 > not, and the failed searches are still just failed searches.
 
 Its header is the same in all seven:
