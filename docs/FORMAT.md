@@ -613,7 +613,12 @@ either of the overlay's two literal `lw +36` instructions — those belong to a 
 a cursor that bounces between bounds by a step and drives `0x8001E21C`/`0x8001E41C`, the shape
 of an animation pump. The locator therefore computes its `+36` access from the array base, and
 the 27 reference sites (clusters at `0x800B65xx`, `0x800B6Axx`, `0x800B7Axx`) are where it will
-be found or excluded.
+be found or excluded. The first cluster is read and excluded: `0x800B64E0..0x800B66xx` is door
+*interaction* — the player-at-door check against the entry at `[door+20]`, key tests, and
+hand-offs into `gameeng.bin` at `0x80095A04`/`0x80095E38`. That hand-off is itself the lead:
+the door flow delegates into the engine overlay, which also carries eight owner-global
+references — the preview machinery plausibly lives in `gameeng.bin`, and its eight sites are
+the next haystack after `warp.bin`'s remaining clusters.
 
 Where that locator's anchor lives is still ?unknown?, and the search log covers: the model
 header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
