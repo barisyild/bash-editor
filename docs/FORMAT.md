@@ -4472,7 +4472,15 @@ are not only undocumented format; they are also where a reader is quietly skippi
 
   So every reader that exists resolves the pointer live and would follow a byte-identical
   copy, and the hardware says it does not. That is recorded as a **contradiction**, not
-  resolved by preferring one side; the remaining instrument is dynamic observation. The
+  resolved by preferring one side.
+
+  One experiment can still cut it without an emulator, by asking whether the relocated table
+  is read at all. **uvzero** is `uv-move` with the copy replaced by the same number of zero
+  bytes, the original table left intact where it was. If the game follows `0x24`, every
+  textured triangle samples a single texel and the room goes **flat-coloured**; if it renders
+  the *same scramble* as `uv-move`, the copy is never read and moving `0x24` breaks something
+  other than the UV fetch — which would explain why a byte-identical copy did not help and
+  redirect the hunt at that other thing. The
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
