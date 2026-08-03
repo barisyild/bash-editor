@@ -593,6 +593,15 @@ result: it does not prove a reader follows the header, only that nothing objects
 (no reader at all would also load). What it proves for a writer is what matters: **the §8.6
 block may be relocated wholesale**, so the space in front of it can be opened.
 
+Where the position anchor lives is still ?unknown?, and the search log now covers: the model
+header (both movers lost the previews with `0x44`/`0x50` moved consistently), the file table
+(no overlay references it), literal block offsets (none in `warp.bin`, `gameeng.bin` or
+`menu.bin`), a per-room sector table (`[82, 72, 88, 81, 81]` as u32 or u16: absent; the one
+`82` in `warp.bin` sits in a consecutive-integer id run), and `warp.bin`'s seven `+36`-shaped
+struct writes (zeros, constants 12 and 4096, and one resolver result — none a load length).
+One new address fell out of that last scan: `0x800B52A8` calls **`0x80015984(id, model)`**
+per door and stores the result — a sibling of the object resolver at `0x800159C4`, unread.
+
 That closes the writer's question for these rooms into a concrete safe recipe, every step of
 which is probe-backed: placement and scene fields may be edited in place (scene-only probe); an
 existing mesh may be rebuilt in place when its blocks fit the original footprint, which the
