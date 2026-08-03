@@ -438,15 +438,21 @@ put a *table* past the resident line without growing it — uv-move's copy sat p
 `0x50` — while safeadd2's mesh blocks live in the same region **with `0x50` grown over them**
 and draw correctly on hardware. If the resident line governs what stays readable, the live
 resolvers and the hardware results stop contradicting: a live resolve into memory past the
-kept span reads garbage no matter how correct the pointer is. The discriminator is
-**uvmove2**: byte-for-byte the uv-move probe with exactly one change, `0x50` grown
-sector-aligned over the relocated copy. Textures intact → the resident boundary is the
-pinning mechanism, isolated on one variable; still scrambled → `0x50` is exonerated and the
-paradox stands. (The tables-inside probe grew `0x50` and still crashed, but it moved `0x20`
-as well, so it cannot separate the two — this probe can.) The law also holds as a corpus
-invariant: **all 400 shipped models keep every shared table and the geometry boundary at or
-below `i32@0x50`**, 400/400 — no shipped file ever asks the engine to read a table from past
-the resident line, which is exactly the situation every fatal probe created. A mesh
+kept span reads garbage no matter how correct the pointer is. The discriminator was
+**uvmove2** — byte-for-byte the uv-move probe with exactly one change, `0x50` grown
+sector-aligned over the relocated copy — **and it refuted the law's mechanism role on
+hardware: the textures scramble anyway.** `0x50` is exonerated as the scramble factor, and
+the clean probe-sorting that suggested it stands exposed as another confound: every
+table-moving probe also moved the pointers. What survives is the corpus fact — all 400
+shipped models keep every shared table and the geometry boundary at or below `i32@0x50`,
+400/400, worth honouring in a writer regardless — and one newly sharp observation:
+**safeadd2's mesh blocks and uvmove2's UV copy occupy the same region and are consumed at the
+same moment** (packet build), yet the mesh blocks read correctly and the byte-identical UV
+table does not. The UV consumer's address source therefore differs from the vertex fetch and
+from the traced live resolve at `0x80017F30` — that site is evidently not the consumer that
+matters for these meshes. The split that remains is `0x24` against `0x28`, and two probes
+cover it: **uvmove3** (only `0x24` repointed, `0x28` untouched) and the far-boundary disc
+(only `0x28`/`0x08` moved), whose texture state is still the unreported observation. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
 The level's own draw chain is mapped one link further. `warp.bin` references the owner global at
