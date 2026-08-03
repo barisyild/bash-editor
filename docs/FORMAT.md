@@ -1810,13 +1810,34 @@ either inside a sub-block or slack before the next 2048 boundary. Nothing is unr
 two extents overlap — the 748-byte overlap an earlier revision reported in `warp_room3` was an
 artifact of the same 4096 assumption, which mis-sited that file's sub-blocks entirely.
 
-The slack is genuine zero padding in five of the seven — 1,136, 1,136, 1,532, 3,576 and 3,696
-bytes, every one of them zero. In `warp_room4` and `warp_room3` it is not: **5,158 bytes are
-non-zero**, and they sit behind exactly four sub-blocks — `warp_room4` indices 4 and 5,
-`warp_room3` indices 1 and 5. For those four the length rule `p3 + (p3 − p2)` under-reads and
-their true extent is ?unknown?; for the other 34 it lands on padding and is consistent with
-being right. The four are not distinguished by the header: all four have equal first and last
-gaps, and two of them have `+0x28` and `+0x2C` zero like the rest.
+**The slack is entirely zero.** Measured as the run from a sub-block's declared end to where the
+*next sub-block starts* — rather than to the next 2048 boundary, which is what an earlier
+revision measured and which silently counted the next sub-block's own header as slack —
+it comes to **16,456 bytes, not one of them non-zero**. So wherever `p3 + (p3 − p2)` fits, it is
+consistent with being the true end, and the claim in an earlier revision that four sub-blocks
+left 5,158 non-zero bytes behind them was an artifact of that mis-measurement.
+
+Where it does not fit is the real residue, and it runs the other way from what that revision
+said: the rule **over**-reads, never under-reads. In **11 of the 38** the declared end runs past
+the next sub-block's start — or past the end of the block itself — by 188 to 1,844 bytes:
+
+| | Overrun |
+| --- | --- |
+| `demo_hub1`/3, `demo_hub2`/3 (last) | 292 |
+| `warp_room1`/5, `warp_room2`/6, `warp_room5`/6 (last) | 428, 424, 420 |
+| `warp_room3`/7, `warp_room4`/8 (last) | 808, 1,844 |
+| `warp_room3`/1, `warp_room3`/5 | 448, 300 |
+| `warp_room4`/4, `warp_room4`/5 | 188, 608 |
+
+Seven of the eleven are the last sub-block of their file, where the overrun is past the block's
+own end, so the file itself refutes the length there. The last array cannot be `p3 − p2` bytes
+long in any of the eleven, and how long it really is is ?unknown?. Everything up to `p3` is
+accounted for in all 38.
+
+Clipping each extent at the next sub-block and adding it all up closes the block completely:
+across the seven files' 242 KB there is **not one non-zero byte outside a sub-block**. The
+16,456 bytes that fall outside one are zero, every one of them. What the sub-blocks *mean* is
+still open — see the reader searches below — but where they begin and end no longer is.
 
 Counts recur across models — 167 and 206 each appear in three of the seven — but **no two
 sub-blocks are byte-identical**, so what repeats is the size of the thing, not the thing.
