@@ -512,8 +512,17 @@ not in this code — it travels inside the request for the **queue worker** to u
 further is read: `0x80013290` is the **synchronous load wrapper** — enqueue with a completion
 flag at `0x80069E7C` and the destination buffer from the entry struct's `+4`, then spin on
 `0x80012FFC`, servicing the drive through `0x8001231C` and waiting a frame through `0x8002BAE8`
-each lap, with `0x80011544` as the post-load hook. The sector arithmetic is one level lower, in
-that service path, and remains unread.
+each lap, with `0x80011544` as the post-load hook. The sector arithmetic is read: `0x800121F8`, the request's allocation stage, takes the **load
+length from `[request+8]`**, rounds it up to whole 2048-byte sectors, and allocates — through
+`0x80011654` on one path, and on the other through a fit-check that runs the scavenger and the
+compactor before falling back to `0x80011748`; a request arriving with `[+24]` set brings its
+own buffer, which is how the blob fetches pass their exact byte ranges. So the length is caller
+data, not loader arithmetic: the sync loader forwards `[entry_struct+4]`, and **whose struct
+that is — and whether its `+4` holds the file's full size or its resident size — is the single
+untraced hop left in the load path.** Full size there means the game loads everything and the
+tail is freed after init, which the compactor then moves live data over; resident size means a
+short read. Either way the probes' garbage is explained; which mechanism it is stays
+**?unknown?** until that one provenance is read.
 
 The same page of code answered a question the residency hypothesis had left open. `0x800131B0`
 is the allocator's pre-check, and on a failed fit it calls `0x80017640` — a scavenger that
