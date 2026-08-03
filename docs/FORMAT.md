@@ -475,12 +475,23 @@ T(0x08)`. `safeadd2`, the counterpart that works, grows it: `install_mesh` moves
 over the blocks it appends. So the contrast that looked like "mesh-relative pointers relocate,
 model-relative ones do not" may simply be "material inside the boundary is read, material
 outside it is not" — a rule the corpus states and the shipped writer already honours.
-**uvmove4** tests exactly that: `uvmove`'s copy and pointers with `0x08` (and `0x50`) grown to
-cover it, `0x20` and `0x44` untouched. Textures intact → the boundary is the mechanism, and
-the whole ladder resolves into §2.1's own invariant; still scrambled → the boundary joins
-`0x50` in exoneration and `0x24` is pinned for a reason still unfound. Until then the writer's
-rule stands as measured: **`0x20` and `0x24` must not move; `0x28`, `0x08`, `0x44`, `0x50`
-may.** The far-boundary disc's texture
+**uvmove4** tested exactly that — `uvmove`'s copy and pointers with `0x08` and `0x50` grown to
+cover it, `0x20` and `0x44` untouched — **and the textures scramble anyway.** The layout
+boundary joins `0x50` in exoneration. Four probes now agree that repointing `0x24` is fatal on
+its own, under every combination of the fields that could plausibly bound it.
+
+Two more candidates died on inspection rather than on hardware. **Nothing hard-codes the
+table's position**: neither `T(0x20)`, `T(0x24)`, `T(0x28)` nor the raw pointer words occur as
+a literal anywhere in the executable or the 16 overlays. And **nothing over-runs the table**:
+the model's 6772 face UV indices reach a maximum of 1686, and the table holds 2770 entries, so
+`max + 3` fits with room to spare — the scramble is not an out-of-range read that a different
+address happens to survive. §8.6's index lists were checked as a possible second consumer and
+are not: their values run to 65521, far past the table's 2770 entries, so they index something
+else entirely.
+
+So the writer's rule stands exactly as measured, with its reason **?unknown?** after every
+static avenue this project can reach: **`0x20` and `0x24` must not move; `0x28`, `0x08`,
+`0x44`, `0x50` may.** The far-boundary disc's texture
 state would confirm `0x28`'s side of that line and is still the one unreported observation. A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
