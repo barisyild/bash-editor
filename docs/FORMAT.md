@@ -1230,14 +1230,14 @@ the piece.
 
 | Offset | Type | Meaning | Confidence |
 | --- | --- | --- | --- |
-| +0x00 | u32 | Flag word. **Bit 15 set in 2689/2689** and tested at 0x8001DD6C before anything is drawn. 0x02008000 (2100) or 0x00008000 (589). | **confirmed** (bit 15) / ?unknown? (bit 25) |
+| +0x00 | u32 | Flag word, and both live bits are now read. **Bit 15 set in 2689/2689**, tested at 0x8001DD6C before anything is drawn. **Bit 25** says the record carries its own threshold at +0x9C — see below. The word is 0x02008000 (1900) or 0x00008000 (789). | **confirmed** (bit 15) / ?unknown? (bit 25) |
 | +0x04 | i32 ×3 | Position, in the same units as a vertex. | **confirmed** |
 | +0x18 | i32 ×3 | 4096, 4096, 4096 in 2689/2689 — a scale of 1.0 that no code site reads. | *likely* (scale) |
 | +0x28 | MATRIX | 3×3 rotation in 3.12 fixed point, pad, then `t[3]` repeating +0x04. | **confirmed** |
 | +0x48 | MATRIX | A second one, byte-identical to the first in 541/2689. Not read by the loader. | **confirmed** (shape) / ?unknown? (use) |
 | +0x74 | u8 ×4 | Four bytes, copied one at a time. | **confirmed** (four bytes) / ?unknown? (meaning) |
 | +0x88 | u16 | **The id of what is drawn.** | **confirmed** |
-| +0x9C | u16 | Copied to runtime +0x68. 42 distinct values — 0 (789), 256 (419), 512 (215), 51 (144), 384 (127), 128 (104). No reader found for the runtime slot. | ?unknown? |
+| +0x9C | u16 | **A threshold the draw path compares before it will use a texture**, and flag bit 25 is what says the record carries one. See below. | **confirmed** (the path) / ?unknown? (the units) |
 | +0x9E | u16 | **Traced end to end, and never exercised.** Copied to runtime +0x8A; 0x80019A9C reads it back and writes it to the global at 0x80056AC4, gated on flag bit 30; 0x800190E4 is that global's only reader and tests it for non-zero as one condition among several on a draw path. The data never takes the path: the field is **0 in 2689/2689** records and **bit 30 is clear in 2689/2689**. | **confirmed** (where it goes and what tests it) / ?unknown? (what it would mean) |
 
 ### The +0x14 block: the last thing in a level, and nothing found reads it
@@ -1402,6 +1402,35 @@ frame; nothing read so far settles which. And the cutscene path passes 0x800153B
 `a0` (§9.11.6) while `gameeng.bin` passes the point that ends up in the eye slot as `a1`, so
 one of the two takes the difference the other way round. Everything else in the entry is
 ?unknown?.
+
+### Flag bit 25 and the threshold at +0x9C
+
+The draw path reads the record once more, right before it reaches for a texture:
+
+```
+; 0x80019E98 — s4 = the flag word, s3 = the runtime record
+80019E98  lui   $v0, 0x200
+80019E9C  and   $v0, $s4, $v0     ; bit 25
+80019EA0  beqz  $v0, 0x80019eac
+80019EA4  addiu $a2, $zero, 1     ; (delay slot) clear -> the threshold is 1
+80019EA8  lh    $a2, 0x68($s3)    ; set   -> the record's own, from +0x9C
+80019EB4  lh    $v0, 0x46($v0)    ; against the render context's +0x46
+80019EBC  sltu  $v0, $a2, $v0
+80019EC0  beqz  $v0, 0x80019ef8   ; not smaller -> nothing is drawn
+80019ED8  lw    $v0, 0x18($v1)    ; smaller -> the texture descriptor array
+80019EE0  jal   0x80029d28        ;   and on into the textured path
+```
+
+The corpus confirms the pairing without an exception. **Bit 25 clear ⟺ +0x9C is zero**: 789
+records have the bit clear and all 789 have a zero there, 1900 have it set and all 1900 have
+a non-zero. So the bit is not a mode, it is a "this record states its own threshold" marker,
+and the loader's copy to runtime +0x68 is what the compare reads.
+
+What the number measures is ?unknown? — `[ctx+0x46]` has no writer this document has found,
+and the values (256 ×419, 512 ×215, 51 ×144, 384 ×127, 128 ×104, and 93 records holding
+0xFFB4, which `lh` sign-extends into a value `sltu` can never find smaller) are not obviously
+a distance or a frame count. What is settled is the mechanism: a placement that fails this
+compare draws nothing.
 
 ### The id is the same id the draw dispatcher takes
 
