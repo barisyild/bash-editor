@@ -256,7 +256,7 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 | 0x40 | i32 | `count_44` | Number of 24-byte clip records. Range 0..14; 0 in 148 of the 373 models with meshes. | **confirmed** |
 | 0x44 | i32 ptr | `ptr_subfiles` | Appended clip directory, 24-byte records: the **animation** table. See §8.2 and §9. | **confirmed** |
 | 0x48 | i32 | `count_4C` | Number of i32 entries in the 0x4C array. Range 0..40. | **confirmed** |
-| 0x4C | i32 ptr | `ptr_ptr_array` | `count_4C` self-relative i32 pointers, stride 4. All 688 corpus entries resolve inside the file and land inside the 0x1C object table at 0, 4 or 8 mod 12 (401 / 163 / 124). | **confirmed** |
+| 0x4C | i32 ptr | `ptr_scene_roots` | **The scene root array of §9.11**, `i32@0x48` self-relative i32 pointers at stride 4, read by the scene spawner at 0x8001FF78 which indexes it by a root number. 688 entries over 187 models, all resolving inside the file. An earlier revision called this `ptr_ptr_array` and said the entries land in the 0x1C object table "at 0, 4 or 8 mod 12" — that was a residue taken with no containment test, and it is wrong: **0 of the 688 land inside the object records**, 556 land past the table entirely, and the 132 that touch it land exactly *on* `T(0x1C)`, the count word. See below. | **confirmed** |
 | 0x50 | i32, **base-relative** | `resident_size` | `base + i32@0x50` is the end of the 0x44 directory in 399/400 and ≤ file size in 400/400. Equals the file size exactly for the 141 models with no sub-files; ≤ the first sub-file's start in 225/225. **Not** self-relative. No EXE site found that reads it. It is a multiple of 0x800 in **exactly 8 models** — the seven hub/warp rooms, where it equals `T(0x44)` and §8.6's block begins there, plus `chaselevel.mdl`, the one file where it is rounded up. Do **not** read that as a load boundary: all 1037 animation blobs also start past `base + i32@0x50` and the game reads them, so nothing about the field says what is or is not resident. | *likely* |
 | 0x54 | i32 | `mesh_count` | Number of 0x34-byte mesh headers that follow at 0x58. 0 in 27/400 (legitimately). | **confirmed** |
 
@@ -993,7 +993,15 @@ Corpus: 1037 records total; `start < end <= filesize` in **1037/1037**; `+0x14 =
 **1037/1037**; every start is 0x800-aligned in 1037/1037; and for the 225 models with
 sub-files the last payload ends exactly 4 bytes before EOF in 225/225.
 
-## 8.3 Object table (`model + 0x1C`) and pointer array (`model + 0x4C`)
+## 8.3 Object table (`model + 0x1C`)
+
+> `model+0x4C` used to be described here as a pointer array into this table. It is not — it is
+> the **scene root array** of §9.11, and this project's own `crashbash/scene.py` has read it
+> that way all along, off the spawner at 0x8001FF78. Measured against the object table:
+> **0 of the 688 entries land inside an object record**, 556 land past the table entirely, and
+> the 132 that touch it land exactly on `T(0x1C)` — the count word, not a record. The old
+> "0, 4 or 8 mod 12" split was a residue computed without ever checking containment; its three
+> figures sum to 688 because every entry has *some* residue mod 12.
 
 The object table is addressed by the **0x5000** id namespace with a **12-byte stride** and a
 1-based id:
@@ -1099,11 +1107,13 @@ stand where the game stands them. A reader that walks only the numbered array sh
 dome with nothing under it.
 
 The 0x4C array is `i32@0x48` self-relative i32 pointers, stride 4, ending exactly where the
-0x18 block begins (400/400). All 688 corpus entries resolve inside the file and land **inside
-the 0x1C table** at 0, 4 or 8 mod 12 (401 / 163 / 124) — i.e. each names a *field* of a
-12-byte object record. The overall extent `T(0x4C) − T(0x1C)` is not a multiple of 12
-(0 mod 12 in 279 models, 4 in 70, 8 in 51), so the block is a heterogeneous object graph
-rather than a flat array. One record kind is now partly readable: the scene **nodes** the
+0x18 block begins (400/400). All 688 corpus entries resolve inside the file, and **each names a
+scene root** (§9.11), not a field of an object record: 0 of the 688 land inside the object
+records, 556 land past the whole table, and the 132 that touch it land exactly on `T(0x1C)`.
+The overall extent `T(0x4C) − T(0x1C)` is not a multiple of 12 (0 mod 12 in 279 models, 4 in
+70, 8 in 51), so what sits between the object table and the root array is a heterogeneous
+object graph rather than more object records. One record kind is now partly readable: the
+scene **nodes** the
 cutscene player walks, which carry a time window, a **play command** — loop start/end
 frames and mode — at `+0x14`, and placement keys from `+0x30` at stride 0x4C; see the
 looping part of §9.7. The rest of the graph is no longer unknown: §9.11.9 reads the type table
