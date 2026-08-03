@@ -430,7 +430,20 @@ The per-frame packet path is read now too, and it is also innocent. The known `0
 global**, dereferenced to the live model base, with `T(0x20)` resolved fresh per packet. The
 previously unchecked `0x80017964/994` pair is the same story from another packet-filler:
 `[0x80056998] → [owner+0x0C] → T(0x20)` live, colour triples written straight into the packet.
-Every inspected member of the ten-site `0x20` list resolves live. A mesh
+Every inspected member of the ten-site `0x20` list resolves live.
+
+**The paradox has one candidate law left, and a one-variable probe now targets it.** Lining
+the eleven probes up against `i32@0x50` instead of the pointers: every fatal or garbled probe
+put a *table* past the resident line without growing it — uv-move's copy sat past an untouched
+`0x50` — while safeadd2's mesh blocks live in the same region **with `0x50` grown over them**
+and draw correctly on hardware. If the resident line governs what stays readable, the live
+resolvers and the hardware results stop contradicting: a live resolve into memory past the
+kept span reads garbage no matter how correct the pointer is. The discriminator is
+**uvmove2**: byte-for-byte the uv-move probe with exactly one change, `0x50` grown
+sector-aligned over the relocated copy. Textures intact → the resident boundary is the
+pinning mechanism, isolated on one variable; still scrambled → `0x50` is exonerated and the
+paradox stands. (The tables-inside probe grew `0x50` and still crashed, but it moved `0x20`
+as well, so it cannot separate the two — this probe can.) A mesh
 drawn through this path would follow a relocated colour table without complaint.
 
 The level's own draw chain is mapped one link further. `warp.bin` references the owner global at
