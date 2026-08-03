@@ -1365,9 +1365,19 @@ GTE control registers 0..4, its translation into 5..7 and its +0x18 into control
 
 | Offset | Type | Meaning | Confidence |
 | --- | --- | --- | --- |
+Every one of the eleven call sites was followed, and between them they touch **ten** of the
+entry's 104 bytes:
+
+| Offset | Type | Meaning | Confidence |
+| --- | --- | --- | --- |
 | +0x0C | i32 | The key the search matches. 1 exists in 73/73. | **confirmed** |
-| +0x30 | 3 × i32 | A point, read as a triple at 0x800961BC and landing in the camera's eye slot. **213 of 217 lie inside their own model's bounds.** | **confirmed** (a position) / *likely* (the eye) |
-| +0x4C | 3 × i32 | A second point, 0x1C further on, differenced against the first by 0x800153B4. | **confirmed** (a position) |
+| +0x30..+0x38 | 3 × i32 | Point A, read as a triple at 0x800961BC and landing in the camera's eye slot. **213 of 217 lie inside their own model's bounds.** | **confirmed** (a position) / *likely* (the eye) |
+| +0x3C, +0x40 | i32, u16 | Read by `warp.bin` 0x800B7FE4 and `menu.bin` 0x800B598C, and **0 in 217/217** — so code reaches them and never finds anything there. | **confirmed** (always zero) |
+| +0x4C..+0x54 | 3 × i32 | Point B, 0x1C past A, differenced against it by 0x800153B4. | **confirmed** (a position) |
+| +0x58 | i32 | A non-negative scalar in 217/217, and **equal to the distance between A and B to the unit in 137 of 217**, within 2 % in 146. Consistent with a cached distance; 71 entries disagree by more, up to 36 %, so it is not simply that. | **confirmed** (non-negative, and what it usually equals) / ?unknown? (why the rest differ) |
+| +0x74 | i32 | Read by `warp.bin` 0x800B8488 alongside +0x58. | **confirmed** (that it is read) / ?unknown? (meaning) |
+
+The other ~78 bytes are touched by none of the eleven.
 
 ### The keys, and who asks for them
 
@@ -3452,7 +3462,10 @@ are not only undocumented format; they are also where a reader is quietly skippi
   loop and which occur in exactly the seven rooms it drives. What is left open is narrower
   than it was: the ~0x50 bytes of the 104-byte record outside +0x0C, +0x30 and +0x4C, and the
   four keys (0, 3, 203, 204) that no call site among the eleven asks for. **I could not
-  validate what reads those, which is not evidence nothing does.**
+  validate what reads those, which is not evidence nothing does.** The record itself is
+  better mapped than it was: all eleven sites were followed and they touch ten of the 104
+  bytes (§8.5), including two — +0x3C and +0x40 — that code reads and that are **0 in
+  217/217**. The remaining ~78 bytes no site among the eleven touches.
 * ~~**The block at sub-object +0x10**~~ — **closed**, see §8.5. It is `[i32 count]` then that
   many 16-byte records, read at 0x80024B70 through the instance's +0x30, and all 473 records
   in the archive resolve their +0x0C inside their own block. What the three-word payload
