@@ -327,13 +327,16 @@ standalone pointers. `T(x)` below means `x + i32@x` — the resolved target.
 > It says only that no shipped model puts geometry past either point, and that a build which
 > does can fail to load.
 
-### Seven models have no room to grow at all
+### Seven models will not take a relocated colour or UV table
 
 In **7 of the 400** — the five warp rooms and the two demo hubs — `i32@0x50` and `T(0x44)` are
-the *same address*, and everything from there to the end of the file is §8.6's block. There is
-no slack between the geometry and the clip table, so a writer that needs one more byte has only
-two places to put it, and **both were measured on hardware and both crash**: push the §8.6 block
-along, or land past `i32@0x50`.
+the *same address*, and everything from there to the end of the file is §8.6's block.
+
+> **An earlier revision of this section said these seven "cannot grow", which the measurements
+> below refute.** Appending 2048 bytes to `warp_room1` loads perfectly well; so does moving
+> `0x08`. What crashes is relocating the shared colour and UV tables, and *why* that crashes is
+> **?unknown?** — no mechanism has been found, only the result. "No room to grow" was a story
+> told over the evidence rather than read out of it, and it contradicted a probe already run.
 
 | Model | `i32@0x50` = `T(0x44)` | §8.6 block to EOF |
 | --- | --- | --- |
@@ -349,22 +352,35 @@ The finding came from a ladder of probes on `warp_room1`, each changing one thin
 last and each run in the emulator. It is worth keeping because it rules out most of what a
 writer touches:
 
-| Probe | What it changed | Result |
-| --- | --- | --- |
-| scene only | 224 bytes of placement fields, no size change | **loads** |
-| grow | 2048 zero bytes appended, not one pointer touched | **loads** |
-| boundary | `0x08` alone, moved 16 bytes, one byte of the file | **loads** |
-| tables | colour/UV/pool relocated, `0x44`/`0x50` moved with them | crashes |
-| tables appended | the same, but §8.6's block left exactly where it was | crashes |
-| self-transplant | mesh 1 rebuilt from its own bytes, strips and pool identical | crashes |
-| one mesh | mesh 1 rebuilt from glTF | crashes |
+| Probe | What it changed | File size | Result |
+| --- | --- | --- | --- |
+| scene only | 224 bytes of placement fields, in place | 196,536 | **loads** |
+| boundary | `0x08` alone, one byte of the file | 196,536 | **loads** |
+| far boundary | `0x08` and `0x28` moved 126 KB to EOF; `0x20`/`0x24` untouched | 196,552 | **loads** |
+| grow | 2048 zero bytes appended, not one pointer touched | 198,584 | **loads** |
+| tables appended | colour/UV/pool copied to EOF, §8.6 block left in place | 220,140 | crashes |
+| tables | the same, block re-appended after them, `0x44`/`0x50` follow | 221,112 | crashes |
+| tables inside | the same, with `0x50` grown to cover the copies | 221,184 | crashes |
+| one mesh | mesh 1 rebuilt from glTF | 228,640 | crashes |
+| self-transplant | mesh 1 rebuilt from its own bytes, strips and pool identical | 243,640 | crashes |
 
-So the geometry is not at fault (the self-transplant's strip list and vertex pool were
-byte-identical), the mesh headers are not (the table probes never touched them), the file may
-grow, and `0x08` may move. Nothing in the file points at the shared tables except the header's
-own `0x20`/`0x24`/`0x28` — a scan of every self-relative i32 in `warp_room1` finds exactly one
-pointer to each. What is left is that in these seven there is nowhere for the relocated tables
-to go. **A writer must edit them in place, within the bytes they already occupy.**
+That rules out a great deal. The geometry is not at fault — the self-transplant's strip list and
+vertex pool were byte-identical to the original. The mesh headers are not — the table probes
+never touched them. `0x08` is not: the far-boundary probe moved it 126 KB, and the vector-pool
+pointer `0x28` with it, and loaded. Scene fields may be edited in place, §8.6's block may stay
+or move, and `0x50` may stay or grow without changing the outcome. Nothing in the file even
+points at the shared tables except the header's own `0x20`/`0x24`/`0x28`: a scan of every
+self-relative i32 in `warp_room1` finds exactly **one** pointer to each.
+
+**Two hypotheses still fit every row, and the third column is why.** Every crashing probe moved
+`0x20`/`0x24` — and every crashing probe also grew the file past 220 KB, while no loading probe
+passed 198,584. "The colour and UV tables cannot be relocated" and "the file cannot grow past a
+threshold in (198,584 .. 220,140]" both fit nine of nine. The second has a plain mechanism — a
+fixed per-room heap budget in the warp overlay, which +2 KB fits and +24 KB overflows — and
+`warp_room3` shipping at 234,368 rules out only a *global* threshold, not a per-room one. The
+discriminating probe is 24,576 appended zero bytes and nothing else: same size as the crashing
+table probes, not one pointer changed. Until it runs, the cause is **?unknown?** — what is
+established is which probes crash, not why.
 | `i32@0x0C >= i32@0x40` | 400/400 |
 | `base + i32@0x50 == T(0x44) + 24*i32@0x40` | 399/400 (`chaselevel.mdl` is +1740, rounded up to 0x26000) |
 | `T(0x20) <= T(0x24)` | 400/400 — but **strict** `<` only 378/400 |
