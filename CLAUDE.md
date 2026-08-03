@@ -62,15 +62,17 @@ They are not style preferences.
   inserted length. Appending instead breaks both: a warp room has no clips to
   strip, so the only thing between `T(0x44)` and EOF is §8.6's block, and the
   new geometry lands inside it. `warp_room1` built that way would not load.
-- **In the seven §8.6 carriers the shared colour and UV tables are pinned**
-  (§2.1's probe ledger). Repointing `0x20` crashes the room; repointing
-  `0x24`/`0x28` scrambles every textured surface — established by eleven
-  hardware probes, mechanism still untraced. Use
-  `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)` there: tables
-  and their three header fields stay byte-identical, colours map to the nearest
-  existing entry, textured triangles need their exact UV triple already in the
-  table, and the §8.6 block is pushed outward to make room (the block itself is
-  movable — probed).
+- **In the seven §8.6 carriers the shared colour and UV tables are pinned, and
+  the §8.6 block must not move either** (§2.1's probe ledger). Repointing
+  `0x20` crashes the room; repointing `0x24`/`0x28` scrambles every textured
+  surface; moving the block — even byte-identical, with `0x44`/`0x50`
+  following — loses the map previews, whose consumer finds it by position. Use
+  `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)`: the **graft
+  layout**, hardware-proven by `safeadd2` — the file stays byte-identical
+  through its old EOF except the rebuilt mesh's header and `0x08`/`0x50`, new
+  blocks go *after* the block under a grown sector-aligned `0x50`, colours map
+  to the nearest existing entry, and textured triangles need their exact UV
+  triple already in the table.
 - **Import needs the model's sibling `.tex`.** Without it no material resolves
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses

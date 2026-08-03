@@ -593,6 +593,25 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
             f"{max(indices) + 3} colours would exceed the {MAX_COLOURS} a "
             "13-bit colour index can address"
         )
+    # Pinned rebuilds preserve the original triangles' own per-face records
+    # whenever re-striping reproduced the original strip list as a prefix --
+    # which it does for unchanged geometry (the self-transplant reproduces the
+    # strip list byte for byte), and cannot once an edit moves vertices, since
+    # the joint re-strip then orders everything anew. Fidelity only: it keeps
+    # original colour indices (ABR bits included) and texture runs exact where
+    # the geometry is exact. One trap it does NOT guard: warp_room1's shipped
+    # run list ends in a dead 0x0000 entry covering a triangle that does not
+    # exist -- an entry past the last face is terminator debris, not a slot-0
+    # sampler, and reading meaning into it cost a wrong theory once.
+    prefix = 0
+    if pin_tables:
+        original_strips = dest_data[target.ptr_strips:target.ptr_bounds]
+        if blocks["strips"][: len(original_strips)] == original_strips:
+            prefix = min(len(target.face_texture), faces)
+            for f in range(prefix):
+                # The full u16: bits 13-14 are the ABR blend mode and ride along.
+                indices[f] = target.face_colour_index[f]
+
     colour_index = struct.pack(f"<{faces}H", *[i & 0xFFFF for i in indices])
     if pin_tables and blocks["textured"]:
         table = dest_data[dest_uv : dest_uv + dest_uv_len]
@@ -617,7 +636,25 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
               for f in range(faces)],
         )
 
-    out, tail, cut = _split_at_clip_table(dest_data)
+    if prefix:
+        from .mdl import decode_texture_runs  # noqa: PLC0415
+        per_face = decode_texture_runs(blocks["texture"], 0, faces)
+        per_face[:prefix] = target.face_texture[:prefix]
+        blocks = dict(blocks, texture=_pack_runs([v & 0xFFFF for v in per_face]))
+        uv_list = list(struct.unpack(f"<{faces}H", uv_index))
+        uv_list[:prefix] = [v & 0xFFFF for v in target.face_uv_index[:prefix]]
+        uv_index = struct.pack(f"<{faces}H", *uv_list)
+
+    if pin_tables:
+        # The graft layout, proven on hardware by the safeadd2 probe: the file
+        # stays byte-identical through its old EOF except this mesh's header
+        # and 0x08/0x50. The §8.6 block must not move -- its consumer finds it
+        # by position, and both probes that shifted it lost the map previews --
+        # so the new blocks go after it, covered by a grown, sector-aligned
+        # resident size. 0x44 is not touched.
+        out = bytearray(dest_data)
+    else:
+        out, tail, cut = _split_at_clip_table(dest_data)
     if len(out) % 4:
         out += b"\x00" * (4 - len(out) % 4)
 
@@ -643,14 +680,12 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
     colour_index_new = append(colour_index)
     end_new = len(out)
     if pin_tables:
-        # The tables, 0x20/0x24/0x28 and the vector pool all stay exactly where
-        # they are; only the boundary follows the new geometry.
+        out.extend(b"\x00" * (-len(out) % SECTOR))
         boundary = len(out)
+        struct.pack_into("<i", out, RESIDENT_SIZE, boundary)
     else:
         boundary = _carry_vector_pool(out, dest_data)
-    boundary = _rejoin_tail(out, tail, cut, boundary)
-
-    if not pin_tables:
+        boundary = _rejoin_tail(out, tail, cut, boundary)
         struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
         struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
     struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
