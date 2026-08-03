@@ -2608,22 +2608,36 @@ Objects are built by 0x8001D6B4: `[ctx+0x18]` of them, 0xA8 bytes each, from a s
 installing the draw. And the context is filled straight from the model:
 
 ```
+8001DE1C  lw   $a1, 8($a0)      ; the caller supplies a SUB-OBJECT INDEX
 8001DE28  lw   $v0, 0x18($v1)   ; v1 = the model; +0x18 is self-relative
-8001DE34  addu $v1, $v1, $v0    ;   -> a table
-8001DE48  addu $v1, $v1, $v0    ;   -> a record inside it
+8001DE34  addu $v1, $v1, $v0    ;   -> the table
+8001DE40  lw   $v0, 4($a1)      ; [T(0x18) + 4 + 4*index], the pointer for that entry
+8001DE48  addu $v1, $v1, $v0    ;   -> the sub-object record
 8001DE90  ctx+0x14 = record + [record+0x20] + 0x20   ; the source array
 8001DE9C  ctx+0x18 = [record+0x1C]                   ; how many
 ```
 
-So `model+0x18` is the section that feeds it. **It is empty in all but two models.** Of the 327
-models that declare no sub-objects, **325 leave exactly zero bytes** between the count word and
-`T(0x44)`; `intro_eurocom` leaves 160 there and `cutscene/gamelogo_text.mdl` leaves 260.
+`record+0x20` is the placement record array of §8.5 — 0x14 in 73/73, always sub-object +0x34 —
+and 0x8001D6B4's 0xA0 stride and its `+0x88` id are that section's stride and its id field. **So
+the object list is the placement list**, reached only through a sub-object, and the two sections
+describe one thing from two ends.
+
+That matters for what a model with **no** sub-objects can do here: the routine indexes
+`T(0x18)+4+4*i` and dereferences it, so with a count of zero there is no entry to reach and this
+path cannot run at all. An earlier revision of this section read the block below as the source
+array. It is not; it is data sitting in the space an empty pointer array leaves.
+
+### Two models put something in that space, and nothing found reads it
+
+Of the 327 models that declare no sub-objects, **325 leave exactly zero bytes** between the
+count word and `T(0x44)`. `intro_eurocom` leaves 160 there and `cutscene/gamelogo_text.mdl`
+leaves 260 — the whole set, and the last unclaimed bytes in the MDL corpus after the duplicate
+of §3.
 
 The stride is 20 and that is measured, not assumed: of the strides that divide both lengths,
 only 20 makes the leading word settle into runs — **three distinct values in three contiguous
 runs in both files**, against 11 values in 41 runs at stride 4, and 5 in 6 at stride 16. The
-record is `(flags, index, value, 0, 0)`; an earlier revision wrote it as `(0, flags, mesh
-index, 0, 0)`, which fits the first record only and slips by one word from the second on.
+record reads `(flags, index, value, 0, 0)`.
 
 | | records | flags seen | second field | third field |
 | --- | --- | --- | --- | --- |
@@ -2633,19 +2647,25 @@ index, 0, 0)`, which fits the first record only and slips by one word from the s
 **The second file refutes reading the second field as a mesh index.** It is in range for 8 of 8
 in `intro_eurocom`, whose 28 meshes cover every value used — but `gamelogo_text` has **two**
 meshes and indexes up to 11, so only 6 of its 13 are in range. The `0x40000000` correspondence
-is likewise a single-file observation: in `intro_eurocom` those two records do name meshes 10
-and 11, but `mesh+0x0C` is exactly 100 on mesh 10 alone — mesh 11 holds 0x10064, the same 100
-in its low half — and in `gamelogo_text` no mesh carries 100 at all while four records still
-flag `0x40000000`. What the fields mean is therefore ?unknown?; the reader at 0x8001DE90 is
-traced, the field meanings are not.
+is likewise a single-file observation: in `intro_eurocom` those two records do sit at 10 and 11,
+the indices of its backdrop domes, but `mesh+0x0C` is exactly 100 on mesh 10 alone — mesh 11
+holds 0x10064, the same 100 in its low half — and in `gamelogo_text` no mesh carries 100 at all
+while four records still flag `0x40000000`.
 
 `gamelogo_text`'s third field is the one place a value looks like anything: 3584, 512, 1536 and
 2560 are 315°, 45°, 135° and 225° on the 4096-to-the-turn scale used everywhere else in the
-format (§9.11.7). That is a coincidence worth recording and not a decoding — nothing traced
-reads the field.
+format (§9.11.7). That is a coincidence worth recording and not a decoding.
 
-What is **not** settled is where the other 64 cutscenes get their object list, since their
-`model+0x18` is empty. Nor is `mesh+0x0C` read anywhere: the immediate 100 appears 9 times in
+**No reader was found for either block**, and the one routine that reaches this region needs a
+sub-object entry these models do not have. Neither self-relative nor absolute pointers into the
+spans exist in `gamelogo_text`; `intro_eurocom` has 23 words that land inside its span, but 7 of
+them land unaligned and 23 is below the ~40 a 160-byte window would collect by chance in a 44 KB
+file, so that is noise and not a route. Neither block is a duplicate of anything: each occurs
+once in its own file and nowhere else in the archive. **I could not validate what reads them,
+and that is not evidence they are unused.**
+
+What is **not** settled is where the 64 cutscenes get their object list, since **none of them
+declares a sub-object**. Nor is `mesh+0x0C` read anywhere: the immediate 100 appears 9 times in
 the executable and 32 times across the 14 mode overlays, and not one of those sites is near a
 mesh-header load. The mesh-by-index entry point at 0x8001CE00 that would suit a backdrop is
 dead code — no `jal`, no `j`, no word, no `lui`/`addiu` pair reaches it anywhere in the image
@@ -3472,16 +3492,16 @@ left is two files:
   and **7520 of 7520 bytes identical**. Both headers name the second copy; nothing names the
   first. Written down as a fact about the file, not as a purpose — what made the exporter
   emit it twice is not something the data can say.
-* The **object-list source arrays** of §9.11.8 — 260 bytes in `gamelogo_text` and 160 in
+* The **20-byte records** of §9.11.8 — 260 bytes in `gamelogo_text` and 160 in
   `intro_eurocom`, both running from `T(0x18)+4` to `T(0x44)` in a model whose sub-object
   count is zero, so nothing in the header sizes the span. 325 of the 327 sub-object-less
-  models leave that span empty; these two do not. The records are 20 bytes and the stride is
-  measured rather than assumed. 0x8001DE90 reads this section, so unlike the duplicate above
-  it is not orphaned — what the fields inside a record mean is what is missing, and §9.11.8
-  says which single-file readings the second file refutes.
+  models leave that span empty; these two do not. The stride is measured rather than assumed.
+  The one routine that reaches this region, 0x8001DE18, indexes a sub-object pointer first,
+  so with a count of zero it cannot get here — an earlier revision called these the object
+  list's source array, and that was wrong: the source array is the placement list of §8.5.
 
 Neither is a claim that those bytes are unused — only that **I could not validate what
-reads them**, and for the second one only what reads them *field by field*.
+reads them**.
 
 The tool walks the **TEX** corpus too, and there it now reaches **100.00 %** of 15.2 MB. The
 last 2892 bytes were the zero tail of §10.6: every pack's length is a multiple of 8 in 400/400,
