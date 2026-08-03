@@ -85,7 +85,8 @@ def main() -> int:
     seen: dict[str, int] = defaultdict(int)
     stats: dict[str, dict] = defaultdict(
         lambda: {"files": 0, "triangles": 0, "matched": 0, "worst": 0.0,
-                 "scenes": 0, "identical": 0, "skipped": 0, "failed": []})
+                 "scenes": 0, "identical": 0, "skipped": 0, "scene_only": 0,
+                 "failed": []})
 
     with tempfile.TemporaryDirectory() as work:
         path = os.path.join(work, "roundtrip.glb")
@@ -135,6 +136,12 @@ def main() -> int:
                 continue
 
             row["files"] += 1
+            # A model with no numbered meshes comes back with its geometry
+            # untouched, so counting its triangles as "matched" would claim a
+            # rebuild that never ran. Count it apart.
+            if not result.meshes_rebuilt:
+                row["scene_only"] += 1
+                continue
             row["triangles"] += len(before) // 3
             if len(after) == len(before):
                 row["matched"] += len(before) // 3
@@ -146,14 +153,16 @@ def main() -> int:
                     f"{len(after)//3} back")
 
     print(f'{"group":10s} {"files":>6} {"triangles":>10} {"same count":>11} '
-          f'{"worst corner":>13} {"scenes":>7} {"identical":>10} {"skipped":>8}')
+          f'{"worst corner":>13} {"scenes":>7} {"identical":>10} {"skipped":>8} '
+          f'{"scene only":>11}')
     for group in ("level", "cutscene", "character", "models"):
         row = stats.get(group)
         if not row:
             continue
         print(f'{group:10s} {row["files"]:6d} {row["triangles"]:10d} '
               f'{row["matched"]:11d} {row["worst"]:13.4f} {row["scenes"]:7d} '
-              f'{row["identical"]:10d} {row["skipped"]:8d}')
+              f'{row["identical"]:10d} {row["skipped"]:8d} '
+              f'{row["scene_only"]:11d}')
         for line in row["failed"][:5]:
             print(f"    {line}")
         if len(row["failed"]) > 5:

@@ -228,22 +228,30 @@ compares what the two models draw. Geometry cannot be compared byte for byte —
 import re-derives the strip list, so the bytes legitimately differ — and it is
 compared as sorted triangle corners instead:
 
-| Group | Files | Triangles | Same count | Worst corner | Scenes | Byte-identical |
-| --- | --- | --- | --- | --- | --- | --- |
-| level | 134 | 196,700 | 196,700 | **0.0000** | 113 | 113 |
-| cutscene | 64 | 119,220 | 119,220 | **0.0000** | 64 | 64 |
-| character | 104 | 45,300 | 45,300 | **0.0000** | 0 | 0 |
-| models | 98 | 93,373 | 93,373 | **0.0000** | 28 | 28 |
+| Group | Files | Triangles | Same count | Worst corner | Scenes | Byte-identical | Scene only |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| level | 134 | 196,700 | 196,700 | **0.0000** | 113 | 113 | 5 |
+| cutscene | 64 | 119,220 | 119,220 | **0.0000** | 64 | 64 | 0 |
+| character | 104 | 45,300 | 45,300 | **0.0000** | 0 | 0 | 0 |
+| models | 98 | 93,373 | 93,373 | **0.0000** | 28 | 28 | 0 |
 
 Sorting before comparing is the whole reason that column reads zero. A rebuilt
 mesh returns its triangles in a different order, and comparing the two lists in
 sequence measures the re-ordering: the first version of this tool reported
 corner errors of 5 to 20 units on models that had lost nothing at all.
 
-**Five entries do not import**, and the run names them:
-`arena/test/objects`, `medieval_ring/arena`, `tank_jungle/arena`,
-`tank_jungle/crystalarena`, `crate_jungle/arena`. Each has zero numbered meshes
-— 1, 16, 8, 4 and 15 object meshes respectively and nothing in `model.meshes` —
-so the `_meshNN` names the export writes and the import matches on never exist.
-Teaching the exporter to name object meshes would be the fix; the writers have
-never touched that pool (FORMAT §8.3), so it has not been attempted.
+**Five entries have no numbered meshes** — `arena/test/objects`,
+`medieval_ring/arena`, `tank_jungle/arena`, `tank_jungle/crystalarena`,
+`crate_jungle/arena`, with 1, 16, 8, 4 and 15 object meshes respectively and
+nothing at all in `model.meshes`. The `_meshNN` names the export writes and the
+import matches on never exist for them, and the writers cannot install into that
+pool (FORMAT §8.3) in any case.
+
+They are not failures, though, and treating them as such hid a real one. The
+scene patch runs before the mesh matching, so by the time the importer found
+nothing to match, a valid edit to their **56 placement records** was already
+complete — and raising threw it away. The importer now returns that result with
+a warning saying the geometry was left as it was, and only a file that changed
+nothing at all is an error. The tool counts them in their own column rather than
+as a rebuild that never ran, which is what "same count" would otherwise have
+silently claimed.

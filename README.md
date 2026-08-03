@@ -283,25 +283,26 @@ from the file alone, and those 117 keys could only be skipped.
 `tools/roundtrip.py` runs the whole thing over the corpus — export each entry,
 import the file just written, and compare what the two draw:
 
-| Group | Files | Triangles | Same count | Worst corner | Scenes | Byte-identical |
-| --- | --- | --- | --- | --- | --- | --- |
-| level | 134 | 196,700 | 196,700 | **0.0000** | 113 | 113 |
-| cutscene | 64 | 119,220 | 119,220 | **0.0000** | 64 | 64 |
-| character | 104 | 45,300 | 45,300 | **0.0000** | 0 | 0 |
-| models | 98 | 93,373 | 93,373 | **0.0000** | 28 | 28 |
+| Group | Files | Triangles | Same count | Worst corner | Scenes | Byte-identical | Scene only |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| level | 134 | 196,700 | 196,700 | **0.0000** | 113 | 113 | 5 |
+| cutscene | 64 | 119,220 | 119,220 | **0.0000** | 64 | 64 | 0 |
+| character | 104 | 45,300 | 45,300 | **0.0000** | 0 | 0 | 0 |
+| models | 98 | 93,373 | 93,373 | **0.0000** | 28 | 28 | 0 |
 
-Every corner of all 454,593 triangles comes back where it went out. Sorting the
-corners before comparing is what makes that number mean anything — a rebuild
-re-strips the mesh, so the triangles return in a different order, and comparing the
-two lists in sequence measures the re-ordering instead of the loss (it reported
-errors of 5 to 20 units on models that had lost nothing).
+Nothing fails. Every corner of all 454,593 triangles comes back where it went out,
+and sorting the corners before comparing is what makes that number mean anything —
+a rebuild re-strips the mesh, so the triangles return in a different order, and
+comparing the two lists in sequence measures the re-ordering instead of the loss
+(it reported errors of 5 to 20 units on models that had lost nothing).
 
-**Five of the 400 do not import**, and they are named in the run: `arena/test/objects`,
+The last column is the honest asterisk. Five arenas — `arena/test/objects`,
 `medieval_ring/arena`, `tank_jungle/arena`, `tank_jungle/crystalarena` and
-`crate_jungle/arena`. All five have **no numbered meshes at all** — their geometry
-lives entirely in the object pool (`docs/FORMAT.md` §8.3) — so the `_meshNN` names
-the export writes and the import matches on do not exist for them. They export and
-preview normally; it is the trip back that has nothing to key on.
+`crate_jungle/arena` — have **no numbered meshes at all**: their geometry lives
+entirely in the object pool (`docs/FORMAT.md` §8.3), which the export does not name
+`_meshNN` and the writers cannot install into. Their **scene still imports** — all
+56 placement records between them — and the import says in its report that it left
+the geometry alone. They are counted apart rather than as a rebuild that never ran.
 
 Colours need one word, because the console uses them at two scales: on a textured
 triangle the colour is a *multiplier* — the blend is `texel * colour / 128`, above

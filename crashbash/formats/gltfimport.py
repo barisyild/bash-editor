@@ -379,10 +379,24 @@ def import_glb(
         if match and 0 <= int(match.group(1)) < len(model.meshes):
             incoming[int(match.group(1))] = mesh
     if not incoming:
-        raise ValueError(
-            "no mesh in the file is named like the exporter names them "
-            "(<model>_meshNN); nothing to import"
-        )
+        # A scene patch is already done and valid at this point, and five
+        # arenas reach here every time: they have no numbered meshes at all,
+        # only object-pool ones (§8.3), which the export does not name
+        # `_meshNN` and the writers cannot install into. Raising would throw
+        # away a finished edit to their 56 placement records, so the scene-only
+        # result is returned instead -- and only a file that changed nothing is
+        # an error.
+        if report.scene is None or not report.scene.total:
+            raise ValueError(
+                "no mesh in the file is named like the exporter names them "
+                "(<model>_meshNN), and there was no scene to write either; "
+                "nothing to import"
+            )
+        report.warnings.append(
+            "no mesh is named like the exporter names them (<model>_meshNN); "
+            "the scene was written and the geometry left as it was")
+        report.model = model_data
+        return report
 
     # --- geometry ------------------------------------------------------
     trimmed = MW.strip_animation(model_data, clips)
