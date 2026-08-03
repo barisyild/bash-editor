@@ -647,7 +647,14 @@ owner/context pointer**, standard plumbing — the spawner at `0x800B7E40` write
 link through `[entity+84]+108` and calls the entity's init callback from `[entity+72]`, a
 vtable slot. That is why it has 132 readers, and it means the classifier's store is the
 preview instance's context assignment, not a bespoke index hand-off. The locator sits behind
-this generic layer, which is exactly where static hand-reading stops paying. The prologue did yield one solid cross-check on the way: it
+this generic layer — and the automated triage cracked the layer open after all. The flagged
+band led to **the preview player itself, `0x800B6FD4`**: it takes the kind-3 instance, allocates
+a per-frame workspace through `0x800264E8`, feeds `[instance+84]`'s `+16/+24` into
+`0x8001463C` for facing-angle math, and drives the ping-pong cursor whose tick selects a
+**28-byte segment** through `0x8001E41C` — now read: records at `track+0x4C`, end-tick at
+`+12`, skip flag `0x2000`, a tick-to-segment lookup. The workspace's track pointer at `+12` is
+assigned somewhere in the one unread span left, `0x800B7060..0x800B7250` — whatever fills it
+is one dereference from §8.6's reader. The prologue did yield one solid cross-check on the way: it
 zero-initialises **twelve** 40-byte door slots, the same twelve the `+0x0C` list's keys
 101..112 name. The behavioural facts stand
 regardless: sub-blocks are selected by the in-file index, located by something that ignores
