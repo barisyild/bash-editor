@@ -4534,7 +4534,18 @@ are not only undocumented format; they are also where a reader is quietly skippi
   mechanism: the binding site itself is still unfound, and §11.9's hunt for the sign-packet
   builder is the same hunt. What is now certain is where to look — inside the code that turns
   a streamed sub-block into packets — and that the seven carriers are exactly the files where
-  it matters. The
+  it matters.
+
+  The stream's own consumers are read and they are **not** it, which sharpens the question
+  again. `0x800163E0` hands the read a pointer to the descriptor row's `+8` field, so the
+  loader writes the buffer address straight into the row and needs no completion callback;
+  the request path (`0x800133C8` → `0x80013034`) passes a null one. And the poll and release
+  have exactly one caller each, both in `warp.bin`'s per-door update — `0x800B560C` polls,
+  and on success the door simply raises the instance's drawn bit and ramps the fade counter;
+  `0x800B56D0` releases when it ramps back down. **Nothing in that path parses the sub-block
+  or builds a packet from it.** So the buffer is filled by the loader and consumed by
+  something that finds it through the descriptor row rather than through a callback, and that
+  reader is the one piece of this chain still missing. The
   writer's rule is exact, and since it cannot be explained it is now *enforced*:
   `install_mesh(pin_tables=True)` is engaged automatically for carriers and `transplant_mesh`
   refuses them outright.
