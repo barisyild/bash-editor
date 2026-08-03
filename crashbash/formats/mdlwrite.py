@@ -585,8 +585,7 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
         if found is None and pin_tables:
             found = _nearest_triple(colours, triple)
         elif found is None:
-            found = len(colours) // COLOUR_ENTRY_SIZE
-            colours += triple
+            found = _append_triple(colours, triple)
             start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
             for at in range(start, len(colours) - 2 * COLOUR_ENTRY_SIZE,
                             COLOUR_ENTRY_SIZE):
@@ -822,8 +821,7 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
             if found is None and pin_tables:
                 found = _nearest_triple(colours, triple)
             elif found is None:
-                found = len(colours) // COLOUR_ENTRY_SIZE
-                colours += triple
+                found = _append_triple(colours, triple)
                 start = max(0, (found - 2) * COLOUR_ENTRY_SIZE)
                 for at in range(start, len(colours) - 2 * COLOUR_ENTRY_SIZE,
                                 COLOUR_ENTRY_SIZE):
@@ -912,6 +910,30 @@ def _resolve(data: bytes, field: int) -> int:
     return field + struct.unpack_from("<i", data, field)[0]
 
 
+def _append_triple(colours: bytearray, triple: bytes) -> int:
+    """Put a face's three colours at the end, overlapping what is already there.
+
+    A colour index names three *consecutive* entries, so consecutive faces can
+    share two of them, and the shipped files lean on it all the way: 5,216
+    entries carry 5,216 triangles in `mainmenu/models`. Appending three entries
+    per unmatched face instead of overlapping is what pushed a whole-model
+    rebuild of that file to 8,396 entries and over the 8,192 a 13-bit index can
+    address -- the import failed outright. Re-striping is why the faces are
+    unmatched at all: the same triangle comes back with its corners rotated, so
+    its triple is no longer the one the table holds.
+    """
+    entry = COLOUR_ENTRY_SIZE
+    for shared in (2, 1):
+        if len(colours) >= shared * entry and \
+                triple[: shared * entry] == bytes(colours[-shared * entry:]):
+            at = len(colours) // entry - shared
+            colours += triple[shared * entry:]
+            return at
+    at = len(colours) // entry
+    colours += triple
+    return at
+
+
 def _geometry_region(data: bytes, model) -> tuple[int, int, int, int] | None:
     """`(start, colour, uv, end)` when the region is laid out as expected.
 
@@ -926,7 +948,11 @@ def _geometry_region(data: bytes, model) -> tuple[int, int, int, int] | None:
     laid out differently falls back to appending rather than being rearranged
     on an assumption.
     """
-    if not model.meshes:
+    if not model.meshes or model.objects:
+        # An object mesh's blocks live in the same span and are not in
+        # `model.meshes`, so rewriting the region would drop them: 41 models
+        # came back short -- `polar_manic/arena` with 242 of its 897 triangles
+        # -- before this guard. Those models take the appending path.
         return None
     colour, uv, pool, end = (_resolve(data,PTR_COLOUR_TABLE),
                              _resolve(data,PTR_UV_TABLE),
