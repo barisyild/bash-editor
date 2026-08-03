@@ -44,6 +44,9 @@ from .mdl import (
 # past it is therefore not in memory when the mesh headers are read, so new
 # geometry has to go inside it and the field has to move with it.
 PTR_MODEL_END = 0x08
+# The shared position pool (§7.3) runs from here to the boundary, so moving the
+# boundary without moving the pool turns a degenerate pool into a huge bogus one.
+PTR_MODEL_POOL = 0x28
 
 MESH_HEADER_START = 0x58
 COLOUR_ENTRY_SIZE = 4
@@ -413,6 +416,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     colour_index_new = append(colour_index)
     attachment_new = append(source.attachment) if source.attachment else 0
     end_new = len(out)
+    boundary = _carry_vector_pool(out, dest_data)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
     struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
@@ -420,7 +424,7 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
     # never read in. What this swallows on the way -- the clip descriptor table
     # and the other small tables that sit above the old boundary -- only makes
     # the span longer; every pointer into them still resolves where it did.
-    struct.pack_into("<i", out, PTR_MODEL_END, end_new - PTR_MODEL_END)
+    struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
 
     header = MESH_HEADER_START + MESH_HEADER_SIZE * dest_index
     if header != target.header_offset:
@@ -515,10 +519,11 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
     texture_new = append(blocks["texture"])
     colour_index_new = append(colour_index)
     end_new = len(out)
+    boundary = _carry_vector_pool(out, dest_data)
 
     struct.pack_into("<i", out, PTR_COLOUR_TABLE, new_colour_at - PTR_COLOUR_TABLE)
     struct.pack_into("<i", out, PTR_UV_TABLE, new_uv_at - PTR_UV_TABLE)
-    struct.pack_into("<i", out, PTR_MODEL_END, end_new - PTR_MODEL_END)
+    struct.pack_into("<i", out, PTR_MODEL_END, boundary - PTR_MODEL_END)
 
     header = MESH_HEADER_START + MESH_HEADER_SIZE * dest_index
     if header != target.header_offset:
@@ -527,6 +532,34 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh) -> bytes:
                    geometry_new, strips_new, uv_index_new, texture_new,
                    colour_index_new, end_new)
     return bytes(out)
+
+
+def _carry_vector_pool(out: bytearray, source: bytes) -> int:
+    """Re-lay the shared position pool so it still ends at the new boundary.
+
+    §7.3 defines the pool as `T(0x28)` up to `T(0x08)`, which means its length is
+    the gap between the two. Appending geometry moves `T(0x08)` outward, so a
+    writer that leaves `0x28` alone stretches the pool over everything it just
+    appended: a degenerate pool in `intro_eurocom` became 201,216 bytes of it,
+    and `mainmenu/models`'s real 58,676-byte pool became 806,436.
+
+    Nothing indexes the pool by position in the file -- a blob either carries its
+    own or reads `model+0x28` (0x80019C08), and §7.3's expander indexes from that
+    base -- so copying the bytes to the end and repointing `0x28` at them is
+    safe, and it is what keeps the gap equal to the real length.
+
+    Returns the offset the boundary should now name.
+    """
+    start = PTR_MODEL_POOL + struct.unpack_from("<i", source, PTR_MODEL_POOL)[0]
+    end = PTR_MODEL_END + struct.unpack_from("<i", source, PTR_MODEL_END)[0]
+    if not 0 <= start <= end <= len(source):
+        return len(out)
+    if len(out) % 4:
+        out.extend(b"\x00" * (4 - len(out) % 4))
+    at = len(out)
+    out.extend(source[start:end])
+    struct.pack_into("<i", out, PTR_MODEL_POOL, at - PTR_MODEL_POOL)
+    return len(out)
 
 
 def _finish_header(out, header, faces, fmt, unk13, unk14, geometry, strips,
