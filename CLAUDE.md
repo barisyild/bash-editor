@@ -62,6 +62,15 @@ They are not style preferences.
   inserted length. Appending instead breaks both: a warp room has no clips to
   strip, so the only thing between `T(0x44)` and EOF is §8.6's block, and the
   new geometry lands inside it. `warp_room1` built that way would not load.
+- **In the seven §8.6 carriers the shared colour and UV tables are pinned**
+  (§2.1's probe ledger). Repointing `0x20` crashes the room; repointing
+  `0x24`/`0x28` scrambles every textured surface — established by eleven
+  hardware probes, mechanism still untraced. Use
+  `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)` there: tables
+  and their three header fields stay byte-identical, colours map to the nearest
+  existing entry, textured triangles need their exact UV triple already in the
+  table, and the §8.6 block is pushed outward to make room (the block itself is
+  movable — probed).
 - **Import needs the model's sibling `.tex`.** Without it no material resolves
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
