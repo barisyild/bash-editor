@@ -41,7 +41,17 @@ def guarded(fn):
     An exception raised inside a slot never reaches the caller: Qt logs it at
     best and the event loop carries on, so a playback timer that throws simply
     stops advancing and the viewport keeps showing the frame it last drew.
+
+    It takes no message, and says so: written `@guarded("...")` it would wrap
+    the string, `functools.wraps` would skip the attributes a string does not
+    have, and the decorated name would come out as the *result* of calling that
+    string -- None, with the TypeError printed and swallowed by the guard
+    itself. `_set_placement` was None for exactly that reason and the window
+    would not open at all, which is a poor trade for a message nobody sees.
     """
+    if not callable(fn):
+        raise TypeError(f"@guarded decorates a function and takes no argument; "
+                        f"got {fn!r}")
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):

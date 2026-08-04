@@ -487,7 +487,7 @@ class MainWindow(QMainWindow):
         self.view3d.set_all_meshes_visible(visible)
         self.mesh_panel.set_all_checked(visible)
 
-    @guarded("Could not change that placement")
+    @guarded
     def _set_placement(self, record: int, identifier: int,
                        translation: tuple) -> None:
         """Rewrite one placement record and stage the entry.
