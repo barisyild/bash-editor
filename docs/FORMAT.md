@@ -1897,14 +1897,33 @@ its entry in the jump table at another arena's case or by editing the case body 
 none exists: the walkable surface is this setup plus the runtime board, and a level that wants
 a different floor needs its own case, not a different file.
 
-**And a cut arena has no case waiting for it.** Counting writes to `0x8005A5D8` across the
-fifteen mode overlays settles that: `crate.bin` writes it five times and has five arenas,
-`pogo.bin` once for four, `tank.bin`, `dash.bin` once each for four, `ball.bin` twice for four,
-`polar.bin` not at all, and every one-arena mode once. Only the crate game configures ground
-per arena, and its five writes account exactly for its five arenas. Nothing anywhere is left
-over for `unused_castle` — it was dropped before it was given a case in any mode, which is
-also why it is the one arena with no `crystalarena` beside it. Putting it in a slot therefore
-means authoring its setup, not recovering it.
+**And a cut arena has no case waiting for it.** `tools/arena_setup.py` reads every write to
+`0x8005A5D8` out of the fifteen mode overlays, with the arguments loaded beside it and, where
+the mode branches per level, the jump-table entry that reaches it:
+
+| overlay | ground writes | what it configures |
+| --- | --- | --- |
+| `crate.bin` | **5** | per arena; cases 0, 1, 2, 3, 32 of a 33-entry table at file `0x00064` |
+| `ball.bin` | 2 | one is a mode-wide default, one sits behind a switch |
+| `dash.bin`, `dino.bin`, `mallet.bin`, `pogo.bin`, `ring.bin` | 1 | −16 for the whole mode |
+| `kegs.bin`, `papu.bin`, `tank.bin` | 1 | 0 for the whole mode |
+| `oxide.bin` | 1 | 10,240 — the chase runs high above the origin |
+| `menu.bin`, `polar.bin` | 0 | none |
+
+The crate cases, with the entry that selects each — four bytes apiece:
+
+| case | entry (file) | case body (file) | ground | arguments |
+| --- | --- | --- | --- | --- |
+| 0 | `0x00064` | `0x00D68` | −16 | `$a0`=8, `$a2`=10, `$a3`=12 |
+| 1 | `0x00068` | `0x00DC0` | −16 | — |
+| 2 | `0x0006C` | `0x00E78` | −16 | `$a0`=10 |
+| 3 | `0x00070` | `0x00F74` | **0** | `$a0`=30 |
+| 32 | `0x000E4` | `0x00FDC` | −16 | `$a2`=10, `$a3`=12 |
+
+Only the crate game configures ground per arena, and its five writes account exactly for its
+five arenas. Nothing anywhere is left over for `unused_castle` — it was dropped before it was
+given a case in any mode, which is also why it is the one arena with no `crystalarena` beside
+it. Putting it in a slot therefore means authoring its setup, not recovering it.
 
 Four more things are ruled out, so the next person does not spend the search again. The model
 carries **no floor marker**: object ids are simply sequential from `0x5001` in every level
