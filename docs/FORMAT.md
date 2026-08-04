@@ -1855,6 +1855,28 @@ against 3 at the next best base, and confirmed against the site §14 already cit
 disassembles there as the mode's AI reading an object's `+0x54`/`+0x58` and squaring a
 horizontal distance.
 
+**The board itself is in that overlay, and it is built at run time.** The lookup is at
+`0x800BAC60`, and it is what proves the geometry above is the mode's rather than the level's::
+
+    800BAC68  lw    $v0, 0x10($t0)      ; the object's x
+    800BAC6C  lw    $v1, 0x18($t0)      ; its z
+    800BAC74  addiu $v0, $v0, 0x800     ; +2048, so the grid is centred on the origin
+    800BAC78  sra   $a3, $v0, 9         ; cell x -- 512 model units, the 2.0 measured above
+    800BAC7C  addiu $v1, $v1, 0x800
+    800BAC98  sra   $a2, $v1, 9         ; cell z
+    800BAC90  sltiu $v0, $a3, 8         ; 8 columns
+    800BAC9C  sltiu $v0, $a2, 8         ; 8 rows
+    800BACB0  addiu $a0, $a0, 0x3bac    ; the board at 0x800C3BAC
+    800BACB4  ...                       ; + 96·cx + 12·cz -- 12 bytes a cell, 768 in all
+    800BACD4  lhu   $v0, 8($v1)         ; the cell's flags
+    800BACDC  andi  $v0, $v0, 0x100     ; "nothing here"
+
+`0x800C3BAC` is zero in the file — it is filled at `0x800B84EC`, which walks the mode's own
+instance list (`+0x5C` is the next pointer), drops each instance into the cell its position
+falls in, and then sweeps all 64 cells: an occupied cell takes the instance's `+0x74` as its
+height at `+0x0A`, an empty one gets the `0x100` bit. Nothing in that path reads the level
+model. The arena file supplies the picture of the board and the game supplies the board.
+
 Four more things are ruled out, so the next person does not spend the search again. The model
 carries **no floor marker**: object ids are simply sequential from `0x5001` in every level
 measured, so nothing in the object table distinguishes a surface from scenery, and the ids
