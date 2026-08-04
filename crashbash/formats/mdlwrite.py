@@ -102,6 +102,12 @@ class Transplant:
     # twice as far out -- off the texture and into whatever shares its page.
     # A slot cannot be resized to avoid this: pack VRAM placement is still
     # unknown (§10.1), so the geometry adapts instead.
+    #
+    # The factor is `(dest - 1) / (source - 1)`, not `dest / source`: a 32x32
+    # texture's UVs run 0..31, and halving those gives 0..16, which is one
+    # column past the end of a 16x16 slot. Coco's four eye faces span the whole
+    # texture, so all four read from outside it -- on hardware her eyes came
+    # back blank.
     uv_scale: dict[int, tuple[float, float]] = field(default_factory=dict)
     # Per source face, the destination palette and swatch cell that give the
     # colour it meant. A swatch face is painted by one texel of the pack's
