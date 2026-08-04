@@ -1814,11 +1814,49 @@ resident image on a sector boundary, holds vertex-shaped records in room coordin
 no traced reader. That is not a collision mesh until something is shown to read it as one —
 but it is in the file, and it is the reason this paragraph no longer says otherwise.
 
-**An arena's floor, at least, is not in its model.** Swapping `arena.mdl` and `arena.tex`
-between `crate_jungle` and `unused_castle` — a whole-file exchange of both halves, nothing
-rebuilt — put the castle on screen in the jungle's slot and left the player walking the
-jungle's floor. So the surface the game collides against did not come with the file that
-draws, and it is keyed by which arena was entered.
+**An arena's floor, at least, is not in its model — and for the crate game it is not data at
+all.** The height query is `0x800BAC60` in `crate.bin`, and it reads end to end:
+
+```
+800BAC68  lw    $v0, 0x10($t0)      ; x
+800BAC74  addiu $v0, $v0, 0x800     ; +2048, so the grid starts at -2048
+800BAC78  sra   $a3, $v0, 9         ; cell = >> 9, i.e. 512-unit cells
+800BAC84  lw    $v0, -0x5a28($v0)   ; 0x8005A5D8, the ground level
+800BAC8C  subu  $a1, $a0, $v0       ; off the grid: height = y - ground
+800BAC90  sltiu $v0, $a3, 8         ; 8 cells across
+800BAC9C  sltiu $v0, $a2, 8         ; 8 cells deep
+800BACB0  addiu $a0, $a0, 0x3bac    ; the board at 0x800C3BAC
+800BACB4..CD0                       ; index = cell_x*96 + cell_z*12
+800BACD4  lhu   $v0, 8($v1)         ; the cell's flags
+800BACDC  andi  $v0, $v0, 0x100     ; bit 8 = no floor
+800BACE0  bnez  → 0x7FFFFFFF        ; a hole reads as bottomless
+```
+
+So the play area is a **fixed 8×8 grid of 512-unit cells**, 4096 units square — 16 reader
+units, from −8 to +8, centred on the origin — and it is the same for every crate arena,
+because its extent is in the instructions (`+0x800`, `>> 9`, `< 8`) and not in any file. The
+board itself, at `0x800C3BAC`, is 12 bytes per cell with a row stride of 96, and `0x800BAF68`
+zeroes all 64 cells when an arena starts: the floor begins whole and the game punches holes in
+it as play goes on. It is runtime state, not authored content.
+
+That is why swapping `arena.mdl` and `arena.tex` between `crate_jungle` and `unused_castle` —
+a whole-file exchange of both halves, nothing rebuilt — put the castle on screen and left the
+player walking the same floor as before. The scenery came across; the board never moved,
+because there is no per-arena board to move. Each arena's model is decoration built around one
+shared 16×16 square:
+
+| arena | model extent | board |
+| --- | --- | --- |
+| `crate_jungle` | 54 × 33 | 16 × 16 |
+| `crate_drain` | 38 × 30 | 16 × 16 |
+| `crate_snow` | 47 × 31 | 16 × 16 |
+| `crate_space` | 73 × 20 | 16 × 16 |
+
+The constants that define it, for anyone who wants a different board, are `crate.bin` file
+offsets `0x079C0` (origin bias), `0x079C4` (cell size as a shift), `0x079DC` and `0x079E8`
+(the two bounds), `0x079FC` (the board's address) and `0x07A28` (the hole bit). Changing the
+floor of a crate arena means changing those, or modelling the level to sit on the board that
+is already there. It does not mean replacing a collision file, because none exists.
 
 **It is the mode's, and it is the same in every arena of that mode.** Measuring whole-model
 extents suggests otherwise — the four crate arenas span 54×33, 38×30, 47×31 and 73×20 — but
