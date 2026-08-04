@@ -1814,6 +1814,24 @@ resident image on a sector boundary, holds vertex-shaped records in room coordin
 no traced reader. That is not a collision mesh until something is shown to read it as one —
 but it is in the file, and it is the reason this paragraph no longer says otherwise.
 
+**An arena's floor, at least, is not in its model.** Swapping `arena.mdl` and `arena.tex`
+between `crate_jungle` and `unused_castle` — a whole-file exchange of both halves, nothing
+rebuilt — put the castle on screen in the jungle's slot and left the player walking the
+jungle's floor. So the surface the game collides against did not come with the file that
+draws, and it is keyed by which arena was entered.
+
+It is not one shape shared by the mode either: the four crate arenas measure 54×33, 38×30,
+47×31 and 73×20 in reader units across their whole geometry, so whatever describes the play
+area is per arena. That leaves the mode overlays. `overlays/text/*.bin` are the twelve *text*
+overlays — a per-minigame id and NUL-terminated strings — and the fifteen code overlays are
+`overlays/modes/*.bin`, of which the crate game's is `overlays/modes/crate.bin`, 70,945 bytes.
+The arenas' extents do not appear in it as int16 in model units, so if the bounds are there
+they are in some other form; that search is not finished.
+
+One structural note from the same comparison, since it settles a header field: **`model+0x54`
+is the numbered mesh count**, matching `len(model.meshes)` in all twelve levels measured
+(`crate_jungle` 0, `unused_castle` 60, `pogo_gogo` 42, and so on).
+
 When no valid block can be supplied, zero remains the safe state — 5,213 of the game's own
 5,990 meshes have none — but for a character that costs its collision, not just a cosmetic.
 
