@@ -1159,6 +1159,21 @@ Over 81,045 strips it takes exactly **four** values:
 
 Bits 1, 2 and 4–7 are never set.
 
+The **high** byte of the same u16 is the strip's triangle count, and the list is terminated by
+**`0xFFFF`** — the word immediately after the last strip is `0xFFFF` in **7960/7960** meshes,
+and no other value occurs. That word is not decoration: the decoders size their output by
+walking this list, so the vertex count is `Σ(triangles + 2)` over the strips the walk finds.
+
+A writer that ends the list with `0xFF00` instead does not end it at all. The high byte is a
+count, so `0xFF00` reads as a strip of 255 triangles with the flags clear and the walk carries
+on into whatever follows the block. The vertex count then comes out far larger than the
+keyframes hold, and the tail of the pose buffer at `0x80056AC8` keeps what it held last —
+vertices in world space, from the previous draw. Standing still that stale tail equals the live
+values and nothing shows; walking, it lags, and the model trails threads across the level that
+grow with the distance moved. This project wrote `0xFF00` for every mesh it built from scratch;
+`transplant_mesh`, which copies a shipped block verbatim, never carried it, which is why
+transplanted models were clean and built ones were not.
+
 Two measured bounds a writer should respect. No shipped mesh has more than **348 strips**
 (`level_intro.mdl` mesh 1, over 5,989 meshes), and the median strip carries 2.33 triangles —
 emitting one strip per triangle has no precedent anywhere in the corpus. And the flag byte

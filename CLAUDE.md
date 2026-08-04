@@ -281,6 +281,32 @@ They are not style preferences.
 - **Strip flag bit 3 states the first triangle's winding** (§5.1), and bit 0 of
   the vertex flag alternates from there. A mesh must not contradict its own
   flag byte.
+- **A strip list ends with `0xFFFF`** (§5.1) — 7960/7960 meshes, no exception.
+  The high byte of a strip word is its triangle count, so the `0xFF00` this
+  wrote is not a terminator: it reads as a strip of 255 triangles and the walk
+  runs on past the block. The decoders take the vertex count from that walk, so
+  it comes out far larger than the keyframes hold and the tail of the pose
+  buffer keeps the previous draw's world-space vertices. Standing still the
+  stale tail matches and nothing shows; walking, the model trails threads across
+  the level that grow with the distance moved. `transplant_mesh` copies a
+  shipped block and never carried it, which is why transplants were clean and
+  everything built from scratch was not.
+- **The hub is where the memory budget bites, not the arena.** The same model
+  drew correctly in the crate game and came apart in `warp_room`, which loads
+  far more at once. `chars/crate/coco` at 328,112 bytes failed there and at
+  99,080 ran; the shipped file is 215,678 and a 747,672-byte build black-screened
+  everywhere. Every check inside the file passes at every one of those sizes —
+  that is what a budget overrun looks like from the inside, so test in the hub.
+- **A frozen clip needs one keyframe, not one per key.** Every key holding the
+  same pose is the same bytes repeated, and the pose pool is what a model
+  weighs: freezing the 13 clips a key at a time cost 328,112 bytes where one key
+  each costs 99,080. Point every frame at that key with `weight` 0.
+- **An untouched mesh's `+0x2C` block has to be carried through a region
+  rewrite.** `_rewrite_region` copies a mesh it is not rebuilding from `low` to
+  `ptr_end`, and the attachment block sits *after* `ptr_end` — so it was left
+  behind and the pointer went stale. Rebuilding `chars/crate/coco`'s mesh 0 read
+  mesh 1's collision volume as zero records; 777 of the archive's 5990 meshes
+  carry a block and 114 models have more than one that does.
 - **The glTF carries the facing; never re-derive it.** The game flips the sign
   of the NCLIP backface test per vertex flag bit 0 (§11.3), so an inverted
   parity culls a triangle rather than drawing it — and nothing on a static
