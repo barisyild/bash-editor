@@ -237,6 +237,43 @@ placement carried, **nothing is skipped**: all 5819 track keys and 173 camera
 keys write back byte for byte. A file exported before the placement was carried
 still has parented keys reported as skipped rather than written wrong.
 
+## Out through Blender and back, measured
+
+`tools/roundtrip.py` exercises this project's own exporter and importer. The other
+half of the journey is Blender, and taking `chars/crate/coco` out to a `.glb`,
+into Blender, straight back out untouched and in again says what that costs.
+
+**Nothing at all, when the file comes back as it left.** Both meshes are
+recognised as unchanged and their blocks are never touched: 243 and 268
+triangles, every one identical; the strip lists and their `0xFFFF` terminators
+as they were; both collision volumes intact; facing −0.404 and −6.410 unmoved;
+all thirteen swatch cells in place across the two meshes; no UV outside its
+texture; the thirteen clips rebuilt from the file with their full 719-unit
+travel and not one frame record breaking `weight == 0 iff no key_b`. The file
+comes back four bytes shorter.
+
+**Forced through the rebuild path** — `rebuild_all=True`, which is what any real
+edit triggers — the geometry still survives exactly: 243/243 and 268/268
+triangles, no stray, terminators right, volumes kept, facing unmoved, no UV
+escape, the clips and their frame records unchanged. Two things do change:
+
+* **Striping.** 38 strips become 77 and 28 become 46. This writer chains more
+  loosely than the authoring tool did, so a rebuilt mesh costs about twice the
+  strips and the file grows 215,678 → 238,318 bytes. Both stay far under the 348
+  a mesh may have.
+* **Swatch colour.** A rebuilt face loses its own cell — the exporter folds the
+  texel into the vertex colour and writes no cell, so the importer gives every
+  untextured face the cell nearest neutral (§8.4). Mesh 0's seven cells and mesh
+  1's six all collapse onto (8,4), and the colour actually drawn shifts by a mean
+  of **15.5 of 255** on mesh 0 and **7.7** on mesh 1, with 54 % and 83 % of faces
+  inside 8. The textures are not the cause: all eighteen slots come back
+  pixel-identical and the pack is not written at all. The loss is clipping in the
+  fold, on faces whose original texel was brighter than neutral.
+
+So an edited mesh is geometrically exact and slightly repainted, and an untouched
+one is left alone entirely. That is the case for deleting the meshes you are not
+editing before exporting from Blender.
+
 ## The whole trip, measured
 
 `tools/roundtrip.py` exports every entry, imports the file it just wrote, and
