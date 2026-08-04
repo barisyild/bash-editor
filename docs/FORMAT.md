@@ -1897,6 +1897,15 @@ its entry in the jump table at another arena's case or by editing the case body 
 none exists: the walkable surface is this setup plus the runtime board, and a level that wants
 a different floor needs its own case, not a different file.
 
+**And a cut arena has no case waiting for it.** Counting writes to `0x8005A5D8` across the
+fifteen mode overlays settles that: `crate.bin` writes it five times and has five arenas,
+`pogo.bin` once for four, `tank.bin`, `dash.bin` once each for four, `ball.bin` twice for four,
+`polar.bin` not at all, and every one-arena mode once. Only the crate game configures ground
+per arena, and its five writes account exactly for its five arenas. Nothing anywhere is left
+over for `unused_castle` — it was dropped before it was given a case in any mode, which is
+also why it is the one arena with no `crystalarena` beside it. Putting it in a slot therefore
+means authoring its setup, not recovering it.
+
 Four more things are ruled out, so the next person does not spend the search again. The model
 carries **no floor marker**: object ids are simply sequential from `0x5001` in every level
 measured, so nothing in the object table distinguishes a surface from scenery, and the ids
