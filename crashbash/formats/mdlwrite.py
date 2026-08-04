@@ -505,7 +505,20 @@ def build_blocks(mesh: NewMesh) -> dict:
         # seed whose parity that guess got wrong.
         flags = STRIP_FLAG_UNTEXTURED if plain else 0
         strips += struct.pack("<H", (len(run) << 8) | flags)
-    strips += struct.pack("<H", 0xFF00)
+    # 0xFFFF, and it has to be: every one of the archive's 7960 meshes ends its
+    # strip list with that word and not one ends it with 0xFF00, which this
+    # wrote. A high byte is a triangle count, so 0xFF00 is not a terminator at
+    # all -- it reads as a strip of 255 triangles with the flags clear, and the
+    # walk carries on into whatever follows the block. The decoders size their
+    # output by that walk, so the vertex count comes out far larger than the
+    # keyframes hold and the tail of the side buffer at 0x80056AC8 keeps
+    # whatever it held last -- vertices in world space, from the previous draw.
+    # Standing still that stale tail equals the live values and nothing shows;
+    # walking it lags, and the model trails threads across the level that grow
+    # with the distance moved. Diagonal movement, being faster, made it worse.
+    # `transplant_mesh` copies a shipped block verbatim and so never carried it,
+    # which is why the transplanted models were clean and the built ones were not.
+    strips += struct.pack("<H", 0xFFFF)
 
     # Lay the pool out strip by strip: a run of n triangles occupies n + 2
     # vertices, the first triangle contributing all three and each after it one.
