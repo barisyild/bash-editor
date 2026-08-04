@@ -195,11 +195,28 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
             legacy_scale = colour is not None
             if (colour is not None and warnings is not None
                     and not any("_CRASHBASH_COLOR" in w for w in warnings)):
-                warnings.append(
-                    "_CRASHBASH_COLOR is missing, so colours above 128 may "
-                    "have been dimmed in transit; tick Data > Attributes "
-                    "in Blender's glTF export to carry them through"
-                )
+                # Blender writes COLOR_0 flat white unless the material's node
+                # tree actually reads the colour attribute -- it says so in its
+                # own log and exports a placeholder. Left alone that imports a
+                # model which draws at luminance 248 against the shipped Crash's
+                # 64: white, not dim. Worth separating from the case the second
+                # message describes, since the two need different fixes.
+                flat = np.asarray(colour, dtype=np.float64)[:, :3]
+                if flat.size and float(flat.min()) >= 0.999:
+                    warnings.append(
+                        "the file carries no vertex colour: COLOR_0 is flat "
+                        "white and _CRASHBASH_COLOR is absent, so every face "
+                        "will draw at full brightness. Blender only exports a "
+                        "colour attribute when the material reads it -- wire a "
+                        "Color Attribute node into the shader, or tick "
+                        "Data > Attributes so _CRASHBASH_COLOR travels"
+                    )
+                else:
+                    warnings.append(
+                        "_CRASHBASH_COLOR is missing, so colours above 128 may "
+                        "have been dimmed in transit; tick Data > Attributes "
+                        "in Blender's glTF export to carry them through"
+                    )
         uv = _accessor_or_none(glb, primitive, "TEXCOORD_0")
         slot = slot_of.get(primitive.get("material", -1))
 
