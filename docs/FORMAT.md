@@ -1820,13 +1820,40 @@ rebuilt — put the castle on screen in the jungle's slot and left the player wa
 jungle's floor. So the surface the game collides against did not come with the file that
 draws, and it is keyed by which arena was entered.
 
-It is not one shape shared by the mode either: the four crate arenas measure 54×33, 38×30,
-47×31 and 73×20 in reader units across their whole geometry, so whatever describes the play
-area is per arena. That leaves the mode overlays. `overlays/text/*.bin` are the twelve *text*
-overlays — a per-minigame id and NUL-terminated strings — and the fifteen code overlays are
-`overlays/modes/*.bin`, of which the crate game's is `overlays/modes/crate.bin`, 70,945 bytes.
-The arenas' extents do not appear in it as int16 in model units, so if the bounds are there
-they are in some other form; that search is not finished.
+**It is the mode's, and it is the same in every arena of that mode.** Measuring whole-model
+extents suggests otherwise — the four crate arenas span 54×33, 38×30, 47×31 and 73×20 — but
+that is scenery. Measuring the *play surface* instead, the largest horizontal set of triangles
+in each, gives one answer everywhere:
+
+| arena | floor y | horizontal triangles | extent |
+| --- | --- | --- | --- |
+| `crate_jungle` | 0.00 | 128 | 16.8 × 17.0 |
+| `crate_drain` | 0.00 | 148 | 19.0 × 16.0 |
+| `crate_snow` | −0.04 | 129 | 15.9 × 17.6 |
+| `crate_tiebreaker` | 0.89 | 128 | 16.0 × 15.7 |
+| `unused_castle` | −0.02 | **97** | 16.6 × 15.9 |
+
+128 triangles is 64 quads, and `crate_tiebreaker` shows the shape exactly: its floor has nine
+distinct x values and nine distinct z values, at −7.97, −5.98, −3.99, −1.99, 0.00, 1.99, 3.98,
+5.98, 7.97, every step 2.00. That is an **8×8 grid of 2×2 cells, 16×16 units, centred on the
+origin, at y = 0** — the crate game's board. Every crate arena is modelled around it and draws
+a floor over it; the game collides against the grid, which is why exchanging the file that
+draws changed the picture and not the ground.
+
+So there is **no per-level collision asset to replace**. `unused_castle` has a floor of the
+right size in the right place but tessellated 97 triangles rather than 128, and 60 numbered
+meshes of walls and stairs spanning y −14.9..23.7 that the crate mode knows nothing about: a
+player put there walks the mode's flat board and passes through the castle. Making it playable
+is a modelling job — give it the 8×8 grid — not a binary swap.
+
+For the record of where the mode's code is, since this repository had it wrong:
+`overlays/text/*.bin` are the twelve *text* overlays, a per-minigame id and NUL-terminated
+strings, and the fifteen code overlays are `overlays/modes/*.bin`. The crate game's is
+`overlays/modes/crate.bin`, 70,945 bytes, and it loads at **`0x800B32B4`** — recovered by
+requiring its 34 internal `jal` targets to land on function prologues, which 22 of 34 do there
+against 3 at the next best base, and confirmed against the site §14 already cites: `0x800B4BDC`
+disassembles there as the mode's AI reading an object's `+0x54`/`+0x58` and squaring a
+horizontal distance.
 
 Four more things are ruled out, so the next person does not spend the search again. The model
 carries **no floor marker**: object ids are simply sequential from `0x5001` in every level
