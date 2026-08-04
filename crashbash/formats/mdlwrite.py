@@ -96,6 +96,13 @@ class Transplant:
     # Per source texture, the UV shift needed when its pixels were written into
     # a corner of a larger slot in the destination pack.
     uv_shift: dict[int, tuple[int, int]] = field(default_factory=dict)
+    # Per source texture, the factor its UVs need when the destination slot is
+    # a different size. A UV is a texel coordinate, so moving a mesh onto a
+    # pack whose matching texture is half as wide leaves every corner sampling
+    # twice as far out -- off the texture and into whatever shares its page.
+    # A slot cannot be resized to avoid this: pack VRAM placement is still
+    # unknown (§10.1), so the geometry adapts instead.
+    uv_scale: dict[int, tuple[float, float]] = field(default_factory=dict)
     # The attachment block (mesh+0x2C) the installed mesh should carry, raw:
     # [u16 flags][u16 count][16 bytes x count]. Gameplay reads it live through
     # the 0x2000 id namespace, and for a character it is the collision volume
@@ -611,18 +618,20 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
         entry = mesh.face_texture[face]
         index = entry & TEXTURE_INDEX_MASK
         shift = (0, 0)
+        scale = (1.0, 1.0)
         if entry & TEXTURE_FLAG_SWATCH:
             new_entry = TEXTURE_FLAG_SWATCH | source.palette_map.get(index, index)
         else:
             new_entry = source.texture_map.get(index, index)
             shift = source.uv_shift.get(index, (0, 0))
+            scale = source.uv_scale.get(index, (1.0, 1.0))
         # One entry per triangle, run length zero: the run only ever compresses.
         texture += struct.pack("<H", new_entry & 0xFFFF)
 
         at = src_uv + mesh.face_uv_index[face] * UV_ENTRY_SIZE
         for corner in range(3):
-            u = source.data[at + corner * 2] + shift[0]
-            v = source.data[at + corner * 2 + 1] + shift[1]
+            u = int(round(source.data[at + corner * 2] * scale[0])) + shift[0]
+            v = int(round(source.data[at + corner * 2 + 1] * scale[1])) + shift[1]
             uvs += bytes((min(max(u, 0), 255), min(max(v, 0), 255)))
         uv_index += struct.pack("<H", uv_base + face * 3)
 
