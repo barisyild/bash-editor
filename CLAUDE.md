@@ -78,7 +78,14 @@ They are not style preferences.
   its old EOF except the rebuilt mesh's header and `0x08`/`0x50`, new blocks go
   after the §8.6 block under a grown sector-aligned `0x50`, colours map to the
   nearest existing entry, and textured triangles need their exact UV triple
-  already in the table. *Why* `0x24` is pinned is still unfound: every reader
+  already in the table — the writer now looks each one up and refuses the mesh
+  when it is missing. It used to write `uv_base + f*3` instead, which aims every
+  face just past the end of a table that cannot grow: `warp_room1`'s mesh 75
+  came back with all twenty indices at 2770..2827 against a 2770-entry table,
+  and on screen the slab drew with whatever followed the table for UVs — the
+  texture simply gone. A scale survives the lookup because it leaves each
+  triangle's corner order alone; a reshape that re-orders corners does not
+  (boxing mesh 89 lost 16 of its 91 faces' triples). *Why* `0x24` is pinned is still unfound: every reader
   traces to a live resolve that a byte-identical copy would satisfy, and a
   disc-wide sweep of all 385 loads at that offset accounts for every one.
   Searched and not found is not the same as absent.

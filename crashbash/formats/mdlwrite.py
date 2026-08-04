@@ -973,8 +973,32 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         faces = blocks["faces"]
         uv_base = len(uvs) // UV_ENTRY_SIZE
         if pin_tables:
-            uv_index = [((uv_base + f * 3) if blocks["textured"] else 0) & 0xFFFF
-                        for f in range(faces)]
+            # A pinned table cannot grow, so a textured face has to find its own
+            # UV triple already in it. Writing `uv_base + f*3` instead aimed
+            # every face just past the end of the table -- `warp_room1`'s mesh
+            # 75 came back with all twenty of its indices at 2770..2827 against
+            # a 2770-entry table, and the slab drew with whatever followed it
+            # for UVs. On screen that reads as a texture that went missing.
+            uv_index = []
+            missing = 0
+            source = blocks["uvs"]
+            for f in range(faces):
+                if not blocks["textured"]:
+                    uv_index.append(0)
+                    continue
+                at = uv_runs.get(bytes(source[f * 6 : f * 6 + 6]))
+                if at is None:
+                    missing += 1
+                    at = 0
+                uv_index.append(at & 0xFFFF)
+            if missing:
+                raise ValueError(
+                    f"mesh {index} keeps a pinned UV table, so each textured "
+                    f"triangle needs its exact UV triple already in it, and "
+                    f"{missing} of {faces} are not there. Re-striping orders a "
+                    f"triangle's corners anew, which is usually why. The mesh "
+                    f"cannot be rebuilt textured in this model."
+                )
         else:
             uv_index = []
             source = blocks["uvs"]
