@@ -636,12 +636,25 @@ class MainWindow(QMainWindow):
                 )
         elif report.textures_unchanged:
             lines.append("Textures unchanged; the pack is not touched.")
+        # The importer's remarks are the only warning a user gets about the
+        # things that still import cleanly and then look wrong on screen -- a
+        # mesh wound against the one it replaces above all, which nothing else
+        # catches: the geometry is right, the round trip measures no loss, and
+        # only the console shows the model inside out.
+        if report.warnings:
+            lines.append("")
+            lines.append("Worth checking:")
+            lines.extend(f"  • {warning}" for warning in report.warnings)
         lines.append("")
         lines.append("Staged, not written: preview it here, then File → Build disc…")
 
         self._sync_edit_actions()
         self.open_entry(entry)
-        QMessageBox.information(self, APP_NAME, "\n".join(lines))
+        text = "\n".join(lines)
+        if report.warnings:
+            QMessageBox.warning(self, APP_NAME, text)
+        else:
+            QMessageBox.information(self, APP_NAME, text)
 
     def revert_entry(self) -> None:
         if self.entry is None or self.entry.index not in self.replacements:
