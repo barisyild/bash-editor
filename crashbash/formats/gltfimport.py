@@ -647,8 +647,15 @@ def import_glb(
         # blend of a pose with itself does not come back as that pose is not
         # established here and is not guessed at; what is established is that
         # frames which never ask for it draw correctly.
+        # One keyframe, and every frame sitting on it. Identical poses stored
+        # once per key are the same bytes over and over, and the pose pool is
+        # what a model weighs: freezing `chars/crate/coco` a key at a time gave
+        # 328,112 bytes against the shipped 215,678, where one key gives 99,084.
+        # That is not only waste. The model drew correctly in the crate game and
+        # trailed threads across the warp room, which loads far more at once --
+        # the hub is where the budget is tight, and the smaller file ran there.
         resting_frames = [
-            AW.FrameSpec(at[f.key_a], None, 0, clip.aux_block(f.index))
+            AW.FrameSpec(0, None, 0, clip.aux_block(f.index))
             for f in clip.frames
         ]
         target_mesh = clip.mesh_index
@@ -676,7 +683,7 @@ def import_glb(
         if animation is None or not drives_this:
             rest_i16 = np.clip(np.round(rest), -32768, 32767).astype(np.int16)
             specs.append(AW.ClipSpec(
-                poses=[rest_i16.copy() for _ in keys], frames=resting_frames,
+                poses=[rest_i16], frames=resting_frames,
                 name_hash=clip.name_hash, mesh_header=header, vertex_flags=flags))
             report.clips_static.append(clip.label)
             continue
@@ -692,7 +699,7 @@ def import_glb(
         if not used or target_count == 0:
             rest_i16 = np.clip(np.round(rest), -32768, 32767).astype(np.int16)
             specs.append(AW.ClipSpec(
-                poses=[rest_i16.copy() for _ in keys], frames=resting_frames,
+                poses=[rest_i16], frames=resting_frames,
                 name_hash=clip.name_hash, mesh_header=header, vertex_flags=flags))
             report.clips_static.append(clip.label)
             continue
