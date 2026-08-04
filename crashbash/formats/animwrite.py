@@ -147,10 +147,28 @@ def build_blob(clip: ClipSpec) -> bytes:
             raise ValueError(f"frame {i}: keyframe {frame.key_a} does not exist")
         a = keyframe_at[frame.key_a] - record
         if frame.key_b is None:
+            # The two fields are one fact: a weight is what selects the game's
+            # blend decoder, and the decoder it selects reads `key_b`. The
+            # archive holds `weight == 0` exactly when `key_b` is absent, 13,652
+            # records each way with no exception (see anim.py). Writing a weight
+            # without a second keyframe sends the frame to blend toward the
+            # keyframe at offset 0 -- which is not one -- and the model comes
+            # apart differently on every frame, by that frame's own weight,
+            # while every static check still passes. That shipped a disc.
+            if frame.weight:
+                raise ValueError(
+                    f"frame {i}: weight {frame.weight} with no key_b; a frame "
+                    "sitting on one keyframe must carry weight 0"
+                )
             b = 0
         else:
             if not 0 <= frame.key_b < len(keyframe_at):
                 raise ValueError(f"frame {i}: keyframe {frame.key_b} does not exist")
+            if not frame.weight:
+                raise ValueError(
+                    f"frame {i}: key_b {frame.key_b} with weight 0; the game "
+                    "reads a zero weight as sitting on key_a and never blends"
+                )
             b = keyframe_at[frame.key_b] - (record + 4)
         aux = aux_at[i] - (record + 0x0C) if aux_at[i] else 0
         struct.pack_into("<4i", blob, record, a, b, frame.weight, aux)

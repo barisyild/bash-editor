@@ -155,6 +155,53 @@ They are not style preferences.
   game draws the animated pose, never the static records, so zeros there shred
   a model whose static data is byte-identical to the original. This shipped
   three broken discs.
+- **A frame's weight and its second keyframe are one fact.** The archive holds
+  `weight == 0` exactly when `key_b` is absent — 13,652 records each way, no
+  exception — because a non-zero weight is what selects the game's blend
+  decoder, and that decoder reads `key_b`. Dropping the second keyframe while
+  keeping the weight sends every frame to blend toward the keyframe at offset 0,
+  which is not one: the model came apart *differently on each frame*, by that
+  frame's own weight, while every static check passed. The tell was that pausing
+  drew it correctly — a paused frame is a weight-0 frame. `animwrite` now
+  refuses both halves of the mismatch; all 1037 shipped clips pass.
+- **The strip count is what the animation weighs.** A pose stores every vertex
+  of the strip pool and a strip of n triangles costs n + 2 vertices, so striping
+  is a size lever, not only a legality one. The same 648-triangle mesh went 495
+  strips → 1638 pool → 747,672 bytes, and 161 strips → 970 pool: of the 532 KB
+  that first build added, **516 KB was animation**.
+- **`build_strips` is order-sensitive — chain before handing over.** It seeds a
+  strip with a face's corners as they stand and continues along the edge its
+  second and third corners make, taking the lowest-numbered unused face that
+  carries it. Both are the caller's to choose. Left as a dump has them, 328 of
+  648 faces became a strip of one (1.31 triangles each); chaining first and
+  emitting along those chains gave 4.02, and the writer rediscovered the chains
+  exactly. Rotating a triangle's corners is a cyclic permutation, so it cannot
+  change the winding — only which edge the strip tries next.
+- **Retargeting needs the two rest poses to have the same silhouette.**
+  `correspondence` normalises each model by its own bounding box, one axis at a
+  time, so what matches is *relative* position. The shipped crate Coco is a
+  T-pose 1.56 wide at 48 % of the way down; the cutscene Coco that retargeted
+  cleanly measures 1.73 at 48 %. A Crash 2 cutscene Coco, arms down and widest
+  at the hips (0.88 overall), had its shoulders and hair mapped onto the shipped
+  model's *hands* — the fastest-moving vertices in every clip — and the head
+  tore apart while the legs, which map to legs, stayed clean. Check the widest
+  band and where it sits before retargeting anything.
+- **A cutscene model is not a character model**, in three measurable ways: it is
+  posed for one shot (mirror mismatch 0.093 against 0.005–0.006 for every
+  shipped character), it is lit for one shot (its colours top out at 124 where
+  the hardware's neutral is 128 and Crash Bash's own characters use the full
+  range up to 255), and it may have no mouth, because that shot never needed
+  one. Symmetry can be restored with a mirror snap and brightness with a gain,
+  but **collapse decimation undoes the symmetry again** — it collapses each side
+  independently — so snap after decimating, not before.
+- **A gain for a borrowed model is chosen on the percentile, not the mean.**
+  Matching the shipped Coco's mean luminance wanted ×8 and drove 46 % of
+  channels into the ceiling, because a quarter of the borrowed model's channels
+  are zero and no gain lifts those. Protecting the single largest value below
+  255 allowed only ×1.41 and left it as dim as it started. Putting the *90th
+  percentile* on 255 gave ×2.06: that block is one flat level, so clipping it
+  loses no distinction — only 54 channels carried a value of their own — and the
+  drawn luminance went 49 → 88 against the shipped Coco's 138.
 - **A mesh moved between packs carries its own art.** Matching the destination's
   existing pictures gets most of the way and not all: moving the cutscene's
   high-poly Coco into `chars/warp/coco.mdl`, two of her nine textures matched

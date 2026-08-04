@@ -305,6 +305,99 @@ added — checking a new colour that way reported the wrong value twice. Compare
 the colour *table* against the original instead: each of the four edits added
 exactly one entry, matching what was set to within the rounding.
 
+## Bringing a model in from another game
+
+Crash Bandicoot 2's cutscene Coco, dumped by CrashEdit as an OBJ with vertex
+colours and ten textures, into `chars/crate/coco`. Four discs were built before
+it drew, and each failure named something the earlier imports had not reached.
+
+**The strip count, not the triangle count, is what a model weighs.** The first
+build kept all 648 triangles and came back at 747,672 bytes against the shipped
+215,678 — and it black-screened. Of the 532 KB it added, only 16 KB was
+geometry: **516 KB was animation**. A pose stores every vertex of the strip
+pool, a strip of n triangles occupies n + 2 vertices, and the writer's striper,
+left to seed itself, made 495 strips of those 648 triangles for a pool of 1638
+against the shipped 319. That also put it past the 348 strips no shipped mesh
+exceeds. Two faults, one cause.
+
+**Chain the strips yourself before handing them over.** `build_strips` seeds a
+strip with a face's corners as they stand and continues along the edge its
+second and third corners make, taking the lowest-numbered unused face that
+carries it — so the chains it finds are decided by the order the faces arrive in
+and by how each seed happens to be rotated, both of which belong to the caller.
+Left as the dump had them, 328 of the 648 faces became a strip of one. Chaining
+first and emitting along those chains took it to 161 strips, 4.02 triangles
+each, and the writer rediscovered them exactly. Rotating a triangle's corners is
+a cyclic permutation and cannot change its winding; it only changes which edge
+the strip tries next.
+
+**A frame's weight and its second keyframe are one fact.** Freezing the
+animation — every frame on one pose — looked like a way to skip retargeting
+entirely, and it collapses each clip to a single keyframe, which took the file
+to 99,084 bytes, less than half the shipped model. But the frames kept the
+weights they had been carrying, and `weight != 0` is what selects the game's
+blend decoder, which reads a `key_b` that is no longer there. The model came
+apart *differently on every frame*, in proportion to that frame's weight. The
+diagnosis came from the screen: paused, it drew perfectly, because a paused
+frame is a weight-0 frame. `animwrite` now refuses the mismatch in both
+directions, and all 1037 shipped clips pass the check.
+
+**Retargeting needs the two rest poses to have the same silhouette.**
+`crashbash.retarget` finds correspondence in a normalised box, one axis at a
+time, so what matches is relative position. Measured across the widest
+horizontal band and where it sits:
+
+| model | widest band | at | mirror mismatch |
+| --- | --- | --- | --- |
+| shipped `chars/crate/coco` (the clips' own body) | 1.56 | 48 % | 0.006 |
+| the disc's cutscene Coco, which retargeted cleanly | 1.73 | 48 % | 0.005 |
+| the Crash 2 cutscene Coco | 0.88 | at the hips | 0.093 |
+
+The Crash 2 model stands with its arms down, so its shoulders and the sides of
+its hair normalise onto the shipped model's *hands* — the fastest-moving
+vertices in every clip. The head tore into long wedges while the legs, which map
+to legs, stayed clean. Turning the arms out about their own shoulders moved the
+widest band back to 48 % and the tearing stopped.
+
+**A cutscene model is not a character model**, and the three ways it differs are
+all measurable. It is posed for one shot: mirror mismatch 0.093 where every
+shipped character measures 0.005–0.006. It is lit for one shot: 1016 of its
+channel values sit at 124, only 5.8 % reach the hardware's neutral 128 at all,
+and it drew at 36 % of the shipped Coco's luminance with no highlight anywhere.
+And it may simply lack what the shot did not need — this one has no mouth, in
+the source as much as in the import.
+
+Symmetry comes back with a mirror snap, which moves positions without deleting
+faces, so the bag on one hip survives. But **collapse decimation undoes it
+again**, because it collapses each side independently: 0.010 before decimating
+became 0.033 after. Snap again afterwards and it returns to 0.008.
+
+**Brightness is a percentile, not a mean.** The hardware draws a blended polygon
+as `texel * colour / 128`, so 128 is neutral and 255 doubles; Crash Bash's
+characters paint into that upper half and this one does not. Matching the
+shipped Coco's *mean* luminance wanted ×8 and drove 46 % of channels into the
+ceiling — a quarter of this model's channels are zero and no gain lifts those.
+Protecting the largest value below 255, a lone 181, allowed only ×1.41 and left
+it as dim as it started. Putting the **90th percentile** on 255 gave ×2.06: that
+block is a single flat level, so mapping all of it to 255 loses no distinction —
+54 channels carried a value of their own — and the drawn luminance went 49 → 88
+against the shipped Coco's 138. Past the knee the cost is immediate: ×2.25 takes
+clipping from 5.8 % to 24 % as the whole block goes over.
+
+**One trap that has nothing to do with the format.** Importing the same OBJ
+twice into one Blender session suffixes every material with `.001`, `.002`.
+Matched raw, not one name resolves to a slot, every face falls through to the
+swatch branch, and the mesh is written untextured — silently, until it is on
+screen. Strip the suffix and treat an unknown material as an error, never as a
+fallback.
+
+What the model itself needed, in the end, was **welding and nothing else**: a
+CrashEdit dump is a triangle soup with no adjacency, which neither the striper
+nor the normal pass can work without. Decimation, arm posing and symmetry were
+each a response to a downstream problem — size, retargeting, and the shot's own
+pose — and with the animation frozen none of them applies. All 648 triangles go
+in as authored.
+
 ## Moving a mesh from one pack to another
 
 The disc already holds better versions of its own characters: the cutscene model
