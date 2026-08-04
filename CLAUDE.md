@@ -158,30 +158,35 @@ They are not style preferences.
 - **A mesh moved between packs carries its own art.** Matching the destination's
   existing pictures gets most of the way and not all: moving the cutscene's
   high-poly Coco into `chars/warp/coco.mdl`, two of her nine textures matched
-  the warp pack pixel for pixel and the main one to 3.3 of 255 — but the worst
-  was 113.7, and it drew a wrong face. The slots being replaced are sampled by
-  the mesh being replaced and by nothing else, which is the one case §10.3
-  allows, so copy the source's pixels and palette into them instead of pointing
-  at whatever looks closest.
+  the warp pack pixel for pixel and the largest to 3.3 of 255 — but the worst was
+  113.7, and that one is her **eye**, because the low-poly warp Coco has no eye
+  texture at all and nothing in her pack scores under 111. The slots being
+  replaced are sampled by the mesh being replaced and by nothing else, which is
+  the one case §10.3 allows, so copy the source's pixels and palette into them
+  instead of pointing at whatever looks closest.
 - **A UV rescale is `(dest - 1) / (source - 1)`, not `dest / source`.** A 32×32
   texture's UVs run 0..31, so halving gives 0..16 — one column past the end of a
-  16×16 slot. Coco's four eye faces span their whole texture, so all four
-  sampled outside it and her eyes came back blank. A slot cannot be resized to
-  avoid the rescale; pack VRAM placement is still unknown (§10.1).
+  16×16 slot. **35 of that Coco's 79 textured faces** sample outside their own
+  slot under `dest / source` and none do under `(dest-1)/(source-1)`; the four
+  that showed are the eyes, two triangles each, spanning their texture corner to
+  corner, and they came back blank. A slot cannot be resized to avoid the
+  rescale; pack VRAM placement is still unknown (§10.1).
 - **A swatch face needs its colour re-matched, not its palette number.** It is
   painted by one texel of the pack's palette-less swatch texture (§6.2), naming
   a palette and pointing its UVs at a cell — and neither the palette numbering
   nor the cell layout survives a move between packs. **279 of that Coco's 358
   faces are swatch**, and mapping the palette alone left them reading whatever
-  sat at the source's cell: black hair, pink ears. Matched by the colour each
+  sat at the source's cell — black hair. Matched by the colour each
   face means, over every cell read through every palette (125 reachable in the
   warp pack, 175 in the crate one), 231 land exactly and the worst is 8 of 255.
 - **A pack's colour key is not universal.** The skip pixel is the rule — 10,823
   of the disc's 11,234 palettes carry `0x0000` — but 120 palettes across 46 of
   the 400 packs carry magenta instead, and the cutscene pack Coco comes from is
-  one of them: a single `0xFC1F` filling the part of each texture the character
-  packs leave transparent. Copying a palette across without translating that
-  entry drew it, as pink patches by her ears.
+  one of them: one palette of its 27, holding `0xFC1F` as colour 15, which fills
+  **33.4 % of the texels** of the single texture that uses it. Copying that
+  palette across without translating the entry drew the magenta, and the six
+  faces sampling that texture are the two mirrored triples at the sides of her
+  head — which is why it read as pink patches by her ears.
 - **An external model must be welded before anything else is done to it.** A
   Sketchfab Suzanne arrived as a triangle soup: 1966 vertices for 968 triangles,
   and **1966 of its 2435 edges carried a single face**. Merging by distance

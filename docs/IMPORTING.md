@@ -317,43 +317,65 @@ found by looking at the result on hardware.
 **Carry the source's own pixels; do not point at the nearest picture.** Matching
 the two packs by image looked like enough — both dress the same character — and
 it very nearly is. Of the nine slots the cutscene Coco samples, two match the warp
-pack's pixel for pixel (both 8x8) and her body texture matches at 3.3 of 255. But
-the worst is 113.7, and that one is her face — which on screen drew as somebody
-else's. The fix is not a better match. Every slot being
-replaced is sampled by the mesh being replaced and by nothing else, which is the
-one case §10.3 allows, so the source's art is simply written into them. Every pair
-here is 4bpp with sixteen colours, so the palette copies whole and only the
-picture is resampled — a slot cannot be resized, pack VRAM placement being
-unknown (§10.1).
+pack's pixel for pixel (both 8x8) and her largest, a 64x64, matches at 3.3 of 255.
+But the worst is 113.7, and that one is her **eye** — a 32x32 eyeball with a green
+iris and a white highlight, for which the warp pack simply has no counterpart:
+nothing in it scores under 111. That is the shape of the problem. The low-poly
+character a cutscene model replaces does not carry the same features, so the
+slots with no counterpart are exactly the ones that matter most, and a better
+matcher cannot invent them. Every slot being replaced is sampled by the mesh
+being replaced and by nothing else, which is the one case §10.3 allows, so the
+source's art is simply written into them. Every pair here is 4bpp with sixteen
+colours, so the palette copies whole and only the picture is resampled — a slot
+cannot be resized, pack VRAM placement being unknown (§10.1).
 
 **A UV rescale is `(dest - 1) / (source - 1)`, not `dest / source`.** The
 destination's slots are smaller — a 64x64 and six 32x32 sources landing on a 32x32
 and six 16x16 — so the UVs have to shrink with them. A texel coordinate on a 32x32
 texture runs 0..31; halving that gives 0..16, and 16 is one column past the end of
-a 16x16 slot. Coco's four eye faces span their whole texture, corner to corner, so
-all four sampled from outside it and her eyes came back blank. `(dest-1)/(src-1)`
-lands 31 on 15 exactly, and afterwards no UV corner in the mesh falls outside its
-own texture.
+a 16x16 slot. Measured over the mesh: **35 of its 79 textured faces** put a corner
+outside the texture it names under `dest / source`, and none do under
+`(dest-1)/(src-1)`, which lands 31 on 15 exactly. The four that showed on screen
+are the eyes — two triangles each, and each one spans its texture corner to
+corner, so there is no margin to absorb the error. They came back blank.
+
+That is worth stating as a rule: the faces this breaks are the ones whose UVs
+reach the edge of their slot, and a face that uses its whole texture is usually
+a face that matters — an eye, a mouth, a sign. A rescale that is one texel wrong
+is invisible everywhere else.
 
 **A swatch face's colour must be carried, not its palette number.** 279 of that
 Coco's 358 faces are swatch faces (§6.2): flat-coloured, painted by one texel of
 the pack's palette-less swatch texture, naming a palette and pointing their UVs at
 a cell. Neither the palette numbering nor the cell layout survives a move between
 packs, so mapping the palette alone leaves each face reading whatever happens to
-sit at the source's cell — black hair and pink ears. `Transplant.swatch_face`
+sit at the source's cell — that is where the black hair came from, the ears being
+a separate fault below. `Transplant.swatch_face`
 takes, per source face, the destination palette and cell that give the colour it
 *meant*: matched over every cell of the destination swatch read through every
 palette, 125 colours reachable in the warp pack and 175 in the crate one, 231 of
 the 279 faces land exactly and the worst is 8 of 255 out.
 
-**A pack's colour key is not universal.** The cutscene pack fills the unused part
-of a texture with opaque magenta, `0xFC1F`; the character packs leave those texels
-at `0x0000`, which the hardware skips (§10.2). Copying a palette across without
-translating that entry draws the magenta — pink patches beside Coco's ears.
+**A pack's colour key is not universal.** One palette of the cutscene pack's 27
+holds opaque magenta, `0xFC1F`, as its colour 15, and that colour fills 33.4 % of
+the one texture reading it — the part a character pack would have left at
+`0x0000`, which the hardware skips (§10.2). Copy the palette across without
+translating the entry and the magenta draws. The six faces sampling that texture
+are two mirrored triples at the sides of Coco's head, so it appeared as pink
+patches beside her ears.
 
 The rest is the ordinary route. The destination's clips are poses of its own
-vertex count, so they are retargeted rather than copied (`crashbash.retarget`
-fits a rotation per moving part and blends, which keeps a limb its own length),
-clips that drive another mesh are copied byte for byte, the replaced mesh's own
-§8.4 collision volume is carried through, and the order is strip → transplant →
-write clips (§2.1). Confirmed on screen for both Cocos, eyes included.
+vertex count, so they are retargeted rather than copied — `crashbash.retarget`
+fits a rotation per moving part and blends, which keeps a limb its own length —
+and a clip driving some other mesh is re-emitted from its original poses instead.
+The replaced mesh's own §8.4 collision volume is carried through: the crate Coco
+has one and it survives the rebuild, the warp Coco has none to carry. The order
+is strip → transplant → write clips (§2.1).
+
+**Both Cocos were confirmed on screen, eyes included, and the whole pipeline
+reproduces.** Re-running it from the shipped archive gives back all four staged
+entries — `chars/warp/coco.{mdl,tex}` and `chars/crate/coco.{mdl,tex}` — with the
+same nine picture distances and the same 279 swatch faces of 358 remapped (231
+exact, worst 8 of 255; 125 colours reachable in the warp pack, 175 in the crate
+one). Compared not against the staged files but against the entries read back out
+of the disc image that was actually tested, all four are byte for byte identical.

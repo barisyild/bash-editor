@@ -105,8 +105,10 @@ class Transplant:
     #
     # The factor is `(dest - 1) / (source - 1)`, not `dest / source`: a 32x32
     # texture's UVs run 0..31, and halving those gives 0..16, which is one
-    # column past the end of a 16x16 slot. Coco's four eye faces span the whole
-    # texture, so all four read from outside it -- on hardware her eyes came
+    # column past the end of a 16x16 slot. 35 of the high-poly Coco's 79
+    # textured faces read from outside their own slot that way and none do this
+    # way; the four that showed are her eyes, which span their texture corner to
+    # corner and so have no margin to absorb the error -- on hardware they came
     # back blank.
     uv_scale: dict[int, tuple[float, float]] = field(default_factory=dict)
     # Per source face, the destination palette and swatch cell that give the
@@ -115,7 +117,8 @@ class Transplant:
     # UVs at a cell -- and neither the palette numbering nor the cell layout
     # survives a move between packs. Mapping the palette alone left 279 of the
     # high-poly Coco's 358 faces reading whatever happened to sit at the
-    # source's cell: black hair and pink ears.
+    # source's cell: black hair. Matched by the colour each face means, 231 of
+    # the 279 land exactly and the worst is 8 of 255 out.
     swatch_face: dict[int, tuple[int, tuple[int, int]]] = field(default_factory=dict)
     # The attachment block (mesh+0x2C) the installed mesh should carry, raw:
     # [u16 flags][u16 count][16 bytes x count]. Gameplay reads it live through
