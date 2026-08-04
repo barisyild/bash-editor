@@ -635,6 +635,22 @@ def import_glb(
                          f.weight, clip.aux_block(f.index))
             for f in clip.frames
         ]
+        # Every keyframe of a static clip holds the same pose, so there is
+        # nothing between them to interpolate -- and a frame that asks for the
+        # blend anyway is the one that misbehaves. A model imported with its
+        # clips frozen drew correctly standing still and stretched into threads
+        # while walking, which is exactly the difference between the copy
+        # decoder a weight of 0 selects and the GTE INTPL blend the rest take.
+        # Every check this project can make said the file was sound: 451 frames
+        # all decoding to the static pose to the unit, keyframe flags agreeing
+        # with the mesh 968/968, the pool and the stride consistent. Why the
+        # blend of a pose with itself does not come back as that pose is not
+        # established here and is not guessed at; what is established is that
+        # frames which never ask for it draw correctly.
+        resting_frames = [
+            AW.FrameSpec(at[f.key_a], None, 0, clip.aux_block(f.index))
+            for f in clip.frames
+        ]
         target_mesh = clip.mesh_index
         animation = animations_by_name.get(clip.label)
         drives_this = animation is not None and node_mesh.get(
@@ -660,7 +676,7 @@ def import_glb(
         if animation is None or not drives_this:
             rest_i16 = np.clip(np.round(rest), -32768, 32767).astype(np.int16)
             specs.append(AW.ClipSpec(
-                poses=[rest_i16.copy() for _ in keys], frames=original_frames,
+                poses=[rest_i16.copy() for _ in keys], frames=resting_frames,
                 name_hash=clip.name_hash, mesh_header=header, vertex_flags=flags))
             report.clips_static.append(clip.label)
             continue
@@ -676,7 +692,7 @@ def import_glb(
         if not used or target_count == 0:
             rest_i16 = np.clip(np.round(rest), -32768, 32767).astype(np.int16)
             specs.append(AW.ClipSpec(
-                poses=[rest_i16.copy() for _ in keys], frames=original_frames,
+                poses=[rest_i16.copy() for _ in keys], frames=resting_frames,
                 name_hash=clip.name_hash, mesh_header=header, vertex_flags=flags))
             report.clips_static.append(clip.label)
             continue
