@@ -293,6 +293,52 @@ def _neutral_swatch_cell(model_data: bytes, target, pack) -> tuple[int, int] | N
     return best
 
 
+def _signed_volume(corners: np.ndarray) -> float:
+    """Six times the volume a closed surface encloses, sign and all."""
+    p, q, r = corners[:, 0], corners[:, 1], corners[:, 2]
+    return float(np.einsum("ij,ij->i", p, np.cross(q, r)).sum()) / 6.0
+
+
+def _warn_if_inside_out(index: int, positions: np.ndarray, target, report: Report
+                        ) -> None:
+    """Say so when an incoming mesh is wound against the one it replaces.
+
+    The winding is taken as it arrives and must be: a room shell is seen from
+    inside and its faces correctly point inward, and a flood fill imposed here
+    inverted all 875 triangles of `mainmenu/models` mesh 6 and lost the menu's
+    backdrop. But a *character* handed over inside out is drawn inside out --
+    the game flips the NCLIP test per vertex flag (§11.3) -- and nothing else
+    reports it: the geometry is right, the strips are right, the round trip
+    measures worst corner 0.0000, and on screen the body reads as parts facing
+    the wrong way.
+
+    Comparing the closed volume against the mesh being replaced catches it
+    without deciding anything. Modelling a character in Blender and exporting it
+    straight out gives the opposite sign to every shipped character, so this is
+    the first thing to check when an import draws inside out.
+    """
+    if target is None or not target.face_count or not len(target.positions):
+        return
+    shipped = np.asarray(target.positions, dtype=np.float64)
+    was = []
+    for a, b, c, _ in target.indexed_triangles():
+        order = (a, b, c) if not (target.vertex_flags[c] & 1) else (a, c, b)
+        was.append(shipped[list(order)])
+    if not was:
+        return
+    before = _signed_volume(np.array(was))
+    after = _signed_volume(np.asarray(positions, dtype=np.float64) * GTE_SCALE_SMALL)
+    if before == 0.0 or after == 0.0 or np.sign(before) == np.sign(after):
+        return
+    report.warnings.append(
+        f"mesh {index} is wound against the mesh it replaces: it encloses "
+        f"{after:+.3f} where the shipped one encloses {before:+.3f}. The "
+        f"winding is taken as authored, so if this is a solid body it will "
+        f"draw inside out -- flip the normals in the modelling tool and export "
+        f"again. A surface meant to be seen from inside is the other case."
+    )
+
+
 def _material_image(glb: Glb, material_index: int) -> np.ndarray | None:
     """The material's base-colour image as RGBA, decoded from the embedded PNG."""
     from io import BytesIO  # noqa: PLC0415
@@ -548,6 +594,7 @@ def import_glb(
         # resolved to nothing. See `_neutral_swatch_cell`.
         plain = textures < 0
         target = MW.mesh_index(model).get(index)
+        _warn_if_inside_out(index, positions, target, report)
         if plain.any() and pack is not None and target is not None:
             cell = _neutral_swatch_cell(model_data, target, pack)
             if cell is not None:
