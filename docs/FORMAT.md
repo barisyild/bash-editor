@@ -1828,6 +1828,25 @@ overlays — a per-minigame id and NUL-terminated strings — and the fifteen co
 The arenas' extents do not appear in it as int16 in model units, so if the bounds are there
 they are in some other form; that search is not finished.
 
+Four more things are ruled out, so the next person does not spend the search again. The model
+carries **no floor marker**: object ids are simply sequential from `0x5001` in every level
+measured, so nothing in the object table distinguishes a surface from scenery, and the ids
+common to all four crate arenas are common to the castle and to `pogo_painter` too. The
+**bounds are not in the crate overlay as int16 model units** — none of the four arenas'
+extents appears in `overlays/modes/crate.bin`. There is **no arena-to-file-index table** in
+the executable: the file table at `0x8004E110` is read through a request struct
+(`0x80012BE4`: `lw` the index from `[$s0]`, `sll 3`, add the base), never from an inline
+constant, so no `715` or `677` is written down anywhere to find. And the load address of the
+crate overlay is **`0x800B32B4`**, recovered by requiring its 34 internal `jal` targets to
+land on function prologues — 22 of 34 do at that base and 3 at the next best, and the site
+§14 already cites, `0x800B4BDC`, disassembles there as the read of an object's `+0x54`/`+0x58`
+inside the mode's AI, not as a floor test.
+
+The experiment that separates the two remaining explanations is a swap within one mode:
+`crate_snow`'s arena into `crate_jungle`'s slot. If the floor becomes the snow arena's, the
+surface does come from the file and the castle failed only because it carries whatever crate
+arenas carry; if it stays the jungle's, the surface is external to the model beyond doubt.
+
 One structural note from the same comparison, since it settles a header field: **`model+0x54`
 is the numbered mesh count**, matching `len(model.meshes)` in all twelve levels measured
 (`crate_jungle` 0, `unused_castle` 60, `pogo_gogo` 42, and so on).
