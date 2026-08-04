@@ -37,7 +37,7 @@ from .anim import WEIGHT_ONE, read_animations
 from . import gltf
 from .gltf import AXIS_FLIP, FRAMES_PER_SECOND
 from .gltfread import Glb, parse_glb, read_glb
-from .mdl import Model, read_model
+from .mdl import TEXTURE_INDEX_MASK, Model, read_model
 from .tex import TexturePack, read_pack
 
 MESH_NAME = re.compile(r"_mesh(\d+)$")
@@ -253,6 +253,44 @@ def _material_slots(glb: Glb, pack: TexturePack | None) -> dict:
         slots["sizes"][slot] = (pack.textures[slot].width,
                                 pack.textures[slot].height)
     return slots
+
+
+def _neutral_swatch_cell(model_data: bytes, target, pack) -> tuple[int, int] | None:
+    """The cell of the pack's swatch texture that leaves a colour most alone.
+
+    An untextured face in this format is a swatch face (§6.2): it names a
+    palette and reads a single texel, and the hardware draws `texel * colour /
+    128`. The exporter folds that texel into the vertex colour and writes no
+    cell, so a rebuilt face has to be given one -- and it was given (0,0), which
+    through `chars/crate/coco`'s palette 18 is the palette's entry 0, pure
+    black. Every swatch face of a rebuilt mesh therefore drew black, while
+    `tools/roundtrip.py`, which compares positions, reported no loss at all:
+    a shipped mesh using seven cells came back with all 163 faces on (0,0).
+
+    Choosing the cell nearest the hardware's neutral lets the folded colour
+    through instead. It is not always exact -- palette 18's best is
+    (123,123,123), 4 % dark -- but it is the difference between a model that
+    draws and one that does not.
+    """
+    swatch = next((t for t in pack.textures if t.is_swatch), None)
+    if swatch is None:
+        return None
+    entry = MW._swatch_entry(model_data, target)
+    palette_index = entry & TEXTURE_INDEX_MASK
+    if not 0 <= palette_index < len(pack.palettes):
+        return None
+    palette = pack.palettes[palette_index]
+    cells = swatch.indices()
+    best, best_cost = None, None
+    for y in range(swatch.height):
+        for x in range(swatch.width):
+            cell = int(cells[y, x])
+            if cell >= palette.shape[0]:
+                continue
+            cost = int(np.abs(palette[cell][:3].astype(np.int32) - 128).sum())
+            if best_cost is None or cost < best_cost:
+                best, best_cost = (x, y), cost
+    return best
 
 
 def _material_image(glb: Glb, material_index: int) -> np.ndarray | None:
@@ -505,6 +543,15 @@ def import_glb(
         # 5912/6031 with a flood fill imposed on it, and the strip builder does
         # not care either way (1876 strips against 1879, longest mesh 224 both
         # ways, against the 348 no shipped mesh exceeds).
+        # A face with no slot is a swatch face and still reads a texel, so it
+        # needs a cell rather than the zeros left behind by a material that
+        # resolved to nothing. See `_neutral_swatch_cell`.
+        plain = textures < 0
+        target = MW.mesh_index(model).get(index)
+        if plain.any() and pack is not None and target is not None:
+            cell = _neutral_swatch_cell(model_data, target, pack)
+            if cell is not None:
+                uvs[plain] = np.array(cell, dtype=uvs.dtype)
         staged[index] = MW.NewMesh(
             positions=np.clip(np.round(positions), -32768, 32767).astype(np.int16),
             colours=colours,
