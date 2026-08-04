@@ -27,6 +27,19 @@ the archive and `crashbash/iso.py` writes or patches the disc image.
   (`position / GTE_SCALE_SMALL`), drop the feet to y = 0, keep x centred on 0.
   Characters stand centred on the origin; aligning bounding-box corners
   instead shifts a narrower character sideways by half the width difference.
+- **Weld before anything else.** A model downloaded from the web is often a
+  triangle soup with no adjacency at all: a Sketchfab Suzanne arrived with 1966
+  vertices for 968 triangles and **1966 of its 2435 edges carrying a single
+  face**, where merging by distance collapses it to 505 vertices and 42 lone
+  edges — the eye and mouth boundaries a closed surface should have. Everything
+  downstream needs that adjacency. Blender's recalculate-outside has no
+  neighbour to spread a facing through, its decimator no edge to collapse, and
+  the striper below no shared edge to chain on, so it writes one strip per
+  triangle. Since the importer takes the winding as it arrives (FORMAT.md
+  §11.3), an inconsistent soup is culled triangle by triangle and reads on
+  screen as a cloud of shards. Weld, recalculate normals outside, then decimate,
+  and view it with backface culling on — that is what the console does. Not
+  every source needs it: one `monkey.obj` arrived welded, 84 of 5946 edges lone.
 
 ## 2. Textures
 
@@ -43,7 +56,10 @@ the archive and `crashbash/iso.py` writes or patches the disc image.
 - **Never move a slot.** Pack layout and VRAM placement are still unknown
   (§10.1); only pixels and palette values inside existing slots are safe.
 - **Pure black vanishes.** BGR555 0x0000 is the hardware's skip-pixel. A
-  genuinely black texel (a pupil) must carry the STP bit: 0x8000.
+  genuinely black texel (a pupil) must carry the STP bit: 0x8000. And a pack the
+  art comes *from* may not agree about that: 120 of the disc's 11,234 palettes
+  mark unused area with opaque magenta instead (FORMAT.md §10.2). See *Moving a
+  mesh from one pack to another* below.
 - **Transparency punches holes.** Fill transparent atlas pixels with the
   tile's dominant opaque colour before quantising, or edge texels come out as
   skip-pixels.
@@ -288,3 +304,56 @@ come back in a different order, so "the last N triangles" is not the geometry yo
 added — checking a new colour that way reported the wrong value twice. Compare
 the colour *table* against the original instead: each of the four edits added
 exactly one entry, matching what was set to within the rounding.
+
+## Moving a mesh from one pack to another
+
+The disc already holds better versions of its own characters: the cutscene model
+`level_intro_shot_group_teamgood.mdl` carries a high-poly Coco, and putting her
+into `chars/warp/coco.mdl` and `chars/crate/coco.mdl` is a transplant between two
+models that do not share a texture pack. The geometry is the easy half. Four
+separate things about the art have to be carried across, and each of them was
+found by looking at the result on hardware.
+
+**Carry the source's own pixels; do not point at the nearest picture.** Matching
+the two packs by image looked like enough — both dress the same character — and
+it very nearly is. Of the nine slots the cutscene Coco samples, two match the warp
+pack's pixel for pixel (both 8x8) and her body texture matches at 3.3 of 255. But
+the worst is 113.7, and that one is her face — which on screen drew as somebody
+else's. The fix is not a better match. Every slot being
+replaced is sampled by the mesh being replaced and by nothing else, which is the
+one case §10.3 allows, so the source's art is simply written into them. Every pair
+here is 4bpp with sixteen colours, so the palette copies whole and only the
+picture is resampled — a slot cannot be resized, pack VRAM placement being
+unknown (§10.1).
+
+**A UV rescale is `(dest - 1) / (source - 1)`, not `dest / source`.** The
+destination's slots are smaller — a 64x64 and six 32x32 sources landing on a 32x32
+and six 16x16 — so the UVs have to shrink with them. A texel coordinate on a 32x32
+texture runs 0..31; halving that gives 0..16, and 16 is one column past the end of
+a 16x16 slot. Coco's four eye faces span their whole texture, corner to corner, so
+all four sampled from outside it and her eyes came back blank. `(dest-1)/(src-1)`
+lands 31 on 15 exactly, and afterwards no UV corner in the mesh falls outside its
+own texture.
+
+**A swatch face's colour must be carried, not its palette number.** 279 of that
+Coco's 358 faces are swatch faces (§6.2): flat-coloured, painted by one texel of
+the pack's palette-less swatch texture, naming a palette and pointing their UVs at
+a cell. Neither the palette numbering nor the cell layout survives a move between
+packs, so mapping the palette alone leaves each face reading whatever happens to
+sit at the source's cell — black hair and pink ears. `Transplant.swatch_face`
+takes, per source face, the destination palette and cell that give the colour it
+*meant*: matched over every cell of the destination swatch read through every
+palette, 125 colours reachable in the warp pack and 175 in the crate one, 231 of
+the 279 faces land exactly and the worst is 8 of 255 out.
+
+**A pack's colour key is not universal.** The cutscene pack fills the unused part
+of a texture with opaque magenta, `0xFC1F`; the character packs leave those texels
+at `0x0000`, which the hardware skips (§10.2). Copying a palette across without
+translating that entry draws the magenta — pink patches beside Coco's ears.
+
+The rest is the ordinary route. The destination's clips are poses of its own
+vertex count, so they are retargeted rather than copied (`crashbash.retarget`
+fits a rotation per moving part and blends, which keeps a limb its own length),
+clips that drive another mesh are copied byte for byte, the replaced mesh's own
+§8.4 collision volume is carried through, and the order is strip → transplant →
+write clips (§2.1). Confirmed on screen for both Cocos, eyes included.

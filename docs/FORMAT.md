@@ -3744,6 +3744,15 @@ BGR555 → RGBA8 uses the standard PS1 expansion; a fully zero entry (all 15 col
 and the STP bit clear) is the hardware's "skip this pixel" encoding, i.e. transparent, not
 black.
 
+**That is not the only convention on the disc.** 10,823 of the 11,234 palettes carry the
+zero entry, but 120 of them carry magenta (`0x7C1F` with the STP bit either way), spread
+over 46 of the 400 packs — 35 `arena`, 7 `cutscene`, 2 `mainmenu`, and one each in `chars`
+and `modelmix`. In `cutscene/level_intro_shot_group_teamgood` the magenta occupies exactly
+the part of each texture that the character packs leave at `0x0000`, and copying that
+palette into `chars/warp/coco` without translating the entry drew it: opaque pink where the
+transparency should have been. Whether every one of the 120 is a colour key rather than a
+colour a triangle means is not established; the one case examined is.
+
 ## 10.3 Texture record (20 bytes + pixel data)
 
 Records run back to back from `0x0C + u32@0x0C`, each immediately followed by its pixels.
