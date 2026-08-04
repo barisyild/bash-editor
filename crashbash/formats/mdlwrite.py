@@ -103,6 +103,14 @@ class Transplant:
     # A slot cannot be resized to avoid this: pack VRAM placement is still
     # unknown (§10.1), so the geometry adapts instead.
     uv_scale: dict[int, tuple[float, float]] = field(default_factory=dict)
+    # Per source face, the destination palette and swatch cell that give the
+    # colour it meant. A swatch face is painted by one texel of the pack's
+    # palette-less swatch texture (§6.2), so it names a palette and points its
+    # UVs at a cell -- and neither the palette numbering nor the cell layout
+    # survives a move between packs. Mapping the palette alone left 279 of the
+    # high-poly Coco's 358 faces reading whatever happened to sit at the
+    # source's cell: black hair and pink ears.
+    swatch_face: dict[int, tuple[int, tuple[int, int]]] = field(default_factory=dict)
     # The attachment block (mesh+0x2C) the installed mesh should carry, raw:
     # [u16 flags][u16 count][16 bytes x count]. Gameplay reads it live through
     # the 0x2000 id namespace, and for a character it is the collision volume
@@ -619,8 +627,12 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
         index = entry & TEXTURE_INDEX_MASK
         shift = (0, 0)
         scale = (1.0, 1.0)
+        cell = None
         if entry & TEXTURE_FLAG_SWATCH:
-            new_entry = TEXTURE_FLAG_SWATCH | source.palette_map.get(index, index)
+            chosen = source.swatch_face.get(face)
+            palette = chosen[0] if chosen else source.palette_map.get(index, index)
+            cell = chosen[1] if chosen else None
+            new_entry = TEXTURE_FLAG_SWATCH | palette
         else:
             new_entry = source.texture_map.get(index, index)
             shift = source.uv_shift.get(index, (0, 0))
@@ -630,8 +642,12 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
 
         at = src_uv + mesh.face_uv_index[face] * UV_ENTRY_SIZE
         for corner in range(3):
-            u = int(round(source.data[at + corner * 2] * scale[0])) + shift[0]
-            v = int(round(source.data[at + corner * 2 + 1] * scale[1])) + shift[1]
+            if cell is not None:
+                # A swatch face reads one texel, so all three corners name it.
+                u, v = cell
+            else:
+                u = int(round(source.data[at + corner * 2] * scale[0])) + shift[0]
+                v = int(round(source.data[at + corner * 2 + 1] * scale[1])) + shift[1]
             uvs += bytes((min(max(u, 0), 255), min(max(v, 0), 255)))
         uv_index += struct.pack("<H", uv_base + face * 3)
 
