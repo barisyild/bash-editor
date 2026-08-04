@@ -1877,6 +1877,26 @@ falls in, and then sweeps all 64 cells: an occupied cell takes the instance's `+
 height at `+0x0A`, an empty one gets the `0x100` bit. Nothing in that path reads the level
 model. The arena file supplies the picture of the board and the game supplies the board.
 
+**But the board is set up per arena, and that setup is in the overlay's bytes.** Off the
+board, the lookup returns `y − [0x8005A5D8]`, a global ground level, and that global is written
+by the mode. `0x800B3FF0` is a 33-case switch on the level index through a jump table at
+**`0x800B3318`, file offset `0x64`**, and five of the cases are real — one per crate arena,
+the other twenty-eight falling through to a default:
+
+| case | address | file offset | writes to `0x8005A5D8` | leading arguments |
+| --- | --- | --- | --- | --- |
+| 0 | `0x800B401C` | `0x00D68` | −16 | 8, 8, 10, 12 |
+| 1 | `0x800B4074` | `0x00DC0` | −16 | 10 |
+| 2 | `0x800B412C` | `0x00E78` | −16 | 10 |
+| 3 | `0x800B4228` | `0x00F74` | **0** | 30, then 6, 6, 6, 6 |
+| 32 | `0x800B4290` | `0x00FDC` | −16 | 8, 8, 10, 12 |
+
+So an arena's ground level and board parameters *can* be replaced at binary level, by pointing
+its entry in the jump table at another arena's case or by editing the case body — 4 bytes at
+`0x64 + 4·index` for the first. What cannot be replaced is a per-level collision *asset*, since
+none exists: the walkable surface is this setup plus the runtime board, and a level that wants
+a different floor needs its own case, not a different file.
+
 Four more things are ruled out, so the next person does not spend the search again. The model
 carries **no floor marker**: object ids are simply sequential from `0x5001` in every level
 measured, so nothing in the object table distinguishes a surface from scenery, and the ids
