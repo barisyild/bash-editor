@@ -172,7 +172,8 @@ def _reference_bags(model_data: bytes, model, pack, slot_of, warnings):
 
 
 def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
-                  warnings: list[str] | None = None):
+                  warnings: list[str] | None = None,
+                  problems: list[str] | None = None):
     """One glTF mesh -> per-corner arrays in the writer's own terms."""
     positions, colours, uvs, textures = [], [], [], []
     base_vertices = []
@@ -193,8 +194,9 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
         if colour is None:
             colour = _accessor_or_none(glb, primitive, "COLOR_0")
             legacy_scale = colour is not None
-            if (colour is not None and warnings is not None
-                    and not any("_CRASHBASH_COLOR" in w for w in warnings)):
+            said = list(warnings or []) + list(problems or [])
+            if (colour is not None and (warnings is not None or problems is not None)
+                    and not any("_CRASHBASH_COLOR" in w for w in said)):
                 # Blender writes COLOR_0 flat white unless the material's node
                 # tree actually reads the colour attribute -- it says so in its
                 # own log and exports a placeholder. Left alone that imports a
@@ -203,10 +205,10 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
                 # message describes, since the two need different fixes.
                 flat = np.asarray(colour, dtype=np.float64)[:, :3]
                 if flat.size and float(flat.min()) >= 0.999:
-                    warnings.append(
+                    (problems if problems is not None else warnings).append(
                         "the file carries no vertex colour: COLOR_0 is flat "
                         "white and _CRASHBASH_COLOR is absent, so every face "
-                        "will draw at full brightness. Blender only exports a "
+                        "would draw at full brightness. Blender only exports a "
                         "colour attribute when the material reads it -- wire a "
                         "Color Attribute node into the shader, or tick "
                         "Data > Attributes so _CRASHBASH_COLOR travels"
@@ -242,8 +244,23 @@ def _mesh_payload(glb: Glb, mesh: dict, slot_of: dict[int, int | None],
         if slot is not None and uv is not None:
             texel = np.asarray(uv, dtype=np.float64)[corners]
             width, height = slot_of["sizes"][slot]
-            u = np.clip(np.round(texel[..., 0] * width - 0.5), 0, width - 1)
-            v = np.clip(np.round(texel[..., 1] * height - 0.5), 0, height - 1)
+            raw_u = np.round(texel[..., 0] * width - 0.5)
+            raw_v = np.round(texel[..., 1] * height - 0.5)
+            # A slot cannot be resized (§10.1), so a UV past its edge is not a
+            # near miss to be clamped: on hardware the triangle samples whatever
+            # shares its page, which is how the other Coco's eyes came back
+            # blank. Clamping hid it; the caller is told instead.
+            outside = int(((raw_u < 0) | (raw_u >= width)
+                           | (raw_v < 0) | (raw_v >= height)).any(axis=1).sum())
+            if outside and problems is not None:
+                problems.append(
+                    f"slot {slot} is {width}x{height} and {outside} of the "
+                    f"{len(corners)} triangles aimed at it have a corner "
+                    f"outside it (UVs run 0..{width - 1} and 0..{height - 1}); "
+                    f"a slot cannot be resized, so the UVs have to fit it"
+                )
+            u = np.clip(raw_u, 0, width - 1)
+            v = np.clip(raw_v, 0, height - 1)
             uvs.append(np.stack([u, v], axis=-1))
             textures.append(np.full(len(corners), slot, dtype=np.int64))
         else:
@@ -544,6 +561,27 @@ def import_glb(
             + ". Importing anyway would rebuild every mesh untextured."
         )
 
+    # A material with a picture but no slot in its name is a face the artist
+    # painted and the importer would quietly rebuild flat. The name is how a
+    # slot is chosen -- there is nowhere else to put the picture -- so say which
+    # materials need renaming rather than dropping their texture on the floor.
+    painted = [
+        material.get("name", f"material {index}")
+        for index, material in enumerate(glb.json.get("materials", []))
+        if material.get("pbrMetallicRoughness", {}).get("baseColorTexture") is not None
+        and not MATERIAL_SLOT.match(material.get("name", ""))
+    ]
+    if painted:
+        raise ValueError(
+            f"{len(painted)} material(s) carry a texture but do not name a "
+            f"pack slot, so their faces would be rebuilt flat: "
+            f"{', '.join(painted[:6])}"
+            + (" ..." if len(painted) > 6 else "")
+            + ". Name a material `tex_NNN_WxH_4bpp` for the slot it should "
+              "replace -- the slot decides the size, and its picture is taken "
+              "from the material."
+        )
+
     # --- which glTF mesh replaces which model mesh ---------------------
     incoming: dict[int, dict] = {}
     for mesh in glb.json.get("meshes", []):
@@ -582,10 +620,15 @@ def import_glb(
     # nothing, which is a check that passes by doing no work.
     reference = {} if rebuild_all else _reference_bags(
         model_data, original, pack, slot_of, report.warnings)
+    problems: list[str] = []
     for index, mesh in sorted(incoming.items()):
+        found = len(problems)
         positions, colours, uvs, textures, bases = _mesh_payload(
-            glb, mesh, slot_of, report.warnings
+            glb, mesh, slot_of, report.warnings, problems
         )
+        # Name the mesh each problem belongs to, since a file holds many.
+        for i in range(found, len(problems)):
+            problems[i] = f"mesh {index}: {problems[i]}"
         payloads[index] = (mesh, bases)
         if (index in reference
                 and _payload_bag(positions, colours, uvs, textures)
@@ -626,6 +669,17 @@ def import_glb(
             colours=colours,
             textures=textures if (textures >= 0).any() else None,
             uvs=uvs if (textures >= 0).any() else None,
+        )
+    # Refuse before anything is written. Each of these is a texture the file
+    # asks for and the pack cannot give, and every one of them used to be
+    # absorbed quietly -- a UV clamped to the slot's edge, a painted material
+    # falling through to flat, a model with no colour at all. None shows up in
+    # the file afterwards; they show up on the console, which is a poor place
+    # to find them.
+    if problems:
+        raise ValueError(
+            "the file asks for textures this pack cannot give, so nothing was "
+            "staged:\n  - " + "\n  - ".join(problems)
         )
     # One pass for all of them: a per-mesh call would append the shared tables
     # and the vector pool once each time, and those copies are unreachable
