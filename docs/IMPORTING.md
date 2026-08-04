@@ -398,6 +398,11 @@ each a response to a downstream problem — size, retargeting, and the shot's ow
 pose — and with the animation frozen none of them applies. All 648 triangles go
 in as authored.
 
+**Confirmed on screen**: 648 triangles in 161 strips, a 99,084-byte model, every
+clip frozen on the model's own pose, and the colours lifted by ×2.06. What the
+import still costs is the motion — she stands in one pose whatever she is doing
+— and a mouth the source never had.
+
 ## Moving a mesh from one pack to another
 
 The disc already holds better versions of its own characters: the cutscene model
