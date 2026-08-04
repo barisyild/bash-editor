@@ -1331,6 +1331,7 @@ def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
 
     placed = {}
     shifted = {}
+    attached = {}
     for index, mesh in enumerate(dest.meshes):
         if index in prepared:
             target, blocks = prepared[index]
@@ -1352,6 +1353,16 @@ def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
             # header instead loses whatever it holds that a reader does not
             # reconstruct -- it cost nine triangles the first time.
             shifted[index] = append(dest_data[low:mesh.ptr_end]) - low
+            # The attachment block sits *after* `ptr_end`, outside the span
+            # just copied, so it needs carrying separately -- and it was not.
+            # `chars/crate/coco` rebuilt for its mesh 0 came back with mesh 1's
+            # `+0x2C` still holding its shipped offset, which after the rewrite
+            # addresses something else entirely: the spin body's collision
+            # volume read as zero records. §8.4 is read live by gameplay, and
+            # zeroing it is what let the crate game's character walk through
+            # the crates.
+            keep = _attachment_bytes(dest_data, mesh)
+            attached[index] = append(keep) if keep else 0
 
     new_colour = len(out)
     out.extend(colours)
@@ -1397,6 +1408,9 @@ def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
                            (FIELD_END, mesh.ptr_end)):
             at = header + field
             struct.pack_into("<i", out, at, was + shift - at)
+        at = header + FIELD_ATTACHMENT
+        struct.pack_into("<i", out, at,
+                         attached[index] - at if attached[index] else 0)
     return bytes(out)
 
 
