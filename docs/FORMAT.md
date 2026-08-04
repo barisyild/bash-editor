@@ -1910,7 +1910,14 @@ the mode branches per level, the jump-table entry that reaches it:
 | `oxide.bin` | 1 | 10,240 — the chase runs high above the origin |
 | `menu.bin`, `polar.bin` | 0 | none |
 
-The crate cases, with the entry that selects each — four bytes apiece:
+The five crate sites, with the jump-table entry that *may* select each. **This attribution is
+not established.** `tools/arena_setup.py` pairs a ground write with the nearest preceding
+jump-table target, which is a guess, and one measurement argues against it: the index the
+crate switch tests is a halfword at `0x8005A648`, it is written in exactly one place
+(`gameeng.bin` `0x8008EEA8`, and `$gp` is zero so no `$gp`-relative store can hide), and the
+value it writes comes from a ten-record table at `0x8009EDD4` whose `+0` field holds 33..39 —
+all outside the `sltiu … 0x21` bound the switch applies. Five writes beside five arenas is
+suggestive and nothing more until the dispatch that actually reaches them is traced:
 
 | case | entry (file) | case body (file) | ground | arguments |
 | --- | --- | --- | --- | --- |
