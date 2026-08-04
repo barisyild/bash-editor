@@ -40,11 +40,16 @@ from .gltfread import Glb, parse_glb, read_glb
 from .mdl import TEXTURE_INDEX_MASK, Model, read_model
 from .tex import TexturePack, read_pack
 
-MESH_NAME = re.compile(r"_mesh(\d+)$")
+# The trailing `.001` is Blender's: it suffixes any name that collides with one
+# already in the file, which happens the moment an artist rebuilds a mesh beside
+# the one it replaces. Anchored without it, not one mesh in the file matched and
+# the import refused a model that was otherwise ready.
+DUPLICATE = r"(?:\.\d{3})?$"
+MESH_NAME = re.compile(r"_mesh(\d+)" + DUPLICATE)
 # The exporter names an object-pool mesh after the id the game reaches it by,
 # because it has no slot in the numbered array. It still has a mesh index, and
 # in a level it is the only kind of mesh that is drawn.
-OBJECT_NAME = re.compile(r"_object([0-9A-Fa-f]{4})$")
+OBJECT_NAME = re.compile(r"_object([0-9A-Fa-f]{4})" + DUPLICATE)
 MATERIAL_SLOT = re.compile(r"^tex_(\d+)_")
 
 
