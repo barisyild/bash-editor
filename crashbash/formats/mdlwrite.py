@@ -272,34 +272,57 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None
                     return (a, b, next(i for i in range(3) if i not in (a, b)))
         raise ValueError(f"face {face} does not carry the edge it was chosen for")
 
-    used = np.zeros(faces, dtype=bool)
-    strips: list[list[tuple[int, tuple[int, int, int]]]] = []
-    for seed in range(faces):
-        if used[seed]:
-            continue
-        used[seed] = True
-        strip = [(seed, (0, 1, 2))]
+    def walk(seed: int, rotation: tuple[int, int, int], used: np.ndarray
+             ) -> list[tuple[int, tuple[int, int, int]]]:
+        """The strip that grows from this seed presented this way round."""
+        taken = {seed}
+        strip = [(seed, rotation)]
+        ids = [int(welded[seed][k]) for k in rotation]
         # The last two vertices the strip has emitted, and how far along it is.
-        tail = (int(welded[seed][1]), int(welded[seed][2]))
+        tail = (ids[1], ids[2])
         step = 1
         while True:
             # Triangle k is presented as it stands when k is even and reversed
             # when it is odd, so the edge the next face must carry flips with it.
             wanted = tail if step % 2 == 0 else (tail[1], tail[0])
             key = (int(keys[seed]), wanted[0], wanted[1])
-            following = next((f for f in directed.get(key, ()) if not used[f]), None)
+            following = next((f for f in directed.get(key, ())
+                              if not used[f] and f not in taken), None)
             if following is None:
-                break
+                return strip
             # Found by the directed edge, but ordered by the strip's own: the
             # strip always presents (s[k], s[k+1], s[k+2]), which on an odd step
             # is the edge the other way round from the one that found the face.
-            used[following] = True
             order = corner_order(following, tail[0], tail[1])
+            taken.add(following)
             strip.append((following, order))
             third = int(welded[following][order[2]])
             tail = (tail[1], third)
             step += 1
-        strips.append(strip)
+
+    # Which corner a seed leads with is the caller's to choose, and it decides
+    # the whole strip: the chain continues along the edge the second and third
+    # corners make, so a seed rotated the wrong way finds nothing and the strip
+    # is one triangle long. Rotating a triangle's corners is a cyclic
+    # permutation, so it cannot change the winding -- only which edge is tried
+    # next -- and all three are therefore free to try.
+    #
+    # This is not a small effect on geometry that did not arrive already
+    # chained. A Blender export of a 648-triangle model left 328 of its faces as
+    # a strip of one, 495 strips against the 348 no shipped mesh exceeds, and
+    # since a strip of n triangles costs n + 2 pool vertices that also inflated
+    # every animation pose: 1638 pool vertices against the 970 the same
+    # geometry needs at 161 strips.
+    rotations = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
+    used = np.zeros(faces, dtype=bool)
+    strips: list[list[tuple[int, tuple[int, int, int]]]] = []
+    for seed in range(faces):
+        if used[seed]:
+            continue
+        best = max((walk(seed, rotation, used) for rotation in rotations), key=len)
+        for face, _ in best:
+            used[face] = True
+        strips.append(best)
     return strips
 
 
