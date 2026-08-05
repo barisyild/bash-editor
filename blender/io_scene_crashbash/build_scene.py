@@ -370,6 +370,23 @@ def pool_poses(mesh, clips) -> list[np.ndarray]:
     return poses
 
 
+# Blender's polygon normal follows the right-hand rule over its loops, and the
+# console's front face is the other way round. Measured over the shipped
+# characters with the file's own corner order: `chars/crate/crash` mesh 0
+# encloses -3,235,872 and only 86 of its 227 faces point away from the mesh's
+# own centre; `crate/coco`, `warp/coco` and the cutscene casts all agree in
+# sign. So a character handed to Blender as the file states it is inside out to
+# Blender, and with backface culling on -- which is what the console does --
+# you see through the front of a model to the inside of its back. That is what
+# put Crash's face on screen while his back was turned.
+#
+# The corners are therefore reversed on the way in and reversed again on the
+# way out, so the file's own convention is untouched and the round trip is
+# exact. Which direction the *file* calls outward is a separate question, and
+# §11.3 answers it the other way; this is only about matching two renderers.
+CORNER_ORDER = (0, 2, 1)
+
+
 def _weld(payload) -> tuple[np.ndarray, np.ndarray]:
     """The payload's own vertices, or position welding when it has none.
 
@@ -406,6 +423,8 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
     """
     faces = payload.positions.shape[0]
     vertices, indices = _weld(payload)
+    # Reversed, so Blender's front face is the console's. See `CORNER_ORDER`.
+    indices = indices[:, CORNER_ORDER]
     mapping = np.arange(len(vertices), dtype=np.int64)
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(to_blender(vertices).tolist(), [],
@@ -419,7 +438,7 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
         bpy.data.meshes.remove(mesh)
         mesh = bpy.data.meshes.new(name)
         vertices = np.round(payload.positions.reshape(-1, 3)).astype(np.int64)
-        indices = np.arange(faces * 3).reshape(-1, 3)
+        indices = np.arange(faces * 3).reshape(-1, 3)[:, CORNER_ORDER]
         mapping = (np.asarray(payload.corner_vertices).reshape(-1)
                    if payload.corner_vertices is not None else None)
         mesh.from_pydata(to_blender(vertices).tolist(), [],
@@ -443,7 +462,8 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
 
     # Colours per corner, 0..1 standing for the file's 0..255.
     colours = np.ones((faces, 3, 4), dtype=np.float32)
-    colours[..., :3] = payload.colours.astype(np.float32) / 255.0
+    # The attributes follow the corners, so they are reversed with them.
+    colours[..., :3] = payload.colours[:, CORNER_ORDER].astype(np.float32) / 255.0
     attribute = mesh.color_attributes.new(
         name=N.COLOUR_ATTRIBUTE, type="FLOAT_COLOR", domain="CORNER")
     attribute.data.foreach_set("color", colours.reshape(-1))
@@ -457,7 +477,7 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
         if size is None:
             continue
         width, height = size
-        texel = payload.uvs[face].astype(np.float64)
+        texel = payload.uvs[face][list(CORNER_ORDER)].astype(np.float64)
         uvs[face, :, 0] = (texel[:, 0] + 0.5) / width
         uvs[face, :, 1] = 1.0 - (texel[:, 1] + 0.5) / height
     uv_layer.data.foreach_set("uv", uvs.reshape(-1))

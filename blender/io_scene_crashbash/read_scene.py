@@ -200,7 +200,8 @@ def _corner_colours(mesh, triangles, where, problems) -> np.ndarray:
     attribute.data.foreach_get("color", flat)
     values = flat.reshape(count, 4)[:, :3]
     picks = np.array([list(t.loops) if attribute.domain == "CORNER"
-                      else list(t.vertices) for t in triangles], dtype=np.int64)
+                      else list(t.vertices) for t in triangles],
+                     dtype=np.int64)[:, build_scene.CORNER_ORDER]
     return np.clip(np.round(values[picks] * 255.0), 0, 255).astype(np.uint8)
 
 
@@ -225,7 +226,10 @@ def read_mesh(obj, pack, sizes, problems, warnings):
     mesh.vertices.foreach_get("co", points)
     vertices = to_model(points.reshape(-1, 3))
 
-    corners = np.array([list(t.vertices) for t in triangles], dtype=np.int64)
+    # Back to the file's corner order: the importer reversed it so Blender's
+    # front face would be the console's, and that comes off again here.
+    corners = np.array([list(t.vertices) for t in triangles],
+                       dtype=np.int64)[:, build_scene.CORNER_ORDER]
     positions = vertices[corners]
     colours = _corner_colours(mesh, triangles, where, problems)
 
@@ -248,7 +252,7 @@ def read_mesh(obj, pack, sizes, problems, warnings):
         if size is None or uv_values is None:
             continue
         width, height = size
-        texel = uv_values[list(triangle.loops)]
+        texel = uv_values[[triangle.loops[k] for k in build_scene.CORNER_ORDER]]
         u = np.round(texel[:, 0] * width - 0.5)
         v = np.round((1.0 - texel[:, 1]) * height - 0.5)
         # A slot cannot be resized (§10.1), so a UV past its edge is not a near

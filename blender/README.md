@@ -70,8 +70,14 @@ The meshes a node owns are hidden where they stand at the origin, because that
 is not where the shot draws them.
 
 Materials are built with **backface culling on**, which is what the console
-does. Without it the backdrop shell — whose faces correctly point inward — drew
-over everything the camera was aimed at.
+does, and the corners are **reversed on the way in** so that Blender's front
+face is the console's. Measured on the shipped characters with the file's own
+corner order, `chars/crate/crash` mesh 0 encloses −3,235,872 with 86 of its 227
+faces pointing away from the mesh's own centre — so a model handed over as the
+file states it is inside out to Blender's right-hand rule, and with culling on
+you see through the front of it to the inside of its back. That is what put
+Crash's face on screen while his back was turned and left Aku Aku with no face.
+The reversal comes off again on export, so the file is untouched.
 
 They also take their result back to scene-linear before emitting it. What the
 console computes — `texel × colour / 128` — is a display value bound for a TV,

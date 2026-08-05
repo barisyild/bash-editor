@@ -418,6 +418,23 @@ They are not style preferences.
   cylinder read live by gameplay. Zeroing it let the character walk through the
   crates. Carry the replaced mesh's own block through a transplant. A
   character's *second* mesh is its spin body, with a volume of its own.
+- **A shipped model handed to a right-hand-rule renderer is inside out.** §11.3
+  calls a triangle's outward order "pool order when bit 0 is clear and the
+  reverse when it is set", and that order encloses a **negative** volume in
+  every shipped character measured: `chars/crate/crash` mesh 0 at −3,235,872
+  with 86 of 227 faces pointing away from its own centre, `crate/coco`,
+  `warp/coco` and the cutscene casts all the same sign. So Blender, whose
+  polygon normal follows the right-hand rule, reads those faces as pointing
+  inward — and with backface culling on, which is what the console does, you
+  see through the front of a model to the inside of its back. On screen that
+  read as a room with no walls, characters whose faces showed while their backs
+  were turned, and an Aku Aku with no face at all. The add-on therefore reverses
+  the corners on the way in and back again on the way out, so the file's own
+  convention is untouched and the round trip stays exact. **The glTF exporter
+  carries the same inversion** — `chars/crate/crash` mesh 0 comes out at −0.1929
+  with 65 of 227 outward — and has not been changed: a round trip through it is
+  symmetric either way, and the discs built through that path drew correctly, so
+  what the console calls its front face is not settled by this measurement.
 - **Bit 15 of a texture entry decides what a face samples, not the strip's
   untextured flag.** `0x80017FB8` branches on it: set, and the draw takes the
   pack's *last* texture — the swatch — with the CLUT named by the low nine
