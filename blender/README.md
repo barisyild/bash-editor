@@ -56,12 +56,16 @@ owns: the pool is one packed run and a mesh whose blocks leave it boots to a
 black screen. The writer measures and refuses rather than build that disc.
 
 A **particle emitter** has no representation in any interchange format, so it
-gets one here: an empty carrying the budget, the rate, the lifetime, the speed
-range, the yaw and pitch cones, the acceleration, the damping, the spin, and
-the fade and grow ramps. Change one and export — one field, one word. **Bake
-Particle Preview** in the sidebar runs the game's own simulation and keyframes
-every live particle so the spray can be watched; it is a preview, the export
-ignores it, and it goes stale as soon as an emitter is edited.
+gets one here: an empty carrying all sixteen fields — the window it runs in,
+when it stops spawning, the budget, the rate, the lifetime, the mesh it sprays,
+the speed range, the yaw and pitch cones, the acceleration, the damping, the
+spin, and the fade and grow ramps. Change one and export: one field, one word,
+the file the same size. Every field of every one of the game's 23 emitters was
+changed and read back — 368 of 368 survived. You cannot *add* one; a node lives
+in a fixed graph. **Bake Particle Preview** in the sidebar runs the game's own
+simulation and keyframes every live particle so the spray can be watched; it is
+a preview, the export ignores it, and it goes stale as soon as an emitter is
+edited.
 
 **Texture animation** is shown but not edited. A slot the pack flips through
 stored frames, or slides under its own UVs, says so on its material

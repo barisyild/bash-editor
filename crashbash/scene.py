@@ -440,6 +440,10 @@ class Emitter:
     # to a sub-scene. Kept so a writer can undo it: `position` is in the
     # parent's frame and the node's own three words are not.
     parent: "Placement | None" = None
+    # Ticks the sub-scene's clock was shifted by to get `start`, `end` and
+    # `last_tick` onto the shot's own. A writer takes it off again, the same
+    # way a track's keys have their `shift` taken off.
+    shift: int = 0
 
     def particles(self, tick: int) -> list[Particle]:
         """Every live particle at `tick`, simulated from the emitter's start.
@@ -959,6 +963,7 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
                 grow=(_i32(data, node + EMITTER_GROW_END),
                       _i32(data, node + EMITTER_SHRINK_START)),
                 parent=parent,
+                shift=offset,
             ))
             continue
 

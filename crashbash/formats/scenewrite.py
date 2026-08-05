@@ -150,6 +150,7 @@ def scene_extras(scene, model) -> dict:
                         # so it is told how.
                         "namespace": SC.MESH_NAMESPACE,
                         "parent": placement_of(e.parent),
+                        "shift": e.shift,
                         "start": e.start, "end": e.end,
                         "position": [float(v) for v in e.position],
                         "budget": e.budget, "per_tick": e.per_tick,
@@ -317,15 +318,24 @@ def _patch_emitter(data: bytearray, emitter: dict, report: Patched) -> None:
     """One particle emitter's node, field by field (§9.11.7).
 
     Every field is a whole word at a fixed offset in the node, so this resizes
-    nothing and touches only what the caller named. The window and the spawn
-    cutoff stay where they are: they are ticks into the shot's own clock, and
-    moving one without moving the track it belongs to would open the spray
-    somewhere the letter it belongs to has not landed yet.
+    nothing and touches only what the caller named -- the window it opens in,
+    when it stops spawning, how many particles it has and how fast they leave,
+    the cone, the acceleration and damping, the spin, and the two ramps.
     """
     node = emitter.get("node")
     if node is None:
         return
+    # The window and the spawn cutoff are ticks of the shot's clock, and a
+    # sub-scene's were shifted onto it; that comes off again before they are
+    # written, exactly as a track's key times do.
+    shift = int(emitter.get("shift") or 0)
     fields = {
+        SC.NODE_WINDOW_START: None if emitter.get("start") is None
+        else int(emitter["start"]) - shift,
+        SC.NODE_WINDOW_END: None if emitter.get("end") is None
+        else int(emitter["end"]) - shift,
+        SC.EMITTER_LAST_TICK: None if emitter.get("last_tick") is None
+        else int(emitter["last_tick"]) - shift,
         SC.EMITTER_BUDGET: emitter.get("budget"),
         SC.EMITTER_PER_TICK: emitter.get("per_tick"),
         SC.EMITTER_LIFETIME: emitter.get("lifetime"),

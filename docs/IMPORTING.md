@@ -422,15 +422,24 @@ transform reads back as, none do. (Assigning a nested Python list to
 `matrix_basis` is also accepted and quietly does nothing, which stood every
 placement at the origin while the check agreed with itself throughout.)
 
-**A particle emitter (§9.11.7)** is a node that sprays copies of one mesh: a
-budget, a rate, a lifetime, a speed range, a yaw and pitch cone, an
-acceleration, a damping, a spin, and two ramps that fade and grow each particle.
-The add-on gives each one an empty carrying every field, and changing one writes
-one word — measured on `cutscene/intro_eurocom`, a lifetime of 24 to 29 is
-**one byte**. *Bake Particle Preview* runs the game's own simulation and
-keyframes every live particle so the spray can be watched: 136 particles over
-672 ticks for that shot's eight emitters. It is a preview, the export ignores
-it, and it goes stale the moment an emitter is edited.
+**A particle emitter (§9.11.7)** is a node that sprays copies of one mesh. The
+game has **23 of them across 10 models** — eight at the letters of the intro
+logo, two each on the dragon arena, Papu's minions and the Ngin arena, one on
+the medieval ring. Sixteen fields make one: the window it runs in, when it
+stops spawning, the budget, the rate, the lifetime, the mesh it sprays, the
+speed range, the yaw and pitch cones, the acceleration, the damping, the spin,
+and the two ramps that fade and grow each particle.
+
+All sixteen are editable and all sixteen write back. Measured by changing one
+field at a time on every emitter in the game and reading it back through the
+parser: **368 of 368 edits survived**, each keeping the file's size — a
+lifetime of 24 to 29 is one byte. *Bake Particle Preview* runs the game's own
+simulation and keyframes every live particle so the spray can be watched: 136
+particles over 672 ticks for the intro's eight emitters. It is a preview, the
+export ignores it, and it goes stale the moment an emitter is edited.
+
+What cannot be done is add one. A node lives in a fixed graph and `patch_scene`
+resizes nothing, so the 23 emitters the game has are the 23 it can have.
 
 The rest of the shot — the actor and prop tracks, the camera keys, the
 sub-scene frames — is carried through as the file states it rather than

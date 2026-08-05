@@ -48,8 +48,14 @@ PROP_SCENE = "crashbash_scene"
 # runs on (§9.11.7). They are editable and they write back.
 PROP_EMITTER = "crashbash_emitter"          # the node's byte offset
 EMITTER_FIELDS = (
-    "budget", "per_tick", "lifetime", "spin", "mesh",
-    "speed", "yaw", "pitch", "accel", "damp", "fade", "grow",
+    # when it runs, and when it stops spawning
+    "start", "end", "last_tick",
+    # how much it sprays, and what of
+    "budget", "per_tick", "lifetime", "mesh",
+    # where each particle goes
+    "speed", "yaw", "pitch", "accel", "damp", "spin",
+    # and how it comes and goes
+    "fade", "grow",
 )
 # On anything the add-on drew only to be looked at. The exporter skips it, and
 # it goes stale the moment the emitter it came from is edited.
