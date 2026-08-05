@@ -179,6 +179,38 @@ They are not style preferences.
   bytes. `warp_room1` takes 3. The other 65 levels take none; an arena typically
   ends its resident region with 6 or 18 bytes of alignment. So a level's set can
   grow, but only into what its own file already left empty.
+- **A model from another pack can be put into a level, and the pool mesh it
+  replaces is the whole budget.** `arena/crate_snow`'s penguin now stands in
+  `warp_room1` and the disc runs. Three things had to be true at once, and each
+  is a rule of its own. The geometry has to fit **the span the pool mesh already
+  owns** (§8.3): 0x501C is the decorative arm, 444 triangles in 6592 bytes, and
+  a 116-triangle body went in with its `ptr_end` unmoved and all five block
+  pointers inside. The art cannot come with it — the penguin's slots mean other
+  pictures in the warp pack — so **fold each face's texel into its vertex colour
+  and make every face a swatch face** (§6.2) on a palette the level already has;
+  the hardware's `texel * colour / 128` then draws the baked colour, once the
+  cell's own value is divided back out of it. And a §8.6 carrier's **UV table is
+  pinned**, so every triangle needs a triple already in it: the room's own mesh 1
+  puts all 662 of its swatch faces on one triple, and pointing all 116 penguin
+  faces at that one satisfies the lookup. Nothing new is needed below the
+  resident end — the colour and UV tables never moved, and the penguin's indices
+  land at 139..4380 of the shipped 4516.
+- **Judge a replacement's winding against the model it came from, not the mesh
+  it replaces.** The exporter warned that the penguin encloses −2.052 where the
+  arm encloses +0.090, which reads as inside out. It is not: every shipped
+  character encloses **negative** (`crate/crash` −3,235,872, `warp/coco`
+  −6,771,356) and the built penguin encloses exactly what the shipped penguin
+  does, −34,429,474.667 to the unit. The arm is the exception — an open shell,
+  where the sign means nothing. The warning is worth keeping and worth checking
+  against the source before acting on it.
+- **A model brought in for its geometry brings its clips as shape keys, and
+  Blender adds them all together.** The penguin arrived with 34, a dozen of them
+  at 1.0, and the preview drew a fan of shards big enough to fill the room —
+  while the file was already correct, the export having taken the base mesh.
+  This is the same trap as the summing actor keys, wearing the other hat: there
+  the pose was wrong on screen, here the *diagnosis* was. Clear the keys when a
+  mesh is being borrowed rather than animated, or the preview lies about a file
+  that is right.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an

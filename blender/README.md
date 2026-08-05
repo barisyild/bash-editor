@@ -90,6 +90,25 @@ An **object-pool mesh** can be rebuilt, but only inside the span it already
 owns: the pool is one packed run and a mesh whose blocks leave it boots to a
 black screen. The writer measures and refuses rather than build that disc.
 
+That span is also how a model from **another pack** gets into a level, which has
+been done and run: `arena/crate_snow`'s penguin stands in `warp_room1` today, in
+the 6592 bytes the decorative arm 0x501C owned. Import both, drop the borrowed
+geometry onto the pool object, and mind two things the level will not give you.
+Its **art does not travel** — the penguin's texture slots mean other pictures in
+the warp pack — so fold each face's texel into its vertex colour and give every
+face one of the level's own swatch materials; the console's `texel * colour /
+128` then draws what you baked, once you divide the cell's own value back out.
+And a §8.6 carrier's **UV table is pinned**, so a face needs a UV triple the
+table already holds: take one off a swatch face of the level's own mesh and put
+every borrowed face on it. Skip either and the export refuses or the model draws
+in someone else's colours.
+
+Clear the borrowed mesh's **shape keys** first. A model brought in for its shape
+still carries its clips, Blender adds them all together, and the penguin's 34
+keys drew a fan of shards across the whole room — while the exported file was
+already correct, because the export reads the base mesh. The preview is what
+lies, so a shard storm here is not evidence of a broken export.
+
 ## Watching a cutscene
 
 **Bake Shot Preview** in the sidebar plays the shot (§9.11): every actor and

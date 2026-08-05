@@ -403,6 +403,11 @@ a character, a level and a cutscene all measured at 0 bytes different — and
 forcing 90 shipped models through the writer reproduces 71,311 of 71,311
 triangles, position, colour, UV, texture entry and corner order alike.
 
+A model from one part of the game can be put into another: `arena/crate_snow`'s
+penguin **stands in the warp room** on a disc that runs, in the bytes the room's
+decorative arm owned, painted with the room's own palette and placed by a record
+that did not exist before.
+
 Two discs built through it **run**. One carries the intro's first particle
 emitter, edited in Blender and exported here. The other carries the M of the
 EUROCOM logo scaled ×1.9 in Blender and its mesh rebuilt from scratch — so the
