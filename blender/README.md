@@ -98,12 +98,14 @@ the 6592 bytes the decorative arm 0x501C owned.
 borrowing, shift-select the model mesh it replaces, and press it:
 
 ```
-penguin_mesh00 -> level_object501C: 116 faces replacing 444, in the 6592 bytes
-the mesh owns. cleared 34 shape keys; baked the texture into the colour on 116
-faces; put all 116 faces on swatch_152 cell (13, 5) (the pinned table allows it)
+penguin_mesh00 -> level_object501C: 116 faces replacing 444, 2.0x1.7x2.4
+against 3.2x4.7x4.4; 6592 bytes owned and roughly 1722 wanted. cleared 34 shape
+keys; baked the texture into the colour on 116 faces; put all 116 faces on
+swatch_152 cell (13, 5) (the pinned table allows it); stood it on its own
+origin, feet at z=0
 ```
 
-Those three lines are three rules that each cost a broken export to find. The
+Those four clauses are four rules that each cost a broken export to find. The
 borrowed mesh brings its **clips as shape keys** — 34 of them, a dozen switched
 on — and Blender adds them all together, which drew a fan of shards across the
 whole room while the exported file was already right; a shard storm here is the
@@ -113,10 +115,20 @@ vertex colour and every face made a swatch face on the destination's own palette
 — with the cell's own value divided back out, or `texel * colour / 128` applies
 it twice. And a §8.6 carrier's **UV table is pinned**, so a face needs a triple
 the table already holds: `warp_room1` accepts exactly one cell, and putting the
-faces anywhere else has the export refuse all 116 of them.
+faces anywhere else has the export refuse all 116 of them. Last, it **stands the
+mesh on its own origin**, because a record's translation is an offset from where
+the mesh is authored — a borrowed model left in its source's frame lands wherever
+that frame put it, which for the penguin was outside the room, and reads on
+screen as the object simply not being there.
 
-Then stand it on its own feet, place it, and export. What comes out is what a
-hand-made version of the same edit produced, to the byte in colour and position.
+The sizes and the byte count are there to be read before you commit to it. What
+the pool mesh owns is the **whole budget** (§8.3) and this writer stripes looser
+than the authoring tool, so the figure is a rough reading, not a promise; the
+export measures for real and refuses rather than break the pool.
+
+Then place it and export. Done from the buttons alone, `warp_room1` with the
+penguin came out **byte for byte identical** to the hand-made version of the
+same edit — the one that runs.
 
 ## Watching a cutscene
 

@@ -235,6 +235,15 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
     bl_label = "Borrow Selected Mesh"
     bl_options = {"REGISTER", "UNDO"}
 
+    stand_on_origin: bpy.props.BoolProperty(
+        name="Stand on its own origin",
+        description=("Move the borrowed geometry so it is centred in plan with "
+                     "its feet at zero. A placement's translation is an offset "
+                     "from where the mesh is authored, so without this the "
+                     "borrowed model lands wherever its source model put it"),
+        default=True,
+    )
+
     @classmethod
     def poll(cls, context):
         obj = context.active_object
@@ -389,16 +398,56 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                     if texel[i] > 1 / 255 else 1.0 for i in range(3)
                 ) + (have[3],)
 
+        # 4. Where it stands. A pool mesh carries its own place in the room and a
+        #    record's translation is an offset from it, so a borrowed mesh left
+        #    in its source model's frame lands wherever that frame happens to
+        #    put it -- which for the penguin was outside the room entirely, and
+        #    read on screen as the object simply not being there. Standing it on
+        #    its own origin makes a record's translation the place it goes.
+        if self.stand_on_origin:
+            co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
+            borrowed.vertices.foreach_get("co", co)
+            co = co.reshape(-1, 3)
+            co -= np.array([(co[:, 0].min() + co[:, 0].max()) / 2,
+                            (co[:, 1].min() + co[:, 1].max()) / 2,
+                            co[:, 2].min()], dtype=np.float32)
+            borrowed.vertices.foreach_set("co", co.ravel())
+            borrowed.update()
+            notes.append("stood it on its own origin, feet at z=0")
+
         was = target.data
+        old_size = tuple(
+            max(v[i] for v in (x.co for x in was.vertices))
+            - min(v[i] for v in (x.co for x in was.vertices))
+            for i in range(3)) if len(was.vertices) else (0.0, 0.0, 0.0)
         for obj in list(bpy.data.objects):
             if obj.data is was:
                 obj.data = borrowed
         borrowed.name = f"{target.name}_borrowed"
 
+        co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
+        borrowed.vertices.foreach_get("co", co)
+        co = co.reshape(-1, 3)
+        new_size = tuple(float(co[:, i].max() - co[:, i].min()) for i in range(3))
+
+        # What the pool mesh owns is the whole budget (§8.3): its blocks may not
+        # leave the run, so a rebuild that wants more is refused at export
+        # rather than written. The shipped mesh's own bytes per triangle is the
+        # only yardstick to hand, and this writer stripes looser than the
+        # authoring tool, so say it as a rough reading and not a promise.
         room = int(mesh.ptr_end - mesh.header_offset)
+        per_face = room / max(len(was.polygons), 1)
+        wanted = per_face * len(borrowed.polygons)
+        budget = (f"{room} bytes owned and roughly {wanted:.0f} wanted"
+                  if wanted <= room * 0.9 else
+                  f"{room} bytes owned against roughly {wanted:.0f} wanted, "
+                  f"which this writer may not fit -- the export measures and "
+                  f"refuses rather than break the pool")
         self.report({"INFO"}, (
             f"{source.name} -> {target.name}: {len(borrowed.polygons)} faces "
-            f"replacing {len(was.polygons)}, in the {room} bytes the mesh owns. "
+            f"replacing {len(was.polygons)}, "
+            f"{new_size[0]:.1f}x{new_size[1]:.1f}x{new_size[2]:.1f} against "
+            f"{old_size[0]:.1f}x{old_size[1]:.1f}x{old_size[2]:.1f}; {budget}. "
             + "; ".join(notes)))
         return {"FINISHED"}
 
