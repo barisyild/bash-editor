@@ -274,6 +274,85 @@ So an edited mesh is geometrically exact and slightly repainted, and an untouche
 one is left alone entirely. That is the case for deleting the meshes you are not
 editing before exporting from Blender.
 
+## Editing the model itself, in Blender
+
+Everything above goes through glTF, and every trap in it is a trap of that
+translation rather than of the format: a colour attribute Blender only exports
+when a material reads it, a slot number smuggled through a material *name*, the
+`.001` suffix, and the swatch texel folded into the vertex colour because glTF
+has nowhere to put a palette. [`blender/`](../blender) skips the translation.
+The add-on opens a `.mdl` entry directly and writes one back, driving the same
+library the desktop editor drives.
+
+The split that makes that possible is
+[`crashbash/formats/modelimport.py`](../crashbash/formats/modelimport.py). It
+holds the whole of an import that has nothing to do with the file it came out
+of — the layout ordering, the untouched-mesh rule, the swatch cell, the frozen
+clip, the refusals — and takes an `ImportRequest`: per-mesh corner arrays in the
+writer's own terms, per-clip absolute poses, repainted images by slot.
+`gltfimport` builds one by reading a `.glb`; the add-on builds one by reading
+`bpy` data. Neither knows anything the other does not.
+
+What the native path carries that glTF cannot:
+
+| | glTF | add-on |
+| --- | --- | --- |
+| swatch palette and cell | folded into the vertex colour, then guessed back | carried per face |
+| colour range | 0..2 through a custom attribute, clamped without it | 0..1 for 0..255, always |
+| texture slot | parsed out of a material name | a number on the material |
+| mesh identity | a name Blender may suffix | a custom property |
+| corner order | emitted outward, re-derived | carried |
+
+Measured over the archive with `tools/native_roundtrip.py`, which restates every
+shipped mesh as an incoming one and builds it back: **347,509 of 347,509
+triangles** identical in position, colour, UV, texture entry *and cyclic corner
+order*, and **132,330 of 132,330 swatch faces** keeping both their palette and
+their cell. Seven models refuse, all of them §8.6 carriers whose pinned UV table
+a rebuild cannot satisfy.
+
+Measured through Blender itself with `blender/roundtrip.py` over 120 models:
+**108 of 108** survive with 111,127/111,127 triangles and 244/244 clips intact,
+3,867,070 animated triangles identical frame by frame. The other twelve refuse
+for a reason they state — six font models carry no numbered mesh at all, only
+object-pool ones (§8.3), and the rest are the pinned carriers again.
+
+Five things had to be got right for that, and each was wrong first:
+
+* **Corner order is not strip order.** Consecutive triangles in a strip wind
+  opposite ways and bit 0 of the third corner's vertex flag says which way this
+  one does (§11.3). Handing the writer strip order hands it 62 of
+  `chars/crate/coco`'s 511 triangles inside out, and the console *culls* those
+  rather than drawing them.
+* **A mesh with no textured face still indexes UVs.** All 1032 fully-untextured
+  meshes in the archive carry a UV block, 887 of them one entry per triangle,
+  because an untextured face reads one texel of the swatch image (§6.2). Passing
+  `None` for those wrote `uv_index = 0` everywhere and one palette for the whole
+  mesh: 604 of the 862 such meshes came back painting something else while every
+  position matched to the unit.
+* **A stated swatch entry beats a guessed one.** `_restore_swatches` matches
+  faces by corner position, and two faces can share their sorted corners; the
+  first seen won the lookup for both. It now fills in only a face that arrived
+  with no entry of its own, which is every face on the glTF path and none on
+  this one.
+* **Welding by position is not safe on an animated mesh.** 49 of the archive's
+  357 animated meshes hold a pair of pool entries that sit together at rest and
+  are driven apart by a clip — 128 pairs in all. Merging such a pair gives both
+  the same pose, and it moved a corner of `cutscene/level_shot12` four units off
+  on 280 of that clip's 429 frames. `weld_vertices` signs a vertex with its rest
+  position *and* every pose the source states, and `build_strips` is told the
+  result so a strip cannot chain through the join either.
+* **A pose is placed by the writer's own plan, not by proximity.** `build_blocks`
+  now reports which corner of which triangle each pool entry came from, and the
+  source says which vertex that corner is, so the map is exact. Nearest-neighbour
+  matching cannot tell apart two vertices at one position, which is the same
+  failure from the other end.
+
+One convention came out of the same measurement: a frame that blends two keys
+names **the lower key first**, as every shipped frame does. Naming the stronger
+key first is the same blend read from the other end — `a + (b−a)·0.75` against
+`b + (a−b)·0.25` — and the game's INTPL works in fixed point, so the two round
+apart by a unit.
+
 ## The whole trip, measured
 
 `tools/roundtrip.py` exports every entry, imports the file it just wrote, and

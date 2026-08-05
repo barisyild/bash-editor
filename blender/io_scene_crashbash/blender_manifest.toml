@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+
+id = "io_scene_crashbash"
+version = "1.0.0"
+name = "Crash Bash Model (.mdl)"
+tagline = "Import and export Crash Bash models, textures and clips"
+maintainer = "crash-bash-editor"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+tags = ["Import-Export"]
+
+# The add-on reads and writes files the user chose, and nothing else.
+[permissions]
+files = "Read and write Crash Bash model entries and texture packs"

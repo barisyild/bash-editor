@@ -12,3 +12,7 @@ out/
 # PyInstaller output, from packaging/bash-editor.spec
 build/
 dist/
+
+# The add-on's copy of the shared library, filled by blender/build_addon.py.
+# The library itself is committed once, at crashbash/.
+blender/io_scene_crashbash/vendor/

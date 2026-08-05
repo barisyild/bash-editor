@@ -364,6 +364,34 @@ sets the view transform to Standard.
 Re-striping on import also reorders the vertex pool, which is why the importer always
 rewrites the clips with the mesh — the two cannot be imported separately, and are not.
 
+## The Blender add-on
+
+Everything above goes through glTF, and most of the care it needs is care about
+glTF: a colour attribute Blender only exports when a material reads it, a slot
+number smuggled through a material name, the `.001` suffix, the swatch texel
+folded into the vertex colour because glTF has nowhere to put a palette.
+[`blender/`](blender) skips the translation — it opens a `.mdl` entry directly,
+as Blender data, and writes one back.
+
+```bash
+.venv/bin/python blender/build_addon.py     # -> out/io_scene_crashbash.zip
+```
+
+Install it through **Edit → Preferences → Get Extensions → Install from Disk**;
+the library travels inside the zip and numpy, which Blender ships, is the only
+thing it needs. Then **File → Import → Crash Bash Model**, pick `SCUS_945.70`
+and choose a model. Meshes arrive as objects, texture slots and swatch palettes
+as materials, clip keyframes as shape keys, clip timings as actions at 30 fps,
+and the collision volumes as a property you can read. **File → Export → Crash
+Bash Model** writes the entry back, ready for *Replace selected file…* here.
+
+It is not a second implementation: the add-on and this editor drive the same
+`crashbash` package, so a rule learned on one side is in force on the other.
+[blender/README.md](blender/README.md) says what maps to what and what an export
+refuses; taking 120 shipped models in and straight back out reproduces
+111,127 of 111,127 triangles — position, colour, UV, texture entry and corner
+order — with all 244 clips intact frame by frame.
+
 ## Command line
 
 ```bash

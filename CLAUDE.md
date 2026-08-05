@@ -38,14 +38,25 @@ corpus or against the game's own executable — see *Verification* below.
   here, with its evidence.
 - **[docs/IMPORTING.md](docs/IMPORTING.md)** — the import pipeline end to end,
   each rule stated with the failure that taught it.
+- **[blender/README.md](blender/README.md)** — the Blender add-on, what it maps
+  to what, and what it refuses.
 - **[README.md](README.md)** — the user-facing account.
 
 `crashbash/` is the format library and imports no GUI code; `app/` is the
-PySide6 front end. Readers are `formats/{mdl,anim,tex,sfx}.py`, writers are
+PySide6 front end and `blender/io_scene_crashbash/` is the Blender one. Readers
+are `formats/{mdl,anim,tex,sfx}.py`, writers are
 `formats/{mdlwrite,animwrite,texwrite}.py`, glTF is `formats/gltf.py` out and
 `formats/{gltfread,gltfimport}.py` back in. `build.py` repacks the DAT and
 patches the EXE tables; `iso.py` masters or patches the disc image;
 `retarget.py` moves animation between differently proportioned characters.
+
+**`formats/modelimport.py` is where an import happens, and both front ends go
+through it.** It holds everything that has nothing to do with the file the edit
+arrived in — the layout ordering, the untouched-mesh rule, the swatch cell, the
+frozen clip, the refusals — behind one `ImportRequest`. `gltfimport` fills one
+by reading a `.glb`; the add-on fills one by reading `bpy` data. A rule added to
+one front end instead of to the core is a rule the other will not have, and
+every trap in this file was learned once already.
 
 ## Invariants a writer must honour
 
@@ -307,6 +318,47 @@ They are not style preferences.
   behind and the pointer went stale. Rebuilding `chars/crate/coco`'s mesh 0 read
   mesh 1's collision volume as zero records; 777 of the archive's 5990 meshes
   carry a block and 114 models have more than one that does.
+- **Hand the writer *outward* corner order, never strip order.** Consecutive
+  triangles in a strip wind opposite ways, and bit 0 of the third corner's
+  vertex flag says which way this one does (§11.3): the outward order is
+  `(a, c, b)` when it is set, with the colours and UVs reversed alongside,
+  because the game writes vertex i, i+1, i+2 and UV 0, 1, 2 in step. Reading a
+  shipped mesh back in strip order hands over 62 of `chars/crate/coco`'s 511
+  triangles inside out, and the console *culls* those rather than drawing them.
+  A comparison over sorted corners cannot see it — that is reflection-blind and
+  scored 45,300/45,300 while it was happening.
+- **A mesh with no textured face still indexes UVs.** All 1032 fully-untextured
+  meshes in the archive carry a UV block, 887 of them exactly one entry per
+  triangle, because an untextured face reads one texel of the pack's swatch
+  image through the palette it names (§6.2). Gating the arrays on "some face
+  names a slot" handed `NewMesh` a `None` for those and wrote `uv_index = 0`
+  everywhere with one palette for the whole mesh: **604 of the 862** such meshes
+  came back painting something else while every position matched to the unit.
+  Mixed meshes were already right, 803 of 813, which is why nothing noticed.
+- **A stated swatch entry beats a guessed one.** `_restore_swatches` matches
+  faces by corner position and two faces can share their sorted corners, so the
+  first one seen won the lookup for both — ten meshes lost their palettes that
+  way, all of them 186-face menu heads of the kind that paint themselves in five
+  colour schemes at once. It fills in only a face that arrived with no entry of
+  its own.
+- **Welding by position is not safe on an animated mesh.** 49 of the archive's
+  357 animated meshes hold a pair of pool entries that sit together at rest and
+  are driven apart by a clip, 128 pairs in all. Merge such a pair and both get
+  one pose: a corner of `cutscene/level_shot12` went four units off on 280 of
+  that clip's 429 frames with every static check passing. `weld_vertices` signs
+  a vertex with its rest position *and* every pose the source states, and
+  `build_strips` takes that identity so a strip cannot chain through the join
+  either — sharing a pool entry is the same merge from the other end.
+- **A pose is placed by the writer's own plan, not by proximity.**
+  `build_blocks` reports which corner of which triangle each pool entry came
+  from and the source says which vertex that corner is, so the map is exact.
+  Nearest-neighbour matching against rest positions cannot tell apart two
+  vertices at one position, and that is the failure above wearing a different
+  hat. The distance path stays for a source with no vertices of its own.
+- **A blended frame names the lower key first.** Every shipped frame does, and
+  the two orderings are not interchangeable in practice: `a + (b−a)·0.75` and
+  `b + (a−b)·0.25` are the same blend read from opposite ends, and the game's
+  INTPL works in fixed point, so they round apart by a unit.
 - **The glTF carries the facing; never re-derive it.** The game flips the sign
   of the NCLIP backface test per vertex flag bit 0 (§11.3), so an inverted
   parity culls a triangle rather than drawing it — and nothing on a static
@@ -354,6 +406,24 @@ shipped model and reproduce its own strip list and vertex pool; rewrite all
 1035 clips and get the original bytes back; re-read a built image with the same
 parser and check every entry against intent — the replacement where staged, the
 original everywhere else.
+
+Three round trips, each over the shipped corpus and each covering what the
+others cannot:
+
+```bash
+.venv/bin/python tools/roundtrip.py game/SCUS_945.70          # the glTF path
+.venv/bin/python tools/native_roundtrip.py game/SCUS_945.70   # the import core
+Blender --background --factory-startup --python blender/roundtrip.py -- game/SCUS_945.70 120
+```
+
+**Compare triangles canonically under rotation and not under reversal.**
+Reversing a triangle turns it inside out and the console culls it (§11.3), so a
+key built from sorted corners is blind to the one failure a static render also
+cannot show. That blindness scored 45,300 of 45,300 on a corpus where 62 of one
+model's 511 triangles were being handed over backwards. Compare colours, UVs and
+the texture entry alongside, and compare a clip over the triangles it *draws*
+rather than the pose arrays — a rebuild re-stripes, so the pool is a different
+length and its order is its own.
 
 Distrust previews. A flat-shaded preview cannot show sub-triangle texture, and
 no static render can show draw-time flags. For those the emulator is the only

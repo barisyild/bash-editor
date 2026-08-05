@@ -225,7 +225,8 @@ def _mesh_blocks(mesh: Mesh) -> tuple[int, int, int]:
     return mesh.ptr_strips, mesh.ptr_bounds, mesh.ptr_uv_index
 
 
-def build_strips(positions: np.ndarray, keys: np.ndarray | None = None
+def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
+                 identity: np.ndarray | None = None
                  ) -> list[list[tuple[int, tuple[int, int, int]]]]:
     """Chain triangles into strips along shared edges.
 
@@ -241,9 +242,21 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None
 
     `keys` groups triangles that may share a strip -- the texture each samples,
     since one strip is drawn with one texture.
+
+    `identity` says which corners are the *same vertex*, when the caller knows.
+    Two corners at one position need not be: 49 of the archive's 357 animated
+    meshes hold a pair that sits together at rest and is driven apart by a clip.
+    Chaining through such a pair makes the two triangles share one pool entry,
+    and the second then animates with the first -- four units off, on 280 of one
+    clip's 429 frames, with every static check passing. Position welding stays
+    the fallback for a caller that has no vertices of its own.
     """
-    quantised = np.round(positions.reshape(-1, 3)).astype(np.int64)
-    _, welded = np.unique(quantised, axis=0, return_inverse=True)
+    if identity is not None:
+        _, welded = np.unique(np.asarray(identity).reshape(-1),
+                              return_inverse=True)
+    else:
+        quantised = np.round(positions.reshape(-1, 3)).astype(np.int64)
+        _, welded = np.unique(quantised, axis=0, return_inverse=True)
     welded = welded.reshape(-1, 3)
     faces = welded.shape[0]
     if keys is None:
@@ -342,6 +355,9 @@ class NewMesh:
     uvs: np.ndarray | None = None  # (T, 3, 2) uint8 texel coordinates
     # What an untextured mesh still has to name. See `_swatch_entry`.
     swatch: int = 0
+    # (T, 3) naming the source vertex behind each corner, when the caller has
+    # one. It decides where a strip may chain: see `build_strips`.
+    corner_vertices: np.ndarray | None = None
 
 
 def _attachment_bytes(data: bytes, mesh: Mesh) -> bytes:
@@ -382,6 +398,14 @@ def _restore_swatches(target: Mesh, mesh: "NewMesh") -> "NewMesh":
 
     Faces are matched by their corner positions, which is exact wherever the
     triangle still exists; anything reshaped or new keeps the mesh-wide default.
+
+    Only a face that arrived with no entry of its own is filled in. A front end
+    that carries the entry per face -- the Blender add-on does, since it never
+    folds the texel away -- has already said which palette the face means, and
+    a positional guess must not overrule it: two faces can share their sorted
+    corner positions, and the first one seen won the lookup for both. That cost
+    ten meshes their palettes across the corpus, all of them 186-face menu heads
+    of the kind that paint themselves in five colour schemes at once.
     """
     if mesh.textures is None or not len(target.face_texture):
         return mesh
@@ -398,7 +422,7 @@ def _restore_swatches(target: Mesh, mesh: "NewMesh") -> "NewMesh":
 
     textures = np.array(mesh.textures, dtype=np.int64, copy=True)
     for face in range(len(textures)):
-        if textures[face] >= 0:
+        if textures[face] != -1:
             continue
         key = tuple(sorted(tuple(int(v) for v in corner)
                            for corner in mesh.positions[face]))
@@ -493,7 +517,7 @@ def build_blocks(mesh: NewMesh) -> dict:
     # so one strip may sample several textures. Grouping by slot fragments the
     # strips for nothing.
     keys = (np.asarray(mesh.textures, dtype=np.int64) >= 0) if textured else None
-    runs = build_strips(mesh.positions, keys)
+    runs = build_strips(mesh.positions, keys, mesh.corner_vertices)
     strips = bytearray()
     for run in runs:
         plain = (not textured) or int(mesh.textures[run[0][0]]) < 0
@@ -603,6 +627,14 @@ def build_blocks(mesh: NewMesh) -> dict:
         "uvs": uvs,
         "faces": len(plan),
         "textured": textured,
+        # Which corner of which incoming triangle each pool entry was written
+        # from, in pool order. A caller that knows where its corners came from
+        # can follow this back to its own vertices exactly, which is the only
+        # way to place an animation pose: matching by rest position instead
+        # cannot tell apart two vertices that sit together and move apart, and
+        # collapsing such a pair moved 38 animated triangles of one cutscene
+        # clip while every static check passed.
+        "order": pick,
     }
 
 
@@ -846,8 +878,10 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
             if at < 0:
                 raise ValueError(
                     "pinned tables: a triangle's UV triple is not in the "
-                    "shared table, and growing it is what crashes these rooms; "
-                    "use untextured geometry or existing UVs"
+                    "shared table, and growing it is what crashes these rooms. "
+                    "A swatch face counts -- its cell is a UV entry like any "
+                    "other (§6.2) -- so this is not only about textured faces; "
+                    "reuse triples the table already holds"
                 )
             uv_slots.append(at // UV_ENTRY_SIZE)
         uv_index = struct.pack(f"<{faces}H", *[s & 0xFFFF for s in uv_slots])
@@ -986,7 +1020,8 @@ def _refuse_carrier(data: bytes, what: str) -> None:
 
 def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                    pin_tables: bool = False,
-                   notes: list[str] | None = None) -> bytes:
+                   notes: list[str] | None = None,
+                   plans: dict[int, "np.ndarray"] | None = None) -> bytes:
     """Install several meshes in one pass, sharing one copy of the tables.
 
     `install_mesh` appends a colour table, a UV table and the vector pool on
@@ -1000,7 +1035,10 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     Colours are deduplicated across *all* the meshes at once, which is what
     keeps a many-mesh import inside the 13-bit index. `notes` collects the
     remarks a caller should pass on -- how many faces the 13-bit ceiling forced
-    onto a neighbouring colour, when it forced any.
+    onto a neighbouring colour, when it forced any. `plans`, when given, is
+    filled with each mesh's pool layout: one `(triangle, corner)` pair per pool
+    entry, which is how a caller puts an animation pose back in pool order
+    without guessing at it from rest positions.
     """
     if not meshes:
         return dest_data
@@ -1017,7 +1055,10 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         if not mesh.swatch:
             mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
         mesh = _restore_swatches(target, mesh)
-        prepared[index] = (target, build_blocks(mesh))
+        blocks = build_blocks(mesh)
+        if plans is not None:
+            plans[index] = blocks["order"]
+        prepared[index] = (target, blocks)
 
     dest_colour, dest_uv, dest_uv_len = _table_bounds(dest_data, dest)
     colours = bytearray(dest_data[dest_colour:dest_uv])
@@ -1063,11 +1104,12 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                 uv_index.append(at & 0xFFFF)
             if missing:
                 raise ValueError(
-                    f"mesh {index} keeps a pinned UV table, so each textured "
-                    f"triangle needs its exact UV triple already in it, and "
-                    f"{missing} of {faces} are not there. Re-striping orders a "
-                    f"triangle's corners anew, which is usually why. The mesh "
-                    f"cannot be rebuilt textured in this model."
+                    f"mesh {index} keeps a pinned UV table, so each triangle "
+                    f"needs its exact UV triple already in it -- a textured "
+                    f"face's texels and a swatch face's cell alike (§6.2) -- "
+                    f"and {missing} of {faces} are not there. Re-striping "
+                    f"orders a triangle's corners anew, which is usually why. "
+                    f"The mesh cannot be rebuilt in this model."
                 )
         else:
             uv_index = []
