@@ -211,14 +211,18 @@ They are not style preferences.
   does, −34,429,474.667 to the unit. The arm is the exception — an open shell,
   where the sign means nothing. The warning is worth keeping and worth checking
   against the source before acting on it.
-- **A model brought in for its geometry brings its clips as shape keys, and
-  Blender adds them all together.** The penguin arrived with 34, a dozen of them
-  at 1.0, and the preview drew a fan of shards big enough to fill the room —
-  while the file was already correct, the export having taken the base mesh.
-  This is the same trap as the summing actor keys, wearing the other hat: there
-  the pose was wrong on screen, here the *diagnosis* was. Clear the keys when a
-  mesh is being borrowed rather than animated, or the preview lies about a file
-  that is right.
+- **`shape_key_add` hands back a key at 1.0, not at zero.** Relative keys add
+  together and the importer assigns an action for the *first* clip only, so
+  every other clip's poses stayed fully on and piled onto it: `crate_snow`'s
+  penguin drew **32.7 units tall against its own 2.4**, 30 of its 34 keys
+  switched on, a fan of shards reaching out of the room. Every model with more
+  than one clip was doing this. Nothing in any file was wrong — the export reads
+  a key's coordinates, never its value, and the round trip stayed byte-identical
+  throughout — so it only ever showed as a preview that could not be trusted,
+  which is worse than a visible fault: it was read once as a broken *export*.
+  `build_clips` zeroes each key as it makes it. A model brought in to be
+  borrowed rather than animated should still have its keys cleared, which
+  *Borrow Selected Mesh* does.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an

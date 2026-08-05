@@ -638,6 +638,16 @@ def build_clips(obj, mesh, rows: np.ndarray | None, clips, stem: str,
             block = obj.shape_key_add(
                 name=N.SHAPE_KEY.format(label=clip.label, key=number),
                 from_mix=False)
+            # `shape_key_add` hands back a key at **1.0**, not at zero, and
+            # relative keys add together. Only the first clip gets an action
+            # assigned, so every other clip's poses stayed fully on and piled on
+            # top of it: `crate_snow/penguin` drew 32.7 units tall against its
+            # own 2.4, a fan of shards reaching out of the room, with 30 of its
+            # 34 keys switched on. Nothing in the file was wrong -- the export
+            # reads the key's coordinates, not its value -- so this only ever
+            # showed as a preview that could not be trusted, which is worse
+            # than a visible fault.
+            block.value = 0.0
             gathered.append(pose[rows])
             block.data.foreach_set("co", to_blender(pose[rows]).reshape(-1))
             blocks.append(block)

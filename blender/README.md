@@ -37,7 +37,7 @@ sibling `.tex` if one is beside it. What arrives is a collection holding:
 | `crashbash_uv` | the texel the face samples, in its own texture's space |
 | a `tex_NNN_...` material | that pack slot, its picture decoded |
 | a `swatch_NNN` material | an untextured face's palette (§6.2); the UV is the cell |
-| a shape key per clip keyframe | that clip's stored pose |
+| a shape key per clip keyframe | that clip's stored pose, switched off |
 | an action per clip | the clip's frame table, at 30 fps |
 | an object in *placements* | one record of the level's list (§8.5) |
 | an empty in *shot* | a particle emitter, every field of it (§9.11.7) |
