@@ -160,7 +160,11 @@ They are not style preferences.
   **`out/crashbash-82nd-record.bin` runs**, so nothing outside the span points
   into it — which no static check could have settled, since the scan that looks
   finds 714 four-byte words resolving there and cannot tell a pointer from a
-  vertex that lands there by chance.
+  vertex that lands there by chance. **`out/crashbash-three-objects.bin` runs
+  too**, and it is the one that matters: its three records were authored in
+  Blender by duplicating placements, and they spend `warp_room1`'s padding down
+  to zero. So the slide is good to the last byte the level has, not just for the
+  first record, and the room draws all 84 with its own 81 untouched.
   **Duplicating a placement in Blender is the gesture, and it needed a fix to
   work.** Blender copies custom properties with the object, so the copy claims
   the same `crashbash_placement` as the original; read literally that is two

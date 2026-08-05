@@ -54,7 +54,9 @@ pieces. Move a placement, export, and one record changes: measured on
 Shift+D or *Add Placement* in the sidebar, drag it where you want it, export —
 measured on `warp_room1`, 81 records to 84 with three of them added, the file
 exactly the size it was, all 81 originals byte-identical and nothing removed.
-The disc runs.
+**The disc runs**, with all three drawing where they were dragged and the room's
+own 81 objects where they always were — and those three spend the level's
+padding down to zero, so the route is good to the last byte a level has.
 
 That the obvious gesture is the working one took a fix: Blender copies custom
 properties with the object, so the copy arrives claiming the same

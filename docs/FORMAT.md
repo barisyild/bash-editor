@@ -2071,6 +2071,11 @@ whether anything outside the slid span points into it. A scan finds 714
 four-byte words that resolve there and cannot tell one of them from a vertex
 that lands there by chance — the disc can.
 
+It was then built again at **84 records**, spending all three the level has and
+leaving its padding at zero, and that runs as well: the three new objects draw
+where they were placed and the room's own 81 are untouched. So the slide holds
+to the last byte the padding allows, not only for the first record.
+
 `placewrite.append_placement` writes it and `placewrite.spare_capacity` bounds
 it; a level laid out any other way is refused rather than guessed at.
 
