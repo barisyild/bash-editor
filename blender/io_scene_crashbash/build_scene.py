@@ -22,6 +22,8 @@ import numpy as np
 
 import bpy
 
+from crashbash.formats import placewrite
+
 from . import actions, naming as N
 
 # The shape keys a clip's poses are stored under. The exporter reads them back
@@ -699,12 +701,25 @@ def _build_placements(collection, model, stem: str, by_id: dict,
     Each object shares the mesh data of the pool mesh its id resolves to, so
     moving one moves that copy alone. Editing the mesh edits every copy, which
     is what the file does too.
+
+    **A record's translation is an offset, not a position.** A pool mesh carries
+    its own place in the room: `warp_room1`'s 0x501C is authored centred on
+    (-9.71, -5.6, 0.4) and the record that places it translates it by nothing.
+    Dragging a placement in Blender is unaffected -- the object is drawn where
+    it belongs and the delta comes out right -- but re-aiming a spare at another
+    object leaves the old record's translation applied in the *new* mesh's
+    frame, which puts it a long way from where that record used to draw.
     """
     if not model.instances:
         return
     places = bpy.data.collections.new(N.COLLECTION_PLACES.format(stem=stem))
     collection.children.link(places)
     missing = 0
+    # Which records are duplicates, so the panel can point at them. Saying a
+    # spare exists is not the same as saying which one it is: `warp_room1` has
+    # 81 records and five spares, and picking wrong deletes something from the
+    # room instead of adding to it.
+    spare = set(placewrite.spare_records(model))
     for instance in model.instances:
         name = N.OBJECT_PLACE.format(stem=stem, index=instance.index,
                                      id=instance.id)
@@ -717,6 +732,8 @@ def _build_placements(collection, model, stem: str, by_id: dict,
         obj = bpy.data.objects.new(name, data)
         obj[N.PROP_PLACEMENT] = instance.index
         obj[N.PROP_PLACES] = instance.id
+        if instance.index in spare:
+            obj[N.PROP_SPARE] = True
         # `matrix_basis`, not `matrix_world`: the world matrix is evaluated by
         # the dependency graph and reads back stale until it runs, so an object
         # moved and exported in one pass came out where it started -- and 24 of
@@ -732,9 +749,10 @@ def _build_placements(collection, model, stem: str, by_id: dict,
         obj[N.PROP_PLACE_REST] = list(rotation) + list(translation)
         obj.hide_render = not instance.is_drawn
         places.objects.link(obj)
-    notes.append(f"{len(model.instances)} placements; the list cannot be made "
-                 f"longer, and a record whose object another record already "
-                 f"places is the only spare a level has")
+    notes.append(f"{len(model.instances)} placements, {len(spare)} of them "
+                 f"spare -- a record whose object another record already places. "
+                 f"The list cannot be made longer, so re-aiming a spare is how "
+                 f"something new goes into a level, and it costs a duplicate")
     if missing:
         notes.append(f"{missing} placement(s) name something this file does not "
                      f"hold -- a clip, or an object in a model loaded alongside "

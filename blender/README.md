@@ -51,6 +51,16 @@ pieces. Move a placement, export, and one record changes: measured on
 `warp_room1`, **one byte**, the file the same size. The list cannot be made
 longer (§8.5), so a new object there is not a new placement.
 
+What it *can* be is a **spare** — a record whose object another record already
+places. The panel marks them, because 81 records with no marking is no way to
+find the ten `warp_room1` has (five objects it places more than once, four of
+them copies of 0x5041). Re-aim one and you have added an object to the room, at
+the cost of a duplicate: point record 69 at 0x501C and the room has two of that
+blue arm. Twenty-seven bytes, the file the same size. Remember that a record's
+translation is an **offset** and a pool mesh carries its own place in the room —
+0x501C is authored centred on (-9.71, -5.6, 0.4) — so a re-aimed record starts
+out translating the new object in the old one's frame, and needs moving.
+
 An **object-pool mesh** can be rebuilt, but only inside the span it already
 owns: the pool is one packed run and a mesh whose blocks leave it boots to a
 black screen. The writer measures and refuses rather than build that disc.

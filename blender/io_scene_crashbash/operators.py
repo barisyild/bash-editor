@@ -351,6 +351,17 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
             box.label(text=f"placement {obj[N.PROP_PLACEMENT]} places "
                            f"{obj.get(N.PROP_PLACES, 0):04X}", icon="EMPTY_AXIS")
             box.label(text="move it and export; the list cannot grow")
+            if obj.get(N.PROP_SPARE):
+                box.label(text="spare: another record already places this "
+                               "object", icon="CHECKMARK")
+                box.label(text="re-aim it to put something new in the level")
+                box.prop(obj, f'["{N.PROP_PLACES}"]', text="places")
+                box.label(text="then move it: the record translates the new "
+                               "object from where its own mesh is authored")
+            else:
+                box.label(text="the only record placing this object; "
+                               "re-aiming it takes it out of the level",
+                          icon="ERROR")
         if obj is not None and obj.get(N.PROP_EMITTER) is not None:
             box = layout.box()
             box.label(text=f"particle emitter at node "

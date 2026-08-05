@@ -39,6 +39,13 @@ PROP_PLACES = "crashbash_places"        # the id the record names
 # matrix back. Comparing against the file called 24 of `warp_room1`'s 81
 # untouched records moved. Comparing against this calls none of them moved.
 PROP_PLACE_REST = "crashbash_placement_rest"
+# Set on a placement whose object another record already places. The list
+# cannot grow (§8.5), so these are the only room a level has for something new,
+# and spending one costs a duplicate of whatever it currently draws. Without
+# this an artist has 81 records in front of them and no way to tell which one
+# is free -- `warp_room1` has ten, spread over five objects it places more than
+# once, and 0x5041 alone accounts for four of them.
+PROP_SPARE = "crashbash_spare"
 
 # On the collection: the shot as the file holds it (§9.11), JSON. Everything an
 # artist does not edit here is carried through untouched, which is how a scene
