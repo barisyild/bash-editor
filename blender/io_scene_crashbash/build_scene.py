@@ -807,6 +807,21 @@ def _point(scaled) -> tuple[float, float, float]:
                  to_blender(np.asarray([scaled], dtype=np.float64) / SCALE)[0])
 
 
+def _scale(scale) -> tuple[float, float, float]:
+    """A track key's scale into Blender's axes.
+
+    It is a diagonal in the model's frame, so the basis change permutes it the
+    same way it permutes a point: `B diag(x, y, z) B^-1 = diag(x, z, y)`. The
+    shot squashes and stretches -- `intro_eurocom` asks for 32 distinct scales
+    and (0.75, 2.0, 1.0) among them -- so assigning it unswapped stretches a
+    letter into the screen instead of up, which is what made the logo sit
+    oddly as it landed. A check that compared the file's scale against the
+    object's agreed with itself the whole time, because both were unswapped.
+    """
+    x, y, z = (float(v) for v in scale)
+    return (x, z, y)
+
+
 def _orientation(quaternion):
     """A key's rotation into Blender's frame, basis change and all."""
     from mathutils import Matrix  # noqa: PLC0415
@@ -887,7 +902,7 @@ def bake_shot(collection, model_data: bytes, model, clips, stem: str) -> dict:
             position, rotation, scale = prop.track.at(tick)
             obj.location = _point(position)
             obj.rotation_quaternion = _orientation(rotation)
-            obj.scale = tuple(float(v) for v in scale)
+            obj.scale = _scale(scale)
             for path in ("location", "rotation_quaternion", "scale"):
                 obj.keyframe_insert(path, frame=tick + 1)
         _key_window(obj, first, last, prop.track.start, prop.track.end)
@@ -929,7 +944,7 @@ def bake_shot(collection, model_data: bytes, model, clips, stem: str) -> dict:
             position, rotation, scale = actor.track.at(tick)
             obj.location = _point(position)
             obj.rotation_quaternion = _orientation(rotation)
-            obj.scale = tuple(float(v) for v in scale)
+            obj.scale = _scale(scale)
             for path in ("location", "rotation_quaternion", "scale"):
                 obj.keyframe_insert(path, frame=tick + 1)
             if not blocks or clip is None:

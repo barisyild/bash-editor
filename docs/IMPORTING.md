@@ -481,6 +481,15 @@ are built with **backface culling on**, which is what the console does — witho
 it the backdrop shell, whose faces correctly point inward, drew over everything
 the camera was aimed at.
 
+A track key's **scale is a diagonal in the model's frame**, so the basis change
+permutes it exactly as it permutes a point: `B diag(x, y, z) B⁻¹ = diag(x, z,
+y)`. `intro_eurocom` asks for 32 distinct scales and (0.75, 2.0, 1.0) is one of
+them — the logo's letters squash and stretch as they drop — so assigning it
+unswapped stretched each letter *into the screen* instead of upward, and the
+logo sat wrong the whole way down. A check that compared the file's scale
+against the object's agreed with itself throughout, because both were unswapped;
+what caught it was watching the letters land.
+
 An actor gets its own copy of the mesh, and that copy keeps **only the shape
 keys of the clip it plays**. Blender's shape keys are relative and they sum, so
 a key left at 1 adds its whole delta to whatever else is set — and the copy
