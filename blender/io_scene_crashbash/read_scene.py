@@ -53,98 +53,139 @@ def _objects(collection: bpy.types.Collection) -> dict[int, bpy.types.Object]:
     return found
 
 
-def _new_placements(collection, model, data, warnings: list[str]) -> list[dict]:
-    """Objects put in the *placements* collection that stand for no record yet.
+def _at_rest(obj, instance) -> bool:
+    """Is this object still standing exactly where its record stands it?
 
-    The list can be grown, into the padding the resident region ends with, and
-    `placewrite.spare_capacity` says by how much -- 3 records for `warp_room1`,
-    10 for Oxide's chase level, none at all for an arena. So an object dropped
-    in here is a new record if there is room for one, and a warning if there is
-    not; it used to be nothing either way.
-
-    Each copies an existing record whole, so the fields this project has not
-    read arrive set to something the game already ran. The one it copies is the
-    record that places the same object where one does, which also settles the
-    rotation; otherwise record 0.
+    Against what the importer's own transform reads back as, not against the
+    file: a quantised rotation is not exactly orthonormal and Blender keeps a
+    transform as location, euler and scale, so recomposing it never gives the
+    file's nine values back. Comparing against the file reported 24 of
+    `warp_room1`'s 81 untouched records as moved, and rewriting a record that
+    did not move is a byte of a live list spent for nothing.
     """
-    if not model.instances:
-        return []
-    fresh = [obj for obj in collection.all_objects
-             if obj.type == "MESH"
-             and obj.get(N.PROP_PLACEMENT) is None
-             and obj.get(N.PROP_MESH) is None
-             and obj.get(N.PROP_OBJECT) is None
-             and not obj.get(N.PROP_PREVIEW)]
-    if not fresh:
+    rotation, translation = build_scene.placement_record(obj.matrix_basis)
+    rest = list(obj.get(N.PROP_PLACE_REST) or []) or (
+        list(instance.rotation) + list(instance.translation))
+    now = list(rotation) + list(translation)
+    return len(rest) == len(now) and all(
+        abs(a - b) <= 1e-5 for a, b in zip(rest, now))
+
+
+def _claims(collection, model, warnings: list[str]):
+    """Sort the placement objects into record-holders and new records.
+
+    **Duplicating a placement is how a level gains an object**, and Blender
+    copies custom properties with the object -- so the copy arrives claiming the
+    same `crashbash_placement` as the one it came from. Read literally that is
+    two objects for one record, and the second silently overwrote the first: the
+    obvious edit in Blender moved nothing and lost the original's move with it.
+
+    So a record is held by one object and every other claimant is a new record.
+    The holder is the claimant still standing where the record stands it, which
+    is the original whenever the copy is the one that got dragged; with none or
+    several at rest it is the first the collection lists, and the rest are new.
+    An object with no claim at all is new too -- that is a mesh dropped in by
+    hand rather than duplicated.
+    """
+    by_index = {i.index: i for i in model.instances}
+    claimed: dict[int, list] = {}
+    fresh = []
+    for obj in collection.all_objects:
+        if obj.type != "MESH" or obj.get(N.PROP_PREVIEW):
+            continue
+        index = obj.get(N.PROP_PLACEMENT)
+        if index is None:
+            if obj.get(N.PROP_MESH) is None and obj.get(N.PROP_OBJECT) is None:
+                fresh.append((obj, None))
+            continue
+        if int(index) not in by_index:
+            warnings.append(
+                f"{obj.name}: placement {int(index)} is not in this model, "
+                f"which has {len(model.instances)}; it was left out")
+            continue
+        claimed.setdefault(int(index), []).append(obj)
+
+    holders: dict[int, object] = {}
+    for index, objects in claimed.items():
+        if len(objects) == 1:
+            holders[index] = objects[0]
+            continue
+        resting = [o for o in objects if _at_rest(o, by_index[index])]
+        holder = resting[0] if len(resting) == 1 else objects[0]
+        holders[index] = holder
+        for obj in objects:
+            if obj is not holder:
+                fresh.append((obj, index))
+    return holders, fresh
+
+
+def _placements(holders, model, warnings: list[str]) -> dict[int, dict]:
+    """Every record its holder moved or re-aimed, and only those.
+
+    A record is eleven bytes of a live list and rewriting one that did not
+    change is work the file does not need.
+    """
+    edits: dict[int, dict] = {}
+    by_index = {i.index: i for i in model.instances}
+    for index, obj in sorted(holders.items()):
+        instance = by_index[index]
+        rotation, translation = build_scene.placement_record(obj.matrix_basis)
+        identifier = int(obj.get(N.PROP_PLACES, instance.id))
+        if identifier == instance.id and _at_rest(obj, instance):
+            continue
+        edits[index] = {"id": identifier, "translation": translation,
+                        "rotation": rotation}
+    return edits
+
+
+def _new_placements(fresh, model, data, warnings: list[str]) -> list[dict]:
+    """The objects that stand for no record yet, as records to append.
+
+    The list grows into the padding the resident region ends with and
+    `placewrite.spare_capacity` says by how much -- 3 for `warp_room1`, 10 for
+    Oxide's chase level, none at all for an arena. Past that the export refuses
+    rather than write a level that cannot load, so this reports what it dropped
+    instead of dropping it quietly.
+
+    Each new record copies an existing one whole, so the fields this project has
+    not read arrive set to something the game already ran. A duplicate copies
+    the record it was duplicated from; anything else copies the record that
+    places the same object, and failing that record 0.
+    """
+    if not fresh or not model.instances:
         return []
     room = placewrite.spare_capacity(data, model)
     if not room:
         warnings.append(
             f"{len(fresh)} object(s) stand for no placement and this level has "
-            f"room for none; its resident region ends without the padding a new "
+            f"room for none: its resident region ends without the padding a new "
             f"record grows into, so they were left out")
         return []
 
     added = []
-    for obj in fresh[:room]:
+    for obj, came_from in fresh:
         identifier = obj.get(N.PROP_PLACES)
         if identifier is None:
             warnings.append(
-                f"{obj.name}: no {N.PROP_PLACES} saying which object it places, "
-                f"so it was left out")
+                f"{obj.name}: nothing says which object it places, so it was "
+                f"left out; give it a '{N.PROP_PLACES}' or duplicate a placement")
             continue
         identifier = int(identifier)
-        copies = next((i.index for i in model.instances if i.id == identifier),
-                      model.instances[0].index)
+        copies = came_from
+        if copies is None:
+            copies = next(
+                (i.index for i in model.instances if i.id == identifier),
+                model.instances[0].index)
         rotation, translation = build_scene.placement_record(obj.matrix_basis)
         added.append({"copies": copies, "id": identifier,
                       "translation": translation, "rotation": rotation})
-    if len(fresh) > room:
+        if len(added) == room:
+            break
+    if len(fresh) > len(added):
         warnings.append(
             f"{len(fresh)} object(s) stand for no placement and there is room "
-            f"for {room}; the rest were left out")
+            f"for {room}; {len(fresh) - len(added)} were left out")
     return added
-
-
-def _placements(collection, model, warnings: list[str]) -> dict[int, dict]:
-    """Every placement record the collection moved, renamed or re-aimed.
-
-    Only the ones that actually differ: a record is eleven bytes of a live list
-    and rewriting one that did not change is work the file does not need. An
-    object standing for no record at all is a *new* one -- see
-    `_new_placements`, which is bounded by what the level can take.
-    """
-    edits: dict[int, dict] = {}
-    by_index = {i.index: i for i in model.instances}
-    for obj in collection.all_objects:
-        index = obj.get(N.PROP_PLACEMENT)
-        if index is None:
-            continue
-        instance = by_index.get(int(index))
-        if instance is None:
-            warnings.append(
-                f"{obj.name}: placement {int(index)} is not in this model, "
-                f"which has {len(model.instances)}; it was left out")
-            continue
-        rotation, translation = build_scene.placement_record(obj.matrix_basis)
-        identifier = int(obj.get(N.PROP_PLACES, instance.id))
-        # Against what the importer's own transform reads back as, not against
-        # the file: a quantised rotation is not exactly orthonormal and Blender
-        # keeps a transform as location, euler and scale, so recomposing it
-        # never gives the file's nine values back. Comparing against the file
-        # reported 24 of `warp_room1`'s 81 untouched records as moved, and
-        # rewriting a record that did not move is a byte of a live list spent
-        # for nothing.
-        rest = list(obj.get(N.PROP_PLACE_REST) or []) or (
-            list(instance.rotation) + list(instance.translation))
-        now = list(rotation) + list(translation)
-        still = len(rest) == len(now) and all(
-            abs(a - b) <= 1e-5 for a, b in zip(rest, now))
-        if still and identifier == instance.id:
-            continue
-        edits[int(index)] = {"id": identifier, "translation": translation,
-                             "rotation": rotation}
-    return edits
 
 
 def _shot(collection, warnings: list[str]) -> dict | None:
@@ -425,10 +466,16 @@ def build_request(collection, model, clips, pack, materials_pack=None,
             f"game ticks at {N.FRAMES_PER_SECOND}; every clip was read on the "
             f"scene's grid and will be resampled")
 
-    request.placements = _placements(collection, model, request.warnings)
+    holders, fresh = _claims(collection, model, request.warnings)
+    request.placements = _placements(holders, model, request.warnings)
     if model_data is not None:
         request.new_placements = _new_placements(
-            collection, model, model_data, request.warnings)
+            fresh, model, model_data, request.warnings)
+    elif fresh:
+        request.warnings.append(
+            f"{len(fresh)} object(s) stand for no placement and the entry's own "
+            f"bytes were not passed, so how much room the list has could not be "
+            f"read; they were left out")
     request.scene = _shot(collection, request.warnings)
 
     sizes = _sizes(pack)

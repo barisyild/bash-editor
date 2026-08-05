@@ -161,6 +161,14 @@ They are not style preferences.
   into it — which no static check could have settled, since the scan that looks
   finds 714 four-byte words resolving there and cannot tell a pointer from a
   vertex that lands there by chance.
+  **Duplicating a placement in Blender is the gesture, and it needed a fix to
+  work.** Blender copies custom properties with the object, so the copy claims
+  the same `crashbash_placement` as the original; read literally that is two
+  objects for one record, and the second overwrote the first — the obvious edit
+  moved nothing and took the original's move with it. `_claims` now gives a
+  record to one holder and makes every other claimant a new record, choosing the
+  holder as the claimant still at rest, which is the original whenever the copy
+  is the one that was dragged.
   `spare_capacity` says how much room a level has, and it is the padding at the
   end of its resident region divided by 160: **53 records across 8 models** —
   all five warp rooms, both demo hubs, and Oxide's chase level at 1746 spare

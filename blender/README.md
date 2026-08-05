@@ -50,15 +50,28 @@ has 81 records and not one names any of its 42 numbered meshes — so the
 pieces. Move a placement, export, and one record changes: measured on
 `warp_room1`, **one byte**, the file the same size.
 
-**Put a new object in that collection and it becomes a new record.** Give it a
-`crashbash_places` saying which object it draws, stand it where you want it, and
-the export appends it — measured on `warp_room1`, 81 records to 82, the file
-exactly the size it was, all 81 originals byte-identical, nothing removed. The
-disc runs. How many a level can take is its own padding divided by a record and
-the import says so: **53 across the game**, 3 for `warp_room1`, 10 for Oxide's
-chase level, and none at all for an arena, whose resident region ends with 6 or
-18 bytes of alignment and no room. Past that the export refuses rather than
-write a level that cannot load.
+**Duplicate a placement and the copy becomes a new record.** Select one, press
+Shift+D or *Add Placement* in the sidebar, drag it where you want it, export —
+measured on `warp_room1`, 81 records to 84 with three of them added, the file
+exactly the size it was, all 81 originals byte-identical and nothing removed.
+The disc runs.
+
+That the obvious gesture is the working one took a fix: Blender copies custom
+properties with the object, so the copy arrives claiming the same
+`crashbash_placement` as its original. Read literally that is two objects for
+one record, and the second overwrote the first — duplicating and dragging moved
+nothing, and lost the original's move with it. Now a record is held by one
+object and every other claimant is a new record; the holder is the claimant
+still standing where the record stands it, which is the original whenever the
+copy is the one that got dragged.
+
+An object built from scratch works too, if you give it a `crashbash_places`
+saying which object it draws. How many a level can take is its own padding
+divided by a record, and the import note says so: **53 across the game**, 3 for
+`warp_room1`, 10 for Oxide's chase level, and none at all for an arena, whose
+resident region ends with 6 or 18 bytes of alignment and no room. *Add
+Placement* counts down and refuses the one past the end; so does the export,
+rather than write a level that cannot load.
 
 A record can also be **re-aimed** rather than added, which costs nothing but a
 duplicate: a **spare** is a record whose object another record already places,

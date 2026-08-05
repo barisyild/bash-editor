@@ -223,6 +223,62 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+class CRASHBASH_OT_add_placement(bpy.types.Operator):
+    """Put another copy of the active placement's object in the level"""
+
+    bl_idname = "crashbash.add_placement"
+    bl_label = "Add Placement"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.get(N.PROP_PLACEMENT) is not None
+
+    def execute(self, context):
+        if not _require_library(self, context):
+            return {"CANCELLED"}
+        from crashbash.formats.mdl import read_model
+        from crashbash.formats import placewrite
+
+        collection = _target(context)
+        source = context.active_object
+        try:
+            model_data, _ = _source_bytes(collection)
+            model = read_model(model_data)
+            room = placewrite.spare_capacity(model_data, model)
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"{exc}")
+            return {"CANCELLED"}
+
+        # Count what the collection already spends, so the panel's number and
+        # this operator agree: a record the level cannot take is refused here
+        # rather than at export, where the whole edit would be lost.
+        from . import read_scene
+        _, fresh = read_scene._claims(collection, model, [])
+        if len(fresh) >= room:
+            self.report({"ERROR"}, (
+                f"this level has room for {room} more record(s) and "
+                f"{len(fresh)} object(s) already stand for new ones"))
+            return {"CANCELLED"}
+
+        copy = source.copy()
+        copy.name = f"{source.name}_copy"
+        for parent in source.users_collection:
+            parent.objects.link(copy)
+        # It arrives exactly on top of the one it came from, which is where a
+        # duplicate belongs -- the record's translation is an offset from where
+        # the mesh is authored, so anything else would be a guess at the frame.
+        copy.matrix_basis = source.matrix_basis.copy()
+        bpy.ops.object.select_all(action="DESELECT")
+        copy.select_set(True)
+        context.view_layer.objects.active = copy
+        self.report({"INFO"}, (
+            f"{copy.name} added; move it and export. Room for "
+            f"{room - len(fresh) - 1} more after this one"))
+        return {"FINISHED"}
+
+
 class CRASHBASH_OT_bake_particles(bpy.types.Operator):
     """Play the shot: actors and props on their tracks, the camera, the particles"""
 
@@ -353,6 +409,8 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
             box.label(text=f"placement {obj[N.PROP_PLACEMENT]} places "
                            f"{obj.get(N.PROP_PLACES, 0):04X}", icon="EMPTY_AXIS")
             box.label(text="move it and export; one record changes")
+            box.operator(CRASHBASH_OT_add_placement.bl_idname, icon="DUPLICATE")
+            box.label(text="or duplicate it: the copy becomes a new record")
             if obj.get(N.PROP_SPARE):
                 box.label(text="spare: another record already places this "
                                "object", icon="CHECKMARK")
@@ -389,6 +447,7 @@ CLASSES = (
     CRASHBASH_AddonPreferences,
     CRASHBASH_OT_import,
     CRASHBASH_OT_export,
+    CRASHBASH_OT_add_placement,
     CRASHBASH_OT_bake_particles,
     VIEW3D_PT_crashbash,
 )
