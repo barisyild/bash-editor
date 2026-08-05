@@ -62,6 +62,17 @@ class MeshPayload:
     colours: np.ndarray  # (T, 3, 3) uint8 RGB, per corner
     uvs: np.ndarray  # (T, 3, 2) uint8 texels, or the swatch cell
     textures: np.ndarray  # (T,) int64: slot, negated swatch entry, or -1
+    # (T,) of the colour index's top three bits: bit 15 turns the GPU's
+    # semi-transparency on and bits 13-14 pick the ABR mode (§6.3). `None`
+    # leaves the writer to recover them from the mesh being replaced, by
+    # matching corner positions, which is what a source with nowhere to state
+    # them has to fall back on.
+    blend: np.ndarray | None = None
+    # (V, 3) per source vertex: the per-vertex normals at mesh +0x28 (§4.3), in
+    # GTE 1/4096 fixed point. 300 of the archive's 5989 meshes carry them, and
+    # while no reader for the field has been found in the executable, searched
+    # and not found is not the same as absent -- so they travel.
+    normals: np.ndarray | None = None
     # The source's own vertex array, in model units, in the order its poses are
     # stated in. Only animation needs it: a clip's keyframes are matched onto
     # the rebuilt pool through these.
@@ -235,6 +246,7 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
     uvs = np.zeros((faces, 3, 2), dtype=np.uint8)
     textures = np.full(faces, -1, dtype=np.int64)
     corner_vertices = np.zeros((faces, 3), dtype=np.int64)
+    blend = np.zeros(faces, dtype=np.uint8)
     for row, (a, b, c, face) in enumerate(triangles):
         # Outward order, not strip order. Consecutive triangles in a strip wind
         # opposite ways and bit 0 of the third corner's vertex flag says which
@@ -250,6 +262,8 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
         corners = (0, 2, 1) if flipped else (0, 1, 2)
         positions[row] = points[list(order)]
         corner_vertices[row] = order
+        if face < len(mesh.face_colour_index):
+            blend[row] = int(mesh.face_colour_index[face]) >> 13
         triple = model.face_colours(mesh, face)
         if triple is not None:
             colours[row] = np.asarray(triple, dtype=np.uint8)[list(corners)]
@@ -280,8 +294,17 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
         for key in clip.keyframes():
             poses.append(clip.pool()[clip._slots(key)])
     groups, first = weld_vertices(points, poses)
+    normals = None
+    if mesh.normals and len(mesh.normals) == len(mesh.positions):
+        # Stated per pool entry and taken per welded vertex, through the same
+        # representative the poses use. Two entries that weld together agree
+        # about their rest position; nothing says they agree about a normal, so
+        # this takes the first and says nothing more.
+        normals = (np.asarray(mesh.normals, dtype=np.float64)
+                   / GTE_SCALE_SMALL)[first]
     return MeshPayload(positions=positions, colours=colours, uvs=uvs,
-                       textures=textures, vertices=points[first],
+                       textures=textures, blend=blend, normals=normals,
+                       vertices=points[first],
                        corner_vertices=groups[corner_vertices])
 
 
@@ -680,6 +703,8 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             textures=payload.textures,
             uvs=uvs,
             corner_vertices=payload.corner_vertices,
+            blend=payload.blend,
+            normals=payload.normals,
         )
     # Refuse before anything is written. Each of these is something the source
     # asks for and the file cannot give, and every one of them used to be

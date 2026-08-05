@@ -355,6 +355,29 @@ key values recovers the blend and not the order — so an add-on that decides
 whether a clip changed has to canonicalise, and one that wants the file's own
 ordering back has to keep the clip rather than rebuild it.
 
+## What a rebuild keeps, field by field
+
+Measured over the 5827 meshes the corpus rebuilds, comparing each stored field
+against the shipped one:
+
+| field | present | kept |
+| --- | ---: | ---: |
+| mesh format, `unk13`, `unk14` (§3) | 5827 | 5827 |
+| bounds, to within a unit (§4.1) | 5827 | 5825 |
+| per-vertex normals (§4.3) | 300 | 300 |
+| semi-transparency, colour index bits 13–15 (§6.3) | 1949 | 1948 |
+| attachment block (§8.4) | 776 | 776 |
+
+Two of those were losses until this was measured. The **blend mode** is the
+serious one: 42,969 of the archive's 363,251 triangles carry it, and a rebuild
+that wrote only the table index drew every one of them opaque — no comparison of
+positions or colours notices, and the round trip scored full marks throughout.
+`NewMesh.blend` states it per face now, and `_restore_blend` recovers it by
+corner position for a front end with nowhere to put it, which is every
+interchange format. The **normals** are carried because searched-and-not-found
+is not absent: no EXE site dereferences `mesh+0x28` and the game does no GTE
+lighting, but the array is unmistakably normals and 300 meshes ship one.
+
 ## Editing nothing costs nothing
 
 An import that changed nothing comes back **byte for byte identical**, which is

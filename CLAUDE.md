@@ -335,6 +335,14 @@ They are not style preferences.
   triangles inside out, and the console *culls* those rather than drawing them.
   A comparison over sorted corners cannot see it — that is reflection-blind and
   scored 45,300/45,300 while it was happening.
+- **A triangle's semi-transparency is in the colour index, not the colour.**
+  Bits 13–15 of the `u16` are the GPU's blend: bit 15 turns it on and 13–14
+  pick the ABR mode (§6.3), and 42,969 of the archive's 363,251 triangles carry
+  them. A rebuild that writes only the table index draws every one of those
+  opaque — 1949 of the 5827 meshes the corpus rebuilds lost the mode entirely,
+  and nothing in a static comparison of positions or colours notices.
+  `NewMesh.blend` states it per face; `None` means `_restore_blend` recovers it
+  by corner position, which is what a front end with nowhere to put it needs.
 - **A mesh with no textured face still indexes UVs.** All 1032 fully-untextured
   meshes in the archive carry a UV block, 887 of them exactly one entry per
   triangle, because an untextured face reads one texel of the pack's swatch

@@ -358,6 +358,17 @@ class NewMesh:
     # (T, 3) naming the source vertex behind each corner, when the caller has
     # one. It decides where a strip may chain: see `build_strips`.
     corner_vertices: np.ndarray | None = None
+    # (T,) of the colour index's top three bits per triangle: bit 15 turns the
+    # GPU's semi-transparency on and bits 13-14 are the ABR mode (§6.3). 42,969
+    # of the archive's 363,251 triangles carry them, and a rebuild that drops
+    # them draws every one of those opaque. `None` means "recover them from the
+    # mesh being replaced", which is what a front end with nowhere to put them
+    # -- glTF has no such concept -- has to fall back on.
+    blend: np.ndarray | None = None
+    # (V, 3) per *source* vertex, indexed through `corner_vertices`: the
+    # per-vertex normals at mesh +0x28 (§4.3), in GTE 1/4096 fixed point. 300
+    # of the archive's 5989 meshes carry them.
+    normals: np.ndarray | None = None
 
 
 def _attachment_bytes(data: bytes, mesh: Mesh) -> bytes:
@@ -430,6 +441,38 @@ def _restore_swatches(target: Mesh, mesh: "NewMesh") -> "NewMesh":
         if was is not None and was & TEXTURE_FLAG_SWATCH:
             textures[face] = -(was & 0xFFFF)   # negative marks "verbatim entry"
     return replace(mesh, textures=textures)
+
+
+def _restore_blend(target: Mesh, mesh: "NewMesh") -> "NewMesh":
+    """Give each incoming face the semi-transparency the triangle it replaces had.
+
+    Bits 13-15 of the colour index are the GPU's blend mode (§6.3) and no
+    interchange format has anywhere to put them, so a front end that cannot
+    state them per face gets them back by matching corner positions -- exact
+    wherever the triangle still exists, opaque for anything new or reshaped.
+
+    Without this every rebuilt translucent surface came back solid: 1949 of the
+    5827 meshes the corpus rebuilds carry a blend mode, and all 1949 lost it.
+    """
+    if mesh.blend is not None or not len(target.face_colour_index):
+        return mesh
+    if not target.positions:
+        return mesh
+    scale = 1.0 / 0.00390625  # 1 / GTE_SCALE_SMALL, back to raw int16
+    original = np.round(np.asarray(target.positions, dtype=np.float64) * scale)
+    by_key: dict[tuple, int] = {}
+    for face, triangle in enumerate(target.triangles()):
+        if face >= len(target.face_colour_index) or max(triangle) >= len(original):
+            continue
+        key = tuple(sorted(tuple(int(v) for v in original[i]) for i in triangle))
+        by_key.setdefault(key, int(target.face_colour_index[face]) >> 13)
+
+    blend = np.zeros(mesh.positions.shape[0], dtype=np.uint8)
+    for face in range(blend.shape[0]):
+        key = tuple(sorted(tuple(int(v) for v in corner)
+                           for corner in mesh.positions[face]))
+        blend[face] = by_key.get(key, 0)
+    return replace(mesh, blend=blend)
 
 
 def _swatch_entry(data: bytes, mesh: Mesh) -> int:
@@ -619,14 +662,33 @@ def build_blocks(mesh: NewMesh) -> dict:
         texture = _pack_runs([mesh.swatch] * len(plan))
         uvs = b""
 
+    # The normal array follows the positions in the same block, `V` more
+    # 8-byte records (§4.3), and `mesh+0x28` points at the first of them. The
+    # pool is laid out corner by corner, so each entry takes the normal of the
+    # source vertex that corner came from -- the same map the poses use.
+    normals = b""
+    if mesh.normals is not None and mesh.corner_vertices is not None:
+        source = np.asarray(mesh.corner_vertices)[pick[:, 0], pick[:, 1]]
+        records = np.zeros((points.shape[0], 4), dtype="<i2")
+        records[:, :3] = np.clip(
+            np.round(np.asarray(mesh.normals, dtype=np.float64)[source]),
+            -32768, 32767).astype("<i2")
+        normals = records.tobytes()
+
     return {
         "strips": bytes(strips),
-        "geometry": bounds + vertices.tobytes(),
+        "geometry": bounds + vertices.tobytes() + normals,
+        # Where the normal array starts inside the geometry block, or 0.
+        "normals": len(bounds) + vertices.nbytes if normals else 0,
         "texture": texture,
         "colours": bytes(colours),
         "uvs": uvs,
         "faces": len(plan),
         "textured": textured,
+        # The blend mode per triangle, in the order the strips lay them down,
+        # so a caller composing the colour index can OR it into the top bits.
+        "blend": ([int(mesh.blend[face]) for face, _ in plan]
+                  if mesh.blend is not None else [0] * len(plan)),
         # Which corner of which incoming triangle each pool entry was written
         # from, in pool order. A caller that knows where its corners came from
         # can follow this back to its own vertices exactly, which is the only
@@ -776,6 +838,9 @@ def transplant_mesh(dest_data: bytes, dest_index: int, source: Transplant) -> by
             f"mesh {dest_index}'s header is at {target.header_offset:#x}, not the "
             f"{header:#x} the layout implies"
         )
+    # No normal array: a transplant copies the source mesh's geometry block
+    # verbatim, and where its normals sit inside that block is the source
+    # model's business, not this one's.
     _finish_header(out, header, faces, mesh.format, mesh.unk13, mesh.unk14,
                    geometry_new, strips_new, uv_index_new, texture_new,
                    colour_index_new, end_new, attachment_new)
@@ -951,7 +1016,8 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
         raise ValueError(f"mesh {dest_index}'s header is not where the layout implies")
     _finish_header(out, header, faces, target.format, target.unk13, target.unk14,
                    geometry_new, strips_new, uv_index_new, texture_new,
-                   colour_index_new, end_new)
+                   colour_index_new, end_new, 0,
+                   geometry_new + blocks["normals"] if blocks["normals"] else 0)
     return bytes(out)
 
 
@@ -1055,6 +1121,7 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         if not mesh.swatch:
             mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
         mesh = _restore_swatches(target, mesh)
+        mesh = _restore_blend(target, mesh)
         blocks = build_blocks(mesh)
         if plans is not None:
             plans[index] = blocks["order"]
@@ -1156,9 +1223,15 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
             raise ValueError(
                 f"{max(indices) + 3} colours would exceed the {MAX_COLOURS} a "
                 "13-bit colour index can address")
-        per_mesh[index] = (struct.pack(f"<{len(indices)}H",
-                                       *[i & 0xFFFF for i in indices]),
-                           per_mesh[index][1])
+        # The top three bits ride along: bit 15 turns the GPU's
+        # semi-transparency on and bits 13-14 pick the ABR mode (§6.3), and
+        # they are per triangle, not per colour.
+        blend = prepared[index][1]["blend"]
+        per_mesh[index] = (
+            struct.pack(f"<{len(indices)}H",
+                        *[(value | (blend[f] << 13)) & 0xFFFF
+                          for f, value in enumerate(indices)]),
+            per_mesh[index][1])
 
     if notes is not None and not pin_tables:
         grew = len(colours) // COLOUR_ENTRY_SIZE
@@ -1236,7 +1309,8 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         # `model.meshes`, so geometry written into them is never asked for.
         _finish_header(out, target.header_offset, faces, target.format,
                        target.unk13, target.unk14, geo, strips, uvi, tex, ci,
-                       end, attach)
+                       end, attach,
+                       geo + blocks["normals"] if blocks["normals"] else 0)
     return bytes(out)
 
 
@@ -1450,9 +1524,10 @@ def _rewrite_region(dest_data, dest, layout, prepared, per_mesh, colours, uvs):
         header = MESH_HEADER_START + MESH_HEADER_SIZE * index
         if index in placed:
             faces, geo, strips, uvi, tex, ci, end, attach = placed[index]
-            target = prepared[index][0]
+            target, blocks = prepared[index]
             _finish_header(out, header, faces, target.format, target.unk13,
-                           target.unk14, geo, strips, uvi, tex, ci, end, attach)
+                           target.unk14, geo, strips, uvi, tex, ci, end, attach,
+                           geo + blocks["normals"] if blocks["normals"] else 0)
             continue
         shift = shifted[index]
         for field, was in ((FIELD_BOUNDS, mesh.ptr_bounds),
@@ -1499,7 +1574,7 @@ def _carry_vector_pool(out: bytearray, source: bytes) -> int:
 
 def _finish_header(out, header, faces, fmt, unk13, unk14, geometry, strips,
                    uv_index, texture, colour_index, end,
-                   attachment: int = 0) -> None:
+                   attachment: int = 0, normals: int = 0) -> None:
     struct.pack_into("<h", out, header + FIELD_FACE_COUNT, faces)
     struct.pack_into("<h", out, header + FIELD_FORMAT, fmt)
     struct.pack_into("<2h", out, header + FIELD_UNK13, unk13, unk14)
@@ -1513,7 +1588,14 @@ def _finish_header(out, header, faces, fmt, unk13, unk14, geometry, strips,
     ):
         at = header + field_offset
         struct.pack_into("<i", out, at, destination - at)
-    struct.pack_into("<i", out, header + FIELD_NORMALS, 0)
+    # +0x28 is the per-vertex normal array, `V` records of 8 bytes laid down
+    # straight after the positions (§4.3). 300 of the archive's 5989 meshes
+    # carry one; a rebuild that leaves the pointer at zero simply declares
+    # none, which is what 5689 shipped meshes do, so it is consistent -- but no
+    # EXE site dereferences the field and searched-and-not-found is not absent,
+    # so the array is carried when the caller states it.
+    at = header + FIELD_NORMALS
+    struct.pack_into("<i", out, at, normals - at if normals else 0)
     # The attachment block at +0x2C is read live by gameplay through the 0x2000
     # id namespace, and for a character it is the collision volume -- the crate
     # game's crates stopped colliding the first time this was zeroed. When the
