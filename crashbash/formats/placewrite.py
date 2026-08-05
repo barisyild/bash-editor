@@ -17,14 +17,36 @@ Every field of a record answers to the file, each confirmed by its own probe:
   the room, between the POLAR PANIC and POGO PAINTER doors, while the first
   stayed at its own door
 
-What cannot be done is make the list longer. Its array is boxed in -- the
-sub-object's `+0x0C`, `+0x10`, `+0x14` and `+0x18` all point at arrays that
-begin where it ends -- the resident region holds no run of zeros big enough to
-relocate 81 records into (the largest is 1325 bytes against 12,960), and nothing
-past the shipped resident size is there at run time: the same array copied
-beyond the old end of file with `0x50` grown to cover it drew nothing at all. So
-a room's spare capacity is whatever records it can afford to lose, and five of
-`warp_room1`'s objects are placed twice.
+Making the list *longer* was called impossible here for a long time, and the
+reasoning was sound but aimed at the wrong move. Relocating the array is what
+has no room: the resident region's largest run of zeros is 1325 bytes against
+the 12,960 an 81-record array needs, and nothing past the shipped resident size
+is there at run time -- the same array copied beyond the old end of file with
+`0x50` grown to cover it drew nothing at all.
+
+`append_placement` does not relocate it. It **slides the four blocks that follow
+it** one record further on, into the zeros the resident region already ends
+with. In `warp_room1` those blocks run from the array's end at `0x268E0` to
+`0x29000`, which is `T(0x44)` and `i32@0x50` both, and the last 160 bytes of
+that span are zero -- because the `+0x14` block's own count is 0, so it uses 8
+of its 544 bytes and the other 536 are padding. Slide the span onto them and the
+array has one more record's worth of room, the file is exactly the size it was,
+and the resident region ends where it did.
+
+Both invariants the corpus states survive the slide, which is why it is done
+this way and not by moving the two small blocks out to the padding:
+
+* `+0x0C`'s target is the **end of the record array**, 73/73 -- and it still is,
+  because the array grew by one record and the block moved by one record.
+* `+0x14`'s target is the **last block in the file**, running to `T(0x44)` in
+  73/73 -- and it still is.
+
+Every self-relative pointer *inside* the span keeps its value, source and target
+having moved together; only the sub-object's own four reach further. What is not
+established is whether anything outside the span points into it. Nothing in the
+format documents such a pointer and the sub-object is reached only through
+`model+0x18`, but a scan of the file cannot tell a pointer from a vertex that
+resolves there by chance, so this is a hardware question, not a static one.
 """
 
 from __future__ import annotations
@@ -32,16 +54,30 @@ from __future__ import annotations
 import struct
 
 from .mdl import (
+    COUNT_SUBOBJECTS,
     GTE_ONE,
     OBJECT_NAMESPACE,
     PLACEMENT_ID,
     PLACEMENT_MATRIX,
     PLACEMENT_STRIDE,
     PLACEMENT_TRANSLATION,
+    PTR_SUBOBJECTS,
+    SUBOBJECT_COUNT,
+    SUBOBJECT_RECORDS,
     Instance,
     Model,
 )
 from ..binreader import GTE_SCALE_SMALL
+
+# The sub-object's own pointers at the blocks laid after the record array. All
+# four are self-relative and all four have to reach one record further once the
+# span they name has slid; `+0x14` and `+0x18` hold the same value in 73/73 and
+# are stretched separately rather than assumed equal.
+TRAILING_POINTERS = (0x0C, 0x10, 0x14, 0x18)
+# `i32@0x50`, a plain length from the model's base rather than self-relative.
+# Nothing past it is there at run time, so it is the ceiling the slide works
+# under and never something to grow.
+RESIDENT_SIZE = 0x50
 
 
 def object_id(slot: int) -> int:
@@ -84,6 +120,87 @@ def write_placement(data: bytes, instance: Instance, *,
         struct.pack_into("<9h", out, at + PLACEMENT_MATRIX, *packed)
 
     return bytes(out)
+
+
+def _subobject(data: bytes, model: Model) -> int:
+    """Where the one sub-object's header starts, resolved as the game does."""
+    if not model.instances:
+        raise ValueError("this model has no placement list")
+    i32 = lambda at: struct.unpack_from("<i", data, at)[0]  # noqa: E731
+    table = PTR_SUBOBJECTS + i32(PTR_SUBOBJECTS)
+    if i32(COUNT_SUBOBJECTS) != 1:
+        raise ValueError(
+            f"expected one sub-object, this model states {i32(COUNT_SUBOBJECTS)}")
+    entry = table + 4
+    return entry + i32(entry)
+
+
+def append_placement(data: bytes, model: Model, source: Instance, *,
+                     identifier: int | None = None,
+                     translation: tuple[float, float, float] | None = None,
+                     rotation: tuple[float, ...] | None = None) -> bytes:
+    """One more record on the end of the list, copied from `source`.
+
+    The four blocks that follow the array slide one record further on, into the
+    padding the resident region ends with, and the sub-object's four pointers
+    are stretched to match. The file keeps its length and its resident size, and
+    every byte before the array's old end is untouched.
+
+    It refuses rather than build a level that cannot load: the padding has to be
+    there, it has to be zero, and the blocks have to be laid out the way the
+    corpus says they are.
+    """
+    out = bytearray(data)
+    i32 = lambda at: struct.unpack_from("<i", out, at)[0]  # noqa: E731
+
+    sub = _subobject(out, model)
+    count = i32(sub + SUBOBJECT_COUNT)
+    records = sub + SUBOBJECT_RECORDS + i32(sub + SUBOBJECT_RECORDS)
+    array_end = records + PLACEMENT_STRIDE * count
+    resident = i32(RESIDENT_SIZE)
+
+    # The blocks that follow, in the order the header names them. `+0x0C` has to
+    # be the first of them: it is the array's own end, and the slide is only
+    # correct if nothing sits between the array and the span being moved.
+    trailing = [sub + off for off in TRAILING_POINTERS]
+    targets = [at + i32(at) for at in trailing]
+    if min(targets) != array_end:
+        raise ValueError(
+            f"the first block after the array starts at {min(targets):#x}, not at "
+            f"the array's end {array_end:#x}; this level is not laid out the way "
+            f"the slide assumes")
+    if resident > len(out):
+        raise ValueError(
+            f"the resident size {resident:#x} runs past the file's {len(out):#x}")
+    if max(targets) >= resident:
+        raise ValueError("a trailing block starts outside the resident region")
+
+    padding = out[resident - PLACEMENT_STRIDE:resident]
+    if any(padding):
+        raise ValueError(
+            f"the {PLACEMENT_STRIDE} bytes before the resident end {resident:#x} "
+            f"are not padding, so there is nowhere for the blocks to slide; this "
+            f"level cannot take another record")
+
+    # Slide, then stretch the four pointers over the same distance. Pointers
+    # inside the span keep their values: source and target moved together.
+    out[array_end + PLACEMENT_STRIDE:resident] = data[array_end:resident - PLACEMENT_STRIDE]
+    for at in trailing:
+        struct.pack_into("<i", out, at, i32(at) + PLACEMENT_STRIDE)
+
+    # The new record is a copy of one that already works, so every field this
+    # project does not understand arrives already set to something the game ran.
+    out[array_end:array_end + PLACEMENT_STRIDE] = data[
+        source.record:source.record + PLACEMENT_STRIDE]
+    struct.pack_into("<i", out, sub + SUBOBJECT_COUNT, count + 1)
+
+    if len(out) != len(data):
+        raise AssertionError("the slide changed the file's length")
+    fresh = Instance(index=count, record=array_end, id=source.id,
+                     flags=source.flags, rotation=source.rotation,
+                     translation=source.translation)
+    return write_placement(bytes(out), fresh, identifier=identifier,
+                           translation=translation, rotation=rotation)
 
 
 def spare_records(model: Model) -> list[int]:

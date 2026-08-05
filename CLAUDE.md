@@ -135,18 +135,32 @@ They are not style preferences.
   Both fields answer to the file: taking `warp_room1`'s count from 81 to 80 —
   one byte — draws the room with its last object gone, and repointing the array
   at a copy inside the resident region draws exactly the records that copy
-  holds. Rewriting a record in place is the whole of what a level edit can do
-  today: translation, rotation and the object id are all just bytes, and
-  rewriting one **adds an object to the set** — spending the second of
-  `warp_room1`'s two `0x5047` records on the green panel put a second panel in
-  the room, between the POLAR PANIC and POGO PAINTER doors, with the first still
-  at its own. Eleven bytes, nothing moved, the file the same size.
-  Growing the list is what is blocked, and not by the list — the array is boxed
-  in by four more arrays that start where it ends, the resident region holds no
-  run of zeros big enough to relocate 81 records into (largest 1325 bytes
-  against 12,960 needed), and past the old EOF nothing is loaded. Five objects
-  are placed twice in that room, so a redundant record is the room's only spare
-  capacity.
+  holds. Rewriting a record in place **adds an object to the set** — spending
+  the second of `warp_room1`'s two `0x5047` records on the green panel put a
+  second panel in the room, between the POLAR PANIC and POGO PAINTER doors, with
+  the first still at its own. Eleven bytes, nothing moved, the file the same
+  size. Five objects are placed more than once in that room, ten records in all,
+  and `placewrite.spare_records` is what names them.
+- **Growing the list is not blocked; *relocating* it is.** That distinction was
+  missed for a long time and the two were written down as one. Relocating has
+  nowhere to go — the resident region's largest run of zeros is 1325 bytes
+  against the 12,960 an 81-record array needs, and past the shipped resident
+  size nothing is loaded, which is why the array copied beyond the old EOF with
+  `0x50` grown drew nothing. But the array does not have to move. The four
+  blocks that follow it can **slide one record further on**, into the padding
+  the resident region already ends with: `warp_room1`'s `+0x14` block states a
+  count of 0, so it uses 8 of its 544 bytes and the last 536 are zero.
+  `append_placement` slides that span, stretches the sub-object's four pointers
+  by 160, and writes record 82 where the span began. The file keeps its length,
+  `i32@0x50` and `T(0x44)` keep their values, and both invariants the corpus
+  states survive: `+0x0C`'s target is still the array's end (73/73) because
+  array and block each grew by one record, and `+0x14`'s block still runs to
+  `T(0x44)` (73/73). Read back, the room holds 82 placements with all 81
+  originals byte-identical and nothing removed.
+  **This has not been on a console.** What a static check cannot settle is
+  whether anything outside the span points into it: a scan finds 714 four-byte
+  words that resolve there, and it cannot tell a pointer from a vertex that
+  lands there by chance. `out/crashbash-82nd-record.bin` is the experiment.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an
