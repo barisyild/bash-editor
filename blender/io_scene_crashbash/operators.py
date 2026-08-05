@@ -347,7 +347,27 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                     min(texel[i] * have[i] * 2.0, 1.0) for i in range(3)
                 ) + (have[3],)
             baked += 1
-        notes.append(f"baked the texture into the colour on {baked} faces")
+        # Say why it was flattened rather than leaving it to be noticed. Two
+        # separate walls decide it and they are worth naming apart: a pinned
+        # model cannot take a new UV at all, and §10.3 says which slots could be
+        # overwritten even where it can.
+        textured = sum(1 for poly in borrowed.polygons
+                       if borrowed.materials[poly.material_index] is not None
+                       and borrowed.materials[poly.material_index].get(N.PROP_SLOT)
+                       is not None)
+        free = MI.sole_sampler_slots(model, mesh)
+        # A carrier announces itself by a non-zero i32@0x38, 7 of the 400
+        # shipped models. There the UV table cannot grow at all, so a textured
+        # face has nowhere to put its texels and the question of slots does not
+        # arise; everywhere else it is §10.3 that decides.
+        carrier = int.from_bytes(model_data[0x38:0x3C], "little") != 0
+        why = ("this model's tables are pinned, so no face can name a UV the "
+               "table does not already hold"
+               if carrier else
+               f"the mesh being replaced is the sole reader of {len(free)} "
+               f"slot(s), which is all §10.3 allows taking")
+        notes.append(f"baked the texture into the colour on {baked} faces "
+                     f"({textured} of them named a slot of their own; {why})")
 
         # 3. The cell every face now reads. In a pinned model the UV table
         #    cannot grow, so it has to be one the table already holds three in a
@@ -385,7 +405,8 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
             for loop in poly.loop_indices:
                 uv.data[loop].uv = (u, v)
         notes.append(f"put all {len(borrowed.polygons)} faces on {material.name} "
-                     f"cell {cell}" + (" (the pinned table allows it)" if pinned else ""))
+                     f"cell {cell}"
+                     + (" (one the pinned table holds)" if pinned and carrier else ""))
 
         # The colour has to have the cell's own value divided back out, or the
         # baked look comes back multiplied by it a second time.

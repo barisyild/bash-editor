@@ -126,6 +126,17 @@ the pool mesh owns is the **whole budget** (§8.3) and this writer stripes loose
 than the authoring tool, so the figure is a rough reading, not a promise; the
 export measures for real and refuses rather than break the pool.
 
+**A borrowed model arrives flat, and the report says why.** Its own pictures do
+not come with it, and two different things stop them. In the seven §8.6 carriers
+— which is all five warp rooms and both demo hubs — the UV table cannot grow, so
+a textured face has nowhere to put its texels at all: 2 of the penguin's 29
+would have found their triple in `warp_room1`'s table. Everywhere else it is
+§10.3 that decides, and the report counts what it allows: `warp_room1`'s
+decorative arm is the sole reader of **no** slot, because the four it samples
+are read by 6, 13, 6 and 7 other meshes, while `polar_polar`'s big arena mesh is
+the sole reader of **14**. Nothing moves those pictures for you yet; repainting
+a slot the mesh already samples is the texture edit that does work.
+
 Then place it and export. Done from the buttons alone, `warp_room1` with the
 penguin came out **byte for byte identical** to the hand-made version of the
 same edit — the one that runs.

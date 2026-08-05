@@ -605,6 +605,41 @@ def _nearest_in_palette(rgb: np.ndarray, palette: np.ndarray) -> np.ndarray:
     return nearest.reshape(rgb.shape[:2]).astype(np.uint8)
 
 
+def sole_sampler_slots(model: Model, mesh: Mesh) -> set[int]:
+    """The texture slots this mesh reads and no other mesh of the model does.
+
+    §10.3: a slot may only be taken when the mesh being replaced is its sole
+    sampler. "No mesh samples it" proves nothing and is the trap that corrupted
+    the character-select screen -- the menu draws its portraits from code, so 69
+    of `warp_room1`'s 170 slots have no mesh behind them and not one of them is
+    free. Only a slot with exactly one reader, and that reader the mesh going
+    away, can be overwritten.
+
+    A level rarely offers any. `warp_room1`'s decorative arm 0x501C reads slots
+    4, 5, 101 and 102, and those are read by 6, 13, 6 and 7 other meshes -- so
+    replacing it can bring no pictures with it at all, whatever else is true.
+    """
+    def slots(target: Mesh) -> set[int]:
+        found = set()
+        for face in range(len(target.face_colour_index)):
+            entry = (target.face_texture[face]
+                     if face < len(target.face_texture) else 0)
+            if not entry & TEXTURE_FLAG_SWATCH:
+                found.add(entry & TEXTURE_INDEX_MASK)
+        return found
+
+    mine = slots(mesh)
+    if not mine:
+        return set()
+    everything = list(model.meshes) + [
+        o.mesh for o in model.objects if o.mesh is not None]
+    for other in everything:
+        if other is mesh or not mine:
+            continue
+        mine -= slots(other)
+    return mine
+
+
 def write_slot(pack_data: bytes, pack: TexturePack, slot: int,
                image: np.ndarray, exclusive: set[int], report: Report) -> bytes:
     """Put a repainted image back into its slot, honouring palette sharing."""
