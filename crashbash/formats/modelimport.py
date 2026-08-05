@@ -68,6 +68,11 @@ class MeshPayload:
     # matching corner positions, which is what a source with nowhere to state
     # them has to fall back on.
     blend: np.ndarray | None = None
+    # (T,) of the owning strip's untextured flag (§5.1), which is a separate
+    # fact from what the face samples: 33,097 of the archive's faces carry the
+    # swatch bit while sitting in a strip flagged textured. `None` derives it
+    # from the entry, which is what a source with no strips of its own gets.
+    untextured: np.ndarray | None = None
     # (V, 3) per source vertex: the per-vertex normals at mesh +0x28 (§4.3), in
     # GTE 1/4096 fixed point. 300 of the archive's 5989 meshes carry them, and
     # while no reader for the field has been found in the executable, searched
@@ -247,6 +252,7 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
     textures = np.full(faces, -1, dtype=np.int64)
     corner_vertices = np.zeros((faces, 3), dtype=np.int64)
     blend = np.zeros(faces, dtype=np.uint8)
+    untextured = np.zeros(faces, dtype=bool)
     for row, (a, b, c, face) in enumerate(triangles):
         # Outward order, not strip order. Consecutive triangles in a strip wind
         # opposite ways and bit 0 of the third corner's vertex flag says which
@@ -271,22 +277,32 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
         corner_uvs = model.face_uvs(mesh, face)
         if corner_uvs is not None:
             uvs[row] = np.asarray(corner_uvs, dtype=np.uint8)[list(corners)]
-        if model.face_is_untextured(mesh, face):
-            # Untextured is not untexted: the face reads one texel of the pack's
-            # swatch image through the palette this entry names (§6.2). Carried
-            # verbatim, negated, which is how `NewMesh` states it.
-            #
-            # Masked to what the entry actually says. The reader expands a
-            # run-length list and leaves the run field in bits 9..14, so the
-            # same swatch palette arrives as 0x8012, 0x8212 or 0xB612 depending
-            # on how many triangles shared its run. `_pack_runs` masks them off
-            # again, so the file is the same either way -- but the payload is
-            # what "this mesh came back unchanged" is decided on, and three
-            # spellings of one entry never compare equal.
-            textures[row] = (-(entry & (TEXTURE_FLAG_SWATCH | TEXTURE_INDEX_MASK))
-                             if entry & TEXTURE_FLAG_SWATCH else -1)
+        # **Bit 15 decides, not the strip flag.** `0x80017FB8` branches on it:
+        # set, and the draw takes the pack's *last* texture -- the swatch --
+        # with the CLUT named by the low nine bits; clear, and the low nine bits
+        # are a texture slot. The strip's own untextured flag (§5.1) is a
+        # different fact and is carried separately, because the two disagree:
+        # **33,097 faces** across the archive carry the swatch bit inside a
+        # strip flagged textured, and not one face has the strip flag without
+        # the bit. Reading the strip flag instead aimed those at a texture slot
+        # -- for `cutscene/level_shot12` that is slot 46 of a 46-texture pack,
+        # so 80 of Coco's 215 textured faces had no picture at all and her face
+        # went missing.
+        #
+        # Masked to what the entry actually says. The reader expands a
+        # run-length list and leaves the run field in bits 9..14, so the same
+        # swatch palette arrives as 0x8012, 0x8212 or 0xB612 depending on how
+        # many triangles shared its run. `_pack_runs` masks them off again, so
+        # the file is the same either way -- but the payload is what "this mesh
+        # came back unchanged" is decided on, and three spellings of one entry
+        # never compare equal.
+        if entry & TEXTURE_FLAG_SWATCH:
+            textures[row] = -(entry & (TEXTURE_FLAG_SWATCH | TEXTURE_INDEX_MASK))
+        elif model.face_is_untextured(mesh, face):
+            textures[row] = -1
         else:
             textures[row] = entry & TEXTURE_INDEX_MASK
+        untextured[row] = model.face_is_untextured(mesh, face)
     poses = []
     for clip in clips or []:
         if clip.mesh_index != index:
@@ -304,7 +320,7 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
                    / GTE_SCALE_SMALL)[first]
     return MeshPayload(positions=positions, colours=colours, uvs=uvs,
                        textures=textures, blend=blend, normals=normals,
-                       vertices=points[first],
+                       untextured=untextured, vertices=points[first],
                        corner_vertices=groups[corner_vertices])
 
 
@@ -774,6 +790,7 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             corner_vertices=payload.corner_vertices,
             blend=payload.blend,
             normals=payload.normals,
+            untextured=payload.untextured,
         )
     # Refuse before anything is written. Each of these is something the source
     # asks for and the file cannot give, and every one of them used to be

@@ -355,6 +355,33 @@ key values recovers the blend and not the order — so an add-on that decides
 whether a clip changed has to canonicalise, and one that wants the file's own
 ordering back has to keep the clip rather than rebuild it.
 
+## Bit 15, not the strip flag
+
+What a face samples is decided by bit 15 of its texture entry, and by nothing
+else. `0x80017FB8` branches on it: set, and the draw takes the pack's **last**
+texture — the swatch — with the CLUT named by the low nine bits; clear, and
+those bits are a texture slot. The strip's own untextured flag (§5.1) says which
+primitive the triangle is drawn as, which is a different question.
+
+They disagree constantly. Over the archive: **166,510 faces** have both the
+strip flag and bit 15, **33,097 faces** have bit 15 inside a strip flagged
+textured, and **not one face** has the strip flag without the bit. So the strip
+flag never adds anything, and using it to decide what a face samples mislabels
+one face in ten.
+
+What that looked like: `cutscene/level_shot12` names slot 46 on 80 of Coco's
+215 textured faces and 19 of Crash's — and its pack holds 46 textures, 0 to 45.
+Those faces had no picture at all, which is why Coco had no eyes and Aku Aku
+was a blank slab of wood. A rebuild was worse than the preview: it wrote them
+back as plain slot 46, losing the bit, so on the console they would sample
+whatever shared that page.
+
+Both facts travel now. `MeshPayload.untextured` carries the strip flag beside
+the entry, and `build_blocks` groups strips by it rather than by whether a face
+names a slot. Measured on that model: every face comes back with the same bit 15
+*and* the same strip flag it shipped with, 83 and 136 of them in the two meshes
+that had disagreed.
+
 ## What a rebuild keeps, field by field
 
 Measured over the 5827 meshes the corpus rebuilds, comparing each stored field

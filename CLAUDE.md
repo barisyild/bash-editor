@@ -418,6 +418,18 @@ They are not style preferences.
   cylinder read live by gameplay. Zeroing it let the character walk through the
   crates. Carry the replaced mesh's own block through a transplant. A
   character's *second* mesh is its spin body, with a volume of its own.
+- **Bit 15 of a texture entry decides what a face samples, not the strip's
+  untextured flag.** `0x80017FB8` branches on it: set, and the draw takes the
+  pack's *last* texture — the swatch — with the CLUT named by the low nine
+  bits; clear, and those bits are a slot. The strip flag (§5.1) is a separate
+  fact and the two disagree constantly: **33,097 faces** carry the swatch bit
+  inside a strip flagged textured, while not one face has the strip flag
+  without the bit. Reading the strip flag instead aims those at a texture slot
+  — in `cutscene/level_shot12` that is slot 46 of a 46-texture pack, so 80 of
+  Coco's 215 textured faces had no picture at all and Aku Aku's face went
+  missing — and a rebuild writes them back as plain slots, losing the bit. Both
+  facts have to travel: `NewMesh.untextured` carries the strip flag beside the
+  entry, or a strip comes back the wrong primitive.
 - **A zero texture-run entry means slot 0, not "no texture"** (§6.2). Of the 897
   meshes whose every strip flag says untextured, none writes a zero list; they
   name a swatch palette instead, and 1776 of the archive's 5989 meshes carry one.

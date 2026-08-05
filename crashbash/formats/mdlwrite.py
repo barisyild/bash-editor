@@ -369,6 +369,13 @@ class NewMesh:
     # per-vertex normals at mesh +0x28 (§4.3), in GTE 1/4096 fixed point. 300
     # of the archive's 5989 meshes carry them.
     normals: np.ndarray | None = None
+    # (T,) the owning strip's untextured flag (§5.1). Separate from `textures`
+    # because the two are separate facts: bit 15 of a texture entry says the
+    # face reads the swatch (§6.2, `0x80017FB8`), and the strip flag says which
+    # primitive the face is drawn as -- and 33,097 of the archive's faces carry
+    # the swatch bit inside a strip flagged textured. `None` derives it from
+    # the entry, which is right for a mesh that has no strips of its own yet.
+    untextured: np.ndarray | None = None
 
 
 def _attachment_bytes(data: bytes, mesh: Mesh) -> bytes:
@@ -559,11 +566,20 @@ def build_blocks(mesh: NewMesh) -> dict:
     # list advances per triangle and runs cross strip boundaries freely (§6.2),
     # so one strip may sample several textures. Grouping by slot fragments the
     # strips for nothing.
-    keys = (np.asarray(mesh.textures, dtype=np.int64) >= 0) if textured else None
-    runs = build_strips(mesh.positions, keys, mesh.corner_vertices)
+    # A strip is uniform in its untextured flag and in nothing else -- the run
+    # list advances per triangle and runs cross strip boundaries freely (§6.2),
+    # so one strip may sample several textures. Grouping by slot would fragment
+    # the strips for nothing.
+    if mesh.untextured is not None:
+        plain_face = np.asarray(mesh.untextured, dtype=bool)
+    elif textured:
+        plain_face = np.asarray(mesh.textures, dtype=np.int64) < 0
+    else:
+        plain_face = np.ones(faces, dtype=bool)
+    runs = build_strips(mesh.positions, plain_face, mesh.corner_vertices)
     strips = bytearray()
     for run in runs:
-        plain = (not textured) or int(mesh.textures[run[0][0]]) < 0
+        plain = bool(plain_face[run[0][0]])
         # Bit 3 states the winding of the strip's first triangle and must agree
         # with the vertex flags below -- 42,267 of the game's 42,267 strips do.
         # A seed is emitted in the incoming order, which is the outward one, so
