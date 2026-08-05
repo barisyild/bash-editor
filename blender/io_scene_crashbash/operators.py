@@ -28,11 +28,15 @@ def _preferences(context) -> str:
 
 
 def _require_library(operator, context) -> bool:
-    if library.ensure(_preferences(context)) is not None:
+    root, why = library.locate(_preferences(context))
+    if root is not None:
         return True
+    # With the reason. A library that is present and one module short fails the
+    # same way as one that is absent, and the two want different fixes.
     operator.report({"ERROR"}, (
         "the shared crashbash library was not found -- set its path in the "
-        "add-on preferences, or install the packaged add-on which bundles it"))
+        "add-on preferences, or install the packaged add-on which bundles it"
+        + (f". {why}" if why else "")))
     return False
 
 
@@ -212,7 +216,48 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
             f"{', '.join(written)}: {len(report.meshes_rebuilt)} meshes rebuilt, "
             f"{len(report.meshes_unchanged)} untouched, "
             f"{len(report.clips_rebuilt)} clips rebuilt, "
+            f"{len(report.placements_written)} placements moved, "
             f"{len(report.textures_written)} textures written"))
+        return {"FINISHED"}
+
+
+class CRASHBASH_OT_bake_particles(bpy.types.Operator):
+    """Simulate every emitter and keyframe its particles so the spray is visible"""
+
+    bl_idname = "crashbash.bake_particles"
+    bl_label = "Bake Particle Preview"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        collection = _target(context)
+        return collection is not None and bool(collection.get(N.PROP_SCENE))
+
+    def execute(self, context):
+        if not _require_library(self, context):
+            return {"CANCELLED"}
+        from crashbash.formats.anim import read_animations
+        from crashbash.formats.mdl import read_model
+
+        from . import build_scene
+
+        collection = _target(context)
+        try:
+            model_data, _ = _source_bytes(collection)
+            model = read_model(model_data)
+            clips = read_animations(model_data, model)
+            stem = collection.get(N.PROP_ENTRY, "model").rsplit("/", 1)[-1]
+            made, frames = build_scene.bake_particles(
+                collection, model_data, model, clips, stem.rsplit(".", 1)[0])
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"{type(exc).__name__}: {exc}")
+            return {"CANCELLED"}
+        if not made:
+            self.report({"INFO"}, "this shot has no particle emitters")
+            return {"CANCELLED"}
+        self.report({"INFO"}, (
+            f"{made} particles keyframed over {frames} ticks. It is a preview: "
+            f"the export ignores it, and editing an emitter makes it stale"))
         return {"FINISHED"}
 
 
@@ -276,10 +321,26 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
             if obj.get(N.PROP_VOLUMES):
                 box.label(text=f"{len(obj[N.PROP_VOLUMES])} collision volumes "
                                f"(carried through, not edited)")
-        elif obj is not None and obj.get(N.PROP_OBJECT) is not None:
+        if obj is not None and obj.get(N.PROP_OBJECT) is not None:
             layout.box().label(
-                text=f"object {obj[N.PROP_OBJECT]:04X}: pool mesh, read only",
-                icon="LOCKED")
+                text=f"object pool id {obj[N.PROP_OBJECT]:04X}; a rebuild has "
+                     f"to fit the span it owns",
+                icon="MESH_CUBE")
+        if obj is not None and obj.get(N.PROP_PLACEMENT) is not None:
+            box = layout.box()
+            box.label(text=f"placement {obj[N.PROP_PLACEMENT]} places "
+                           f"{obj.get(N.PROP_PLACES, 0):04X}", icon="EMPTY_AXIS")
+            box.label(text="move it and export; the list cannot grow")
+        if obj is not None and obj.get(N.PROP_EMITTER) is not None:
+            box = layout.box()
+            box.label(text=f"particle emitter at node "
+                           f"{int(obj[N.PROP_EMITTER]):#x}", icon="PARTICLES")
+            for field_name in N.EMITTER_FIELDS:
+                if obj.get(field_name) is not None:
+                    box.prop(obj, f'["{field_name}"]', text=field_name)
+        if collection.get(N.PROP_SCENE):
+            layout.operator(CRASHBASH_OT_bake_particles.bl_idname,
+                            icon="PARTICLES")
         layout.operator(CRASHBASH_OT_export.bl_idname, icon="EXPORT")
 
 
@@ -295,6 +356,7 @@ CLASSES = (
     CRASHBASH_AddonPreferences,
     CRASHBASH_OT_import,
     CRASHBASH_OT_export,
+    CRASHBASH_OT_bake_particles,
     VIEW3D_PT_crashbash,
 )
 

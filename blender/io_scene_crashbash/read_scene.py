@@ -20,22 +20,116 @@ import numpy as np
 
 import bpy
 
-from . import actions, naming as N
-from .build_scene import read_image, to_model
+from . import actions, build_scene, naming as N
+from .build_scene import SCALE, read_image, to_model
 
 SHAPE_KEY = re.compile(r"^(?P<label>.+)#(?P<key>\d+)$")
 
 
 def _objects(collection: bpy.types.Collection) -> dict[int, bpy.types.Object]:
-    """The collection's numbered meshes, by the index each one stands for."""
+    """The collection's meshes, by the model mesh index each one stands for.
+
+    Object-pool meshes count. They are what a level draws (§8.3) and the writer
+    can rebuild one -- inside the span it already owns, because the pool is a
+    packed run and blocks that leave it black-screen the disc. Whether a
+    particular rebuild fits is the writer's to say, with a measurement.
+
+    A placement object shares its mesh data with the object it copies, and only
+    one of them should be read: the copies carry no `crashbash_mesh` of their
+    own, so they are skipped here and picked up as placements instead.
+    """
     found: dict[int, bpy.types.Object] = {}
     for obj in collection.all_objects:
-        if obj.type != "MESH":
+        if obj.type != "MESH" or obj.get(N.PROP_PLACEMENT) is not None:
             continue
+        if obj.get(N.PROP_PREVIEW):
+            continue  # a baked particle, drawn to be watched and nothing else
         index = obj.get(N.PROP_MESH)
         if index is not None:
             found[int(index)] = obj
     return found
+
+
+def _placements(collection, model, warnings: list[str]) -> dict[int, dict]:
+    """Every placement record the collection moved, renamed or re-aimed.
+
+    Only the ones that actually differ: a record is eleven bytes of a live list
+    and rewriting one that did not change is work the file does not need. The
+    list cannot be made longer (§8.5), so a new object here is not a new
+    placement -- it is nothing, and saying so is better than dropping it.
+    """
+    edits: dict[int, dict] = {}
+    by_index = {i.index: i for i in model.instances}
+    for obj in collection.all_objects:
+        index = obj.get(N.PROP_PLACEMENT)
+        if index is None:
+            continue
+        instance = by_index.get(int(index))
+        if instance is None:
+            warnings.append(
+                f"{obj.name}: placement {int(index)} is not in this model, "
+                f"which has {len(model.instances)}; it was left out")
+            continue
+        rotation, translation = build_scene.placement_record(obj.matrix_basis)
+        identifier = int(obj.get(N.PROP_PLACES, instance.id))
+        # Against what the importer's own transform reads back as, not against
+        # the file: a quantised rotation is not exactly orthonormal and Blender
+        # keeps a transform as location, euler and scale, so recomposing it
+        # never gives the file's nine values back. Comparing against the file
+        # reported 24 of `warp_room1`'s 81 untouched records as moved, and
+        # rewriting a record that did not move is a byte of a live list spent
+        # for nothing.
+        rest = list(obj.get(N.PROP_PLACE_REST) or []) or (
+            list(instance.rotation) + list(instance.translation))
+        now = list(rotation) + list(translation)
+        still = len(rest) == len(now) and all(
+            abs(a - b) <= 1e-5 for a, b in zip(rest, now))
+        if still and identifier == instance.id:
+            continue
+        edits[int(index)] = {"id": identifier, "translation": translation,
+                             "rotation": rotation}
+    return edits
+
+
+def _shot(collection, warnings: list[str]) -> dict | None:
+    """The shot as it goes back: carried whole, with the emitters as edited.
+
+    Only the emitters have objects in the scene, so only they can have changed.
+    Everything else -- the tracks, the camera keys, the sub-scene frames -- goes
+    back exactly as the file stated it, which is what makes carrying a shot
+    through an edit safe rather than a re-derivation of things Blender has no
+    way to say.
+    """
+    import json  # noqa: PLC0415
+
+    stored = collection.get(N.PROP_SCENE)
+    if not stored:
+        return None
+    try:
+        extras = json.loads(stored)
+    except ValueError as exc:
+        warnings.append(f"the stored shot could not be read back ({exc}), so "
+                        f"it was left alone")
+        return None
+
+    by_node = {int(e["node"]): e for e in extras.get("emitters") or []}
+    for obj in collection.all_objects:
+        node = obj.get(N.PROP_EMITTER)
+        if node is None:
+            continue
+        emitter = by_node.get(int(node))
+        if emitter is None:
+            warnings.append(f"{obj.name}: emitter node {int(node):#x} is not in "
+                            f"this shot, so it was left out")
+            continue
+        for field_name in N.EMITTER_FIELDS:
+            value = obj.get(field_name)
+            if value is None:
+                continue
+            emitter[field_name] = (list(value) if hasattr(value, "__len__")
+                                   and not isinstance(value, str) else value)
+        emitter["position"] = list(to_model([tuple(obj.location)])[0] * SCALE)
+    return extras
 
 
 def _texture_entry(material, sizes, problems, where) -> tuple[int, tuple | None]:
@@ -221,13 +315,22 @@ def read_clip(obj, clip, warnings):
     if not used:
         return None
 
-    poses = []
-    for column in used:
-        block = blocks[column][1]
+    everything = []
+    for _, block in blocks:
         flat = np.empty(len(block.data) * 3, dtype=np.float64)
         block.data.foreach_get("co", flat)
-        poses.append(to_model(flat.reshape(-1, 3)))
-    return MI.ClipPayload(mesh_index=clip.mesh_index, poses=poses, frames=table)
+        everything.append(to_model(flat.reshape(-1, 3)))
+    # Whether an unchanged clip may be copied through depends on the mesh, and
+    # that is the core's to decide: a clip whose mesh was rebuilt indexes a
+    # different pool and has to be rebuilt with it. All that is said here is
+    # whether the clip still reproduces the one that arrived.
+    rest = (obj.get(N.PROP_CLIP_REST) or {}).get(clip.label)
+    now = build_scene.clip_fingerprint(everything, [
+        (used[f.key_a], used[f.key_b] if f.key_b is not None else None,
+         f.weight) for f in table])
+    return MI.ClipPayload(mesh_index=clip.mesh_index,
+                          poses=[everything[column] for column in used],
+                          frames=table, unchanged=bool(rest) and now == rest)
 
 
 def build_request(collection, model, clips, pack, materials_pack=None):
@@ -237,10 +340,11 @@ def build_request(collection, model, clips, pack, materials_pack=None):
     request = MI.ImportRequest(
         empty_error=(
             f"no object in '{collection.name}' carries a '{N.PROP_MESH}' "
-            f"property, so nothing names a mesh of this model; import the "
-            f"entry through this add-on and edit what it makes"),
-        empty_note=(f"no object in '{collection.name}' names a numbered mesh; "
-                    f"the geometry was left as it was"),
+            f"property and no placement was moved, so there is nothing to "
+            f"write; import the entry through this add-on and edit what it "
+            f"makes"),
+        empty_note=(f"no object in '{collection.name}' names a mesh; the "
+                    f"placements were written and the geometry left as it was"),
     )
     if bpy.context.scene.render.fps != N.FRAMES_PER_SECOND:
         request.warnings.append(
@@ -248,13 +352,18 @@ def build_request(collection, model, clips, pack, materials_pack=None):
             f"game ticks at {N.FRAMES_PER_SECOND}; every clip was read on the "
             f"scene's grid and will be resampled")
 
+    request.placements = _placements(collection, model, request.warnings)
+    request.scene = _shot(collection, request.warnings)
+
     sizes = _sizes(pack)
     found = _objects(collection)
+    known = {mesh.index for mesh in model.meshes}
+    known |= {o.mesh.index for o in model.objects if o.mesh is not None}
     for index, obj in sorted(found.items()):
-        if index >= len(model.meshes):
+        if index not in known:
             request.warnings.append(
-                f"{obj.name}: mesh {index} is past the {len(model.meshes)} this "
-                f"model has, so it was left out")
+                f"{obj.name}: mesh {index} is not one this model holds, so it "
+                f"was left out")
             continue
         payload = read_mesh(obj, pack, sizes, request.problems, request.warnings)
         if payload is not None:
@@ -283,14 +392,4 @@ def build_request(collection, model, clips, pack, materials_pack=None):
         if image is not None and tuple(image.size) != (0, 0):
             request.images[int(slot)] = read_image(image)
 
-    # An object-pool mesh cannot go home: the pool is one packed run, and a
-    # rebuild that moves a mesh's blocks out of it boots to a black screen.
-    # Saying so is better than writing a disc that does.
-    stranded = [obj.name for obj in collection.all_objects
-                if obj.get(N.PROP_OBJECT) is not None]
-    if stranded:
-        request.warnings.append(
-            f"{len(stranded)} object-pool mesh(es) were left out -- their "
-            f"blocks may not leave the pool (§8.3): {', '.join(stranded[:4])}"
-            + (" ..." if len(stranded) > 4 else ""))
     return request

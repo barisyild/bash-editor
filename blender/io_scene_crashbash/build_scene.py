@@ -43,6 +43,41 @@ def to_model(points: np.ndarray) -> np.ndarray:
     return np.stack([points[:, 0], -points[:, 2], points[:, 1]], axis=1)
 
 
+# The change of basis the two functions above perform, without the scale.
+# A placement rotates and translates a model-space vertex -- `v' = R v + t` --
+# so in Blender it is `(B R B^-1) b + B t`, and the scale cancels out of the
+# rotation. Its determinant is +1, which is why no winding has to be undone.
+BASIS = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+
+
+def placement_matrix(rotation, translation):
+    """A placement record as a Blender 4x4, ready to assign to an object.
+
+    A `mathutils.Matrix`, and it has to be: assigning a nested Python list to
+    `matrix_basis` is accepted and then quietly does nothing at all. Every
+    placement was standing at the origin with an identity rotation, and a check
+    that compared each object against its own read-back transform agreed with
+    itself the whole way.
+    """
+    from mathutils import Matrix  # noqa: PLC0415
+
+    rot = BASIS @ np.asarray(rotation, dtype=np.float64).reshape(3, 3) @ BASIS.T
+    # `Instance.translation` is in the reader's scaled units, like a vertex.
+    at = BASIS @ np.asarray(translation, dtype=np.float64)
+    matrix = np.eye(4)
+    matrix[:3, :3] = rot
+    matrix[:3, 3] = at
+    return Matrix([[float(v) for v in row] for row in matrix])
+
+
+def placement_record(matrix) -> tuple[tuple[float, ...], tuple[float, float, float]]:
+    """The mirror: a Blender 4x4 back to a record's rotation and translation."""
+    world = np.array([[matrix[r][c] for c in range(4)] for r in range(4)])
+    rot = BASIS.T @ world[:3, :3] @ BASIS
+    at = BASIS.T @ world[:3, 3]
+    return tuple(float(v) for v in rot.reshape(-1)), tuple(float(v) for v in at)
+
+
 # --- images and materials -------------------------------------------------
 
 
@@ -186,6 +221,23 @@ class Materials:
         _shader(material, _image(
             N.IMAGE_SLOT.format(stem=self.stem, slot=slot),
             texture.to_rgba(self.pack.palettes)))
+        # A slot the pack animates does not hold one picture. Shown so an
+        # artist repainting it knows what they are repainting -- the base
+        # frame -- and not written back: nothing in this project writes a
+        # flipbook's frames or a scroller's rate yet.
+        book = self.pack.animated().get(slot)
+        if book is not None:
+            material[N.PROP_FLIPBOOK] = [len(book.frames), round(book.fps, 3)]
+            notes.append(
+                f"slot {slot} is a flipbook of {len(book.frames)} frames at "
+                f"{book.fps:.1f} fps; the base frame is shown and the frames "
+                f"are carried through untouched")
+        scroll = next((s for s in self.pack.scrollers if s.texture == slot), None)
+        if scroll is not None:
+            material[N.PROP_SCROLL] = round(scroll.texels_per_second, 3)
+            notes.append(
+                f"slot {slot} scrolls at {scroll.texels_per_second:.1f} texels "
+                f"a second; it is shown still and carried through untouched")
         self.by_key[key] = material
         return material
 
@@ -325,6 +377,37 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str]):
 # --- animation ------------------------------------------------------------
 
 
+def clip_fingerprint(poses, frames) -> str:
+    """A digest of a clip's poses and its frame table, in the writer's terms.
+
+    Both halves of the add-on compute it the same way, so an untouched clip is
+    recognised as untouched and copied through byte for byte rather than
+    rebuilt. That is not tidiness: a rebuild lays down a fresh pose pool, which
+    is most of what a model weighs.
+    """
+    import hashlib  # noqa: PLC0415
+    import struct  # noqa: PLC0415
+
+    digest = hashlib.sha1()
+    for pose in poses:
+        digest.update(np.clip(np.round(np.asarray(pose, dtype=np.float64)),
+                              -32768, 32767).astype("<i2").tobytes())
+    for first, second, weight in frames:
+        # Canonical, because a blend has two spellings and the archive uses
+        # both: `chars/crate/coco`'s BREATHE frame 11 names key 1 then key 0 at
+        # 409, while `cutscene/level_shot12` runs ascending throughout. Reading
+        # the pair back off Blender's shape key values recovers the blend and
+        # not the order it was written in, so the digest has to ignore it or
+        # every such clip looks edited and is rebuilt for nothing.
+        first, second, weight = int(first), second, int(weight)
+        if second is not None and int(second) < first:
+            first, second = int(second), first
+            weight = 4096 - weight
+        digest.update(struct.pack("<iii", first,
+                                  -1 if second is None else int(second), weight))
+    return digest.hexdigest()
+
+
 def build_clips(obj, mesh, rows: np.ndarray | None, clips, stem: str,
                 notes: list[str]) -> None:
     """Poses as shape keys, the frame table as an action over their values.
@@ -341,17 +424,24 @@ def build_clips(obj, mesh, rows: np.ndarray | None, clips, stem: str,
     obj.shape_key_add(name="Basis", from_mix=False)
     labels: dict[str, str] = {}
     counts: dict[str, int] = {}
+    rest: dict[str, str] = {}
     for clip in mine:
         keys = clip.keyframes()
         blocks = []
+        gathered = []
         for number, key in enumerate(keys):
             pose = clip.pool()[clip._slots(key)].astype(np.float64)
             block = obj.shape_key_add(
                 name=N.SHAPE_KEY.format(label=clip.label, key=number),
                 from_mix=False)
-            moved = to_blender(pose[rows])
-            block.data.foreach_set("co", moved.reshape(-1))
+            gathered.append(pose[rows])
+            block.data.foreach_set("co", to_blender(pose[rows]).reshape(-1))
             blocks.append(block)
+        at_key = {k: i for i, k in enumerate(keys)}
+        rest[clip.label] = clip_fingerprint(gathered, [
+            (at_key[f.key_a],
+             at_key[f.key_b] if f.key_b else None, f.weight)
+            for f in clip.frames])
 
         action = actions.make(N.ACTION.format(stem=stem, label=clip.label))
         frames = len(clip.frames)
@@ -389,6 +479,178 @@ def build_clips(obj, mesh, rows: np.ndarray | None, clips, stem: str,
         actions.assign(mesh.shape_keys, bpy.data.actions[first])
     obj[N.PROP_CLIPS] = labels
     obj[N.PROP_FRAMES] = counts
+    obj[N.PROP_CLIP_REST] = rest
+
+
+# --- the level's set ------------------------------------------------------
+
+
+def _build_placements(collection, model, stem: str, by_id: dict,
+                      notes: list[str]) -> None:
+    """One object per placement record, standing where the record stands it.
+
+    This is what a level *is*: it draws what its placement list names and
+    nothing else (§8.5). `warp_room1` has 81 records and not one of them names
+    any of the 42 meshes in `model.meshes`, so opening a level and seeing the
+    numbered meshes at the origin is seeing the pieces, not the room.
+
+    Each object shares the mesh data of the pool mesh its id resolves to, so
+    moving one moves that copy alone. Editing the mesh edits every copy, which
+    is what the file does too.
+    """
+    if not model.instances:
+        return
+    places = bpy.data.collections.new(N.COLLECTION_PLACES.format(stem=stem))
+    collection.children.link(places)
+    missing = 0
+    for instance in model.instances:
+        name = N.OBJECT_PLACE.format(stem=stem, index=instance.index,
+                                     id=instance.id)
+        source = by_id.get(instance.id)
+        data = source.data if source is not None else (
+            instance.mesh and bpy.data.meshes.get(
+                N.OBJECT_MESH.format(stem=stem, index=instance.mesh.index)))
+        if data is None:
+            missing += 1
+        obj = bpy.data.objects.new(name, data)
+        obj[N.PROP_PLACEMENT] = instance.index
+        obj[N.PROP_PLACES] = instance.id
+        # `matrix_basis`, not `matrix_world`: the world matrix is evaluated by
+        # the dependency graph and reads back stale until it runs, so an object
+        # moved and exported in one pass came out where it started -- and 24 of
+        # `warp_room1`'s 81 untouched records read as if they had moved. The
+        # basis is the object's own transform and is always current.
+        obj.matrix_basis = placement_matrix(instance.rotation,
+                                            instance.translation)
+        # What that transform reads back as, which is not what went in: a
+        # transform is stored as location, euler and scale, and the file's
+        # rotation is quantised to 1/4096 and so not exactly orthonormal.
+        # This is the reference "unmoved" is decided against.
+        rotation, translation = placement_record(obj.matrix_basis)
+        obj[N.PROP_PLACE_REST] = list(rotation) + list(translation)
+        obj.hide_render = not instance.is_drawn
+        places.objects.link(obj)
+    notes.append(f"{len(model.instances)} placements; the list cannot be made "
+                 f"longer, and a record whose object another record already "
+                 f"places is the only spare a level has")
+    if missing:
+        notes.append(f"{missing} placement(s) name something this file does not "
+                     f"hold -- a clip, or an object in a model loaded alongside "
+                     f"-- so they are empties you can still move")
+
+
+# --- the shot, and its particles -----------------------------------------
+
+
+def _build_shot(collection, model, model_data: bytes, clips, stem: str,
+                notes: list[str]) -> None:
+    """The shot (§9.11) as data on the collection, its emitters as objects.
+
+    The whole shot is stored as the file itself holds it, so everything an
+    artist does not touch here is written back exactly as it was: the tracks,
+    the camera keys, the sub-scene frames. What gets an object of its own is
+    the **particle emitter**, because it has no representation anywhere else --
+    glTF has no particles at all, so an emitter that went out through one came
+    back only because the exporter wrote its fields into `extras` by hand.
+
+    An emitter's fields are the simulation: how many particles the spray has,
+    how many leave per tick, how long one lives, the speed and the cone it
+    leaves in, the acceleration and damping that bend it, the spin, and the two
+    ramps that fade and grow it (§9.11.7). All of them are editable here and all
+    of them write back.
+    """
+    import json  # noqa: PLC0415
+
+    from crashbash.formats.scenewrite import scene_extras
+    from crashbash.scene import read_scene
+
+    try:
+        shot = read_scene(model_data, model, clips)
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"the shot could not be read, so it is left alone: {exc}")
+        return
+    if shot is None:
+        return
+    extras = scene_extras(shot, model)
+    collection[N.PROP_SCENE] = json.dumps(extras)
+    if not shot.emitters:
+        notes.append(f"shot: {len(shot.actors)} actors, {len(shot.props)} props, "
+                     f"{len(shot.cameras)} cameras, carried through unchanged")
+        return
+
+    shot_collection = bpy.data.collections.new(
+        N.COLLECTION_SHOT.format(stem=stem))
+    collection.children.link(shot_collection)
+    for index, emitter in enumerate(extras["emitters"]):
+        name = N.OBJECT_EMITTER.format(stem=stem, index=index)
+        obj = bpy.data.objects.new(name, None)
+        obj.empty_display_type = "SPHERE"
+        obj.empty_display_size = 0.2
+        obj[N.PROP_EMITTER] = emitter["node"]
+        for field_name in N.EMITTER_FIELDS:
+            value = emitter.get(field_name)
+            obj[field_name] = list(value) if isinstance(value, list) else value
+        obj.location = to_blender(
+            np.asarray([emitter["position"]], dtype=np.float64) / SCALE)[0]
+        shot_collection.objects.link(obj)
+    notes.append(
+        f"shot: {len(shot.actors)} actors, {len(shot.props)} props, "
+        f"{len(shot.cameras)} cameras carried through unchanged, and "
+        f"{len(shot.emitters)} particle emitter(s) you can edit")
+
+
+def bake_particles(collection, model_data: bytes, model, clips, stem: str
+                   ) -> tuple[int, int]:
+    """Instance every live particle, tick by tick, so the spray can be watched.
+
+    A preview and nothing else: it is keyframed from the simulation the game
+    runs (§9.11.7) and goes stale the moment the emitter is edited, so the
+    exporter skips anything it makes. What it is worth is that a spray is
+    otherwise invisible until the disc is built -- there is no other way to see
+    whether an emitter aims where it was meant to.
+    """
+    from crashbash.scene import read_scene
+
+    shot = read_scene(model_data, model, clips)
+    if shot is None or not shot.emitters:
+        return 0, 0
+    old = bpy.data.collections.get(N.COLLECTION_PREVIEW.format(stem=stem))
+    if old is not None:
+        for obj in list(old.objects):
+            bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.collections.remove(old)
+    preview = bpy.data.collections.new(N.COLLECTION_PREVIEW.format(stem=stem))
+    collection.children.link(preview)
+
+    meshes = {obj.get(N.PROP_MESH): obj.data for obj in collection.all_objects
+              if obj.type == "MESH" and obj.get(N.PROP_MESH) is not None}
+    made = frames = 0
+    for index, emitter in enumerate(shot.emitters):
+        data = meshes.get(emitter.mesh_index)
+        slots = [bpy.data.objects.new(f"{stem}_spark{index:02d}_{n:03d}", data)
+                 for n in range(emitter.budget)]
+        for obj in slots:
+            obj[N.PROP_PREVIEW] = True
+            preview.objects.link(obj)
+        made += len(slots)
+        for tick in range(emitter.start, emitter.end + 1):
+            live = emitter.particles(tick)
+            frames += 1
+            for slot, obj in enumerate(slots):
+                shown = live[slot] if slot < len(live) else None
+                if shown is None:
+                    obj.scale = (0.0, 0.0, 0.0)
+                else:
+                    obj.location = to_blender(
+                        np.asarray([shown.position], dtype=np.float64) / SCALE)[0]
+                    # The spin is about the console's own up axis, which is
+                    # Blender's Z after the change of basis.
+                    obj.rotation_euler = (0.0, 0.0, shown.spin)
+                    obj.scale = (shown.scale,) * 3
+                obj.keyframe_insert("location", frame=tick + 1)
+                obj.keyframe_insert("rotation_euler", frame=tick + 1)
+                obj.keyframe_insert("scale", frame=tick + 1)
+    return made, frames
 
 
 # --- the whole model ------------------------------------------------------
@@ -445,21 +707,35 @@ def build_model(entry: str, model_data: bytes, pack_data: bytes | None,
         collection.objects.link(obj)
         build_clips(obj, mesh, rows, clips, stem, notes)
 
-    # Object-pool meshes are what a level actually draws (§8.3), so they go in
-    # to be looked at -- but nothing here can install one back, and a mesh that
-    # cannot go home should not look like one that can.
+    # Object-pool meshes are what a level actually draws (§8.3): in
+    # `warp_room1` not one of the 81 placements names any of the 42 numbered
+    # meshes. They can be rebuilt, but only inside the span each already owns --
+    # the pool is one packed run and a mesh whose blocks leave it boots to a
+    # black screen -- so the writer refuses with a measurement when a rebuild
+    # does not fit rather than building that disc.
+    by_id: dict[int, bpy.types.Object] = {}
     for record in model.objects:
         if record.mesh is None:
             continue
         payload = MI.payload_from_model(model_data, model, pack,
-                                        record.mesh.index)
+                                        record.mesh.index, clips)
         if payload is None:
             continue
         name = N.OBJECT_POOL.format(stem=stem, id=record.id)
-        mesh, _ = build_mesh(name, payload, materials, notes)
+        pool = np.round(np.asarray(record.mesh.positions, dtype=np.float64)
+                        / SCALE)
+        _, first = MI.weld_vertices(pool, pool_poses(record.mesh, clips))
+        mesh, mapping = build_mesh(name, payload, materials, notes)
         obj = bpy.data.objects.new(name, mesh)
         obj[N.PROP_OBJECT] = record.id
+        obj[N.PROP_MESH] = record.mesh.index
         collection.objects.link(obj)
+        by_id[record.id] = obj
+        build_clips(obj, mesh, None if mapping is None else first[mapping],
+                    clips, stem, notes)
+
+    _build_placements(collection, model, stem, by_id, notes)
+    _build_shot(collection, model, model_data, clips, stem, notes)
 
     scene = bpy.context.scene
     if scene.render.fps != N.FRAMES_PER_SECOND:

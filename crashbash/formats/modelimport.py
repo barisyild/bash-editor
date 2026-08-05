@@ -35,6 +35,7 @@ import numpy as np
 from ..binreader import GTE_SCALE_SMALL
 from . import animwrite as AW
 from . import mdlwrite as MW
+from . import placewrite as PW
 from . import scenewrite as SW
 from . import texwrite as TW
 from .anim import WEIGHT_ONE, read_animations
@@ -79,6 +80,15 @@ class ClipPayload:
     mesh_index: int
     poses: list[np.ndarray]  # each (V, 3) in model units, `MeshPayload.vertices` order
     frames: list[AW.FrameSpec]  # keys index `poses`
+    # The source says this reproduces the shipped clip exactly. Whether that
+    # means anything is this module's to decide, and it depends on the mesh: a
+    # clip whose mesh was rebuilt has to be rebuilt with it, because the pool it
+    # indexes is a different pool. Only when the mesh was left alone can an
+    # unchanged clip be copied through byte for byte -- and it must be, since a
+    # rebuild lays down a fresh pose pool and that is most of what a model
+    # weighs. Thirteen untouched clips rewritten took `chars/crate/coco`
+    # 163,160 bytes away from the file it came out of.
+    unchanged: bool = False
 
 
 @dataclass
@@ -95,6 +105,11 @@ class ImportRequest:
     # palette-sharing test is over these, not over the images.
     slots: set[int] = field(default_factory=set)
     scene: dict | None = None  # `scenewrite.patch_scene` extras
+    # Placement records to rewrite, by index: `{"id", "translation",
+    # "rotation"}`, any of them absent meaning "leave it". A level draws what
+    # this list names and nothing else (§8.5), so rewriting a record is the one
+    # edit that changes a level -- and the list cannot be made longer.
+    placements: dict[int, dict] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     # Reasons to refuse. Collected rather than raised one at a time so an
     # artist sees every problem in the file at once.
@@ -118,6 +133,7 @@ class Report:
     textures_written: list[int] = field(default_factory=list)
     textures_unchanged: list[int] = field(default_factory=list)
     palettes_shared: list[int] = field(default_factory=list)
+    placements_written: list[int] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     scene: SW.Patched | None = None
     model: bytes = b""
@@ -487,15 +503,12 @@ def frames_from_weights(weights: np.ndarray, frame_total: int = 0
         if w_first <= 0 or first not in slot_of:
             frames.append(AW.FrameSpec(0, None, 0))
             continue
-        if second in slot_of and slot_of[second] < slot_of[first]:
-            # The lower key first, which is how every shipped frame states it.
-            # Naming the stronger key first instead is the same blend read from
-            # the other end -- `a + (b-a)*0.75` against `b + (a-b)*0.25` -- and
-            # the game's INTPL works in fixed point, so the two round apart by a
-            # unit. That showed as 38 animated triangles of one cutscene clip
-            # arriving a hair off with every static check passing.
-            first, second = second, first
-            w_first, w_second = w_second, w_first
+        # The stronger key first. There is no ordering to match here: the
+        # archive states a blend both ways round -- `chars/crate/coco`'s BREATHE
+        # frame 11 is `key 1 -> key 0` at 409 while `cutscene/level_shot12` runs
+        # ascending throughout -- and `a + (b-a)*w` and `b + (a-b)*(1-w)` are
+        # the same blend read from opposite ends. A caller that needs the file's
+        # own ordering back has to keep the clip rather than rebuild it.
         blend = w_second / (w_first + w_second) if w_second > 1e-4 else 0.0
         step = int(round(blend * WEIGHT_ONE))
         if step <= 0 or second not in slot_of:
@@ -565,6 +578,30 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     clips = read_animations(model_data, model)
     pack = read_pack(pack_data) if pack_data is not None else None
 
+    # The placement list goes back next, and for the same reason the shot does:
+    # every record is addressed by its offset in the file as it stands, and
+    # `install_meshes` moves the layout boundary underneath them (§2.1). The
+    # rewrite resizes nothing, so what follows runs on it exactly as it would
+    # have run on the original bytes.
+    if request.placements:
+        by_index = {i.index: i for i in model.instances}
+        for index, edit in sorted(request.placements.items()):
+            instance = by_index.get(index)
+            if instance is None:
+                report.warnings.append(
+                    f"placement {index} is not in this model, which has "
+                    f"{len(model.instances)}; it was left out")
+                continue
+            model_data = PW.write_placement(
+                model_data, instance,
+                identifier=edit.get("id"),
+                translation=edit.get("translation"),
+                rotation=edit.get("rotation"))
+            report.placements_written.append(index)
+        if report.placements_written:
+            model = read_model(model_data)
+            clips = read_animations(model_data, model)
+
     if not request.meshes:
         # A scene patch is already done and valid at this point, and five
         # arenas reach here every time: they have no numbered meshes at all,
@@ -572,7 +609,9 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         # writers cannot install into. Raising would throw away a finished edit
         # to their 56 placement records, so the scene-only result is returned
         # instead -- and only a source that changed nothing is an error.
-        if report.scene is None or not report.scene.total:
+        wrote = bool(report.placements_written) or (
+            report.scene is not None and report.scene.total)
+        if not wrote:
             raise ValueError(request.empty_error)
         report.warnings.append(request.empty_note)
         report.model = model_data
@@ -702,8 +741,9 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             incoming = None
         # A mesh whose geometry came back untouched can still have been
         # re-animated -- that is the whole of an animation-only edit -- so the
-        # clip is copied only when the source has nothing to say about it either.
-        if target_mesh not in report.meshes_rebuilt and incoming is None:
+        # clip is copied only when the source has nothing new to say about it.
+        if target_mesh not in report.meshes_rebuilt and (
+                incoming is None or incoming.unchanged):
             specs.append(AW.ClipSpec(
                 poses=[clip.pool()[clip._slots(k)].astype(np.int16) for k in keys],
                 frames=original_frames, name_hash=clip.name_hash,
@@ -760,7 +800,17 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
                                  vertex_flags=flags))
         report.clips_rebuilt.append(clip.label)
 
-    report.model = AW.write_clips(grown, specs, reclaim=False)
+    if not staged and len(report.clips_copied) == len(clips):
+        # Nothing was installed and no clip changed, so the animation region is
+        # left exactly where it is. Stripping and rewriting it is not free even
+        # when every blob goes back with the same contents: `chars/crate/coco`
+        # comes back four bytes short and `mainmenu/models` grows 276,712 bytes
+        # to 343,660, a quarter again, for an edit that changed nothing. And
+        # the hub is where the memory budget bites, so a file that grows for
+        # nothing is a file that may not load.
+        report.model = model_data
+    else:
+        report.model = AW.write_clips(grown, specs, reclaim=False)
 
     # --- textures ------------------------------------------------------
     if pack is not None and pack_data is not None and request.images:

@@ -60,8 +60,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import mdl as mdl_module
+from . import scenewrite
 from . import tex as tex_module
-from .. import scene as scene_module
 
 GLB_MAGIC = 0x46546C67
 GLB_VERSION = 2
@@ -546,97 +546,11 @@ def export_glb(
     return _pack_glb(document, bytes(buffer.data))
 
 
-def _placement_of(placement) -> dict | None:
-    """A sub-scene's placement, so a writer can invert what it was applied to.
-
-    Without this the shift in `extras` undoes a sub-scene's clock but nothing
-    undoes its frame, and a parented key can only be skipped on the way back.
-    """
-    if placement is None:
-        return None
-    return {"position": [float(v) for v in placement.position],
-            "rotation": [float(v) for v in placement.rotation],
-            "scale": [float(v) for v in placement.scale]}
-
-
-def _scene_extras(scene, model) -> dict:
-    """The shot as the file itself holds it, for `extras`.
-
-    Two things a glTF cannot say get said here instead. It has no visibility
-    track, so the sampled channels fake one by scaling a node off stage to zero;
-    and it has no particle system at all, so the emitters would otherwise vanish
-    from the file entirely. Both are written out whole.
-
-    Every entry carries the byte offset of the record it came from. That is what
-    makes the trip back possible without understanding the object graph: an
-    importer patches those fields where they already are, changing no count, no
-    size and no offset, so the region whose record kinds are still unread
-    (§8.3) is never rebuilt -- only read past.
-    """
-    def track_of(track, first: int, stride: int) -> dict:
-        """One track, with what it would take to write a key back.
-
-        An actor's keys and a prop's are read from different offsets at
-        different strides -- 0x30/0x4C against 0x24/0x50 -- so the writer has to
-        be told which, or every prop offset lands in the wrong record. And a
-        sub-scene's keys are not the file's: they are shifted onto the parent's
-        clock and moved into its frame, so `shift` and `parented` say what to
-        undo. 433 of the corpus's 4209 prop keys are in that position.
-        """
-        return {
-            "node": track.node, "first": first, "stride": stride,
-            "shift": track.shift, "parented": bool(track.parented),
-            "parent": _placement_of(track.parent),
-            "keys": [{"at": track.node + first + stride * i,
-                      "tick": int(k.tick), "duration": int(k.duration),
-                      "position": [float(v) for v in k.position],
-                      "rotation": [float(v) for v in k.rotation],
-                      "scale": [float(v) for v in k.scale]}
-                     for i, k in enumerate(track.keys)],
-        }
-
-    out: dict = {"window": list(scene.window) if scene.window else None,
-                 "ticks_per_second": FRAMES_PER_SECOND}
-    out["actors"] = [{"mesh": a.mesh_index, "clip": a.clip_index,
-                      "play": [a.play_start, a.play_end],
-                      "delay": a.delay, "mode": a.mode,
-                      "track": track_of(a.track, scene_module.PLACEMENT_KEYS,
-                                        scene_module.PLACEMENT_STRIDE)}
-                     for a in scene.actors]
-    out["props"] = [{"mesh": p.mesh_index,
-                     "track": track_of(p.track, scene_module.PROP_KEYS,
-                                       scene_module.PROP_STRIDE)}
-                    for p in scene.props]
-    out["cameras"] = [{"node": c.node, "start": c.start, "end": c.end,
-                       "screen_distance": float(c.screen_distance),
-                       "shift": c.shift, "parented": bool(c.parented),
-                       "parent": _placement_of(c.parent),
-                       "keys": [{"at": c.node + scene_module.CAMERA_KEYS
-                                 + scene_module.CAMERA_STRIDE * i,
-                                 "tick": int(k.tick), "duration": int(k.duration),
-                                 "eye": [float(v) for v in k.eye],
-                                 "target": [float(v) for v in k.target]}
-                                for i, k in enumerate(c.keys)]}
-                      for c in scene.cameras]
-    # glTF has no particles at all, so an emitter is written whole -- every
-    # field the simulation runs on, not a summary of it.
-    out["emitters"] = [{"node": e.node, "mesh": e.mesh_index,
-                        "start": e.start, "end": e.end,
-                        "position": [float(v) for v in e.position],
-                        "budget": e.budget, "per_tick": e.per_tick,
-                        "lifetime": e.lifetime, "last_tick": e.last_tick,
-                        "speed": list(e.speed), "yaw": list(e.yaw),
-                        "pitch": list(e.pitch),
-                        "accel": [float(v) for v in e.accel],
-                        "damp": [float(v) for v in e.damp],
-                        "spin": e.spin, "fade": list(e.fade),
-                        "grow": list(e.grow)}
-                       for e in scene.emitters]
-    out["placements"] = [{"record": i.record, "id": i.id, "flags": i.flags,
-                          "translation": [float(v) for v in i.translation],
-                          "rotation": [float(v) for v in i.rotation]}
-                         for i in model.instances]
-    return out
+# The shot's serialisation lives beside the writer that consumes it, because
+# both front ends speak the same shape: this one puts it in `extras`, and the
+# Blender add-on stores it on the collection. See `scenewrite.scene_extras`.
+_placement_of = scenewrite.placement_of
+_scene_extras = scenewrite.scene_extras
 
 
 def _clip_weight_row(clip, frame_index: int, lookup: dict, width: int) -> np.ndarray:

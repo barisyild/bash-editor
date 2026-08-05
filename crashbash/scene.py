@@ -436,6 +436,10 @@ class Emitter:
     spin: int
     fade: tuple[int, int]
     grow: tuple[int, int]
+    # The placement the position above was moved into, when the emitter belongs
+    # to a sub-scene. Kept so a writer can undo it: `position` is in the
+    # parent's frame and the node's own three words are not.
+    parent: "Placement | None" = None
 
     def particles(self, tick: int) -> list[Particle]:
         """Every live particle at `tick`, simulated from the emitter's start.
@@ -954,6 +958,7 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
                       _i32(data, node + EMITTER_FADE_OUT)),
                 grow=(_i32(data, node + EMITTER_GROW_END),
                       _i32(data, node + EMITTER_SHRINK_START)),
+                parent=parent,
             ))
             continue
 

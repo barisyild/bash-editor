@@ -144,6 +144,74 @@ def check(name: str, data: bytes, pack_data: bytes | None, source: str) -> bool:
     return good
 
 
+def check_untouched(name: str, data: bytes, pack_data: bytes | None,
+                    source: str) -> bool:
+    """Import and export with nothing changed, and demand the same bytes back.
+
+    The strongest statement the add-on can make. Every mesh is recognised as
+    unchanged and left alone, every clip is copied, and the shot -- its tracks,
+    its camera keys and its particle emitters -- is written back exactly as the
+    file stated it. One byte out means something was re-derived that should have
+    been carried.
+    """
+    model = read_model(data)
+    clips = read_animations(data, model)
+    pack = read_pack(pack_data) if pack_data else None
+    collection, _ = build_scene.build_model(name, data, pack_data, source,
+                                            name[:-4] + ".tex")
+    request = read_scene.build_request(collection, model, clips, pack)
+    report = MI.import_payload(data, pack_data, request)
+    differs = sum(1 for a, b in zip(data, report.model) if a != b)
+    same = len(report.model) == len(data) and differs == 0
+    shot = report.scene
+    print(f"  untouched export: {differs} bytes differ"
+          f"{'' if len(report.model) == len(data) else ', SIZE CHANGED'}"
+          f"{f', shot {shot.keys} keys {shot.camera_keys} camera {shot.emitters} emitters' if shot else ''}"
+          f", {len(report.meshes_rebuilt)} meshes rebuilt")
+    return same
+
+
+def check_placement(name: str, data: bytes, pack_data: bytes | None,
+                    source: str) -> bool:
+    """Move one placement in Blender and see exactly that record move on disc.
+
+    A level draws what its placement list names and nothing else (§8.5), so this
+    is the whole of what a level edit can be today -- and the check has to be
+    that *only* the record moved. The export runs with its ordinary settings, so
+    every mesh comes back unchanged and is left alone; if anything else in the
+    file differs, something rebuilt that should not have.
+    """
+    model = read_model(data)
+    if not model.instances:
+        return True
+    clips = read_animations(data, model)
+    pack = read_pack(pack_data) if pack_data else None
+    collection, _ = build_scene.build_model(name, data, pack_data, source,
+                                            name[:-4] + ".tex")
+    target = next(o for o in collection.all_objects
+                  if o.get("crashbash_placement") == 0)
+    before = model.instances[0].translation
+    target.location = (target.location[0] + 1.0, target.location[1],
+                       target.location[2])
+
+    request = read_scene.build_request(collection, model, clips, pack)
+    report = MI.import_payload(data, pack_data, request)
+    rebuilt = read_model(report.model)
+    after = rebuilt.instances[0].translation
+
+    same_size = len(report.model) == len(data)
+    differs = sum(1 for a, b in zip(data, report.model) if a != b)
+    moved = after[0] - before[0]
+    others = sum(1 for i in range(1, len(model.instances))
+                 if model.instances[i].translation != rebuilt.instances[i].translation)
+    good = (same_size and moved > 0.9 and others == 0
+            and len(report.placements_written) == 1)
+    print(f"  placement edit: {differs} bytes differ, size {'kept' if same_size else 'CHANGED'}, "
+          f"record 0 moved {moved:+.3f}, {others} other records moved, "
+          f"{len(report.meshes_rebuilt)} meshes rebuilt")
+    return good
+
+
 def main() -> None:
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if not argv:
@@ -171,7 +239,11 @@ def main() -> None:
         data = archive.read(by_name[name])
         pack_data = archive.read(by_name[pack_name]) if pack_name in by_name else None
         try:
-            if not check(name, data, pack_data, exe):
+            ok = check_untouched(name, data, pack_data, exe)
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            ok = check_placement(name, data, pack_data, exe) and ok
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            if not check(name, data, pack_data, exe) or not ok:
                 failures += 1
         except ValueError as exc:
             # A refusal is the add-on working. Six of the archive's font models

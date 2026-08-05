@@ -53,10 +53,12 @@ patches the EXE tables; `iso.py` masters or patches the disc image;
 **`formats/modelimport.py` is where an import happens, and both front ends go
 through it.** It holds everything that has nothing to do with the file the edit
 arrived in — the layout ordering, the untouched-mesh rule, the swatch cell, the
-frozen clip, the refusals — behind one `ImportRequest`. `gltfimport` fills one
-by reading a `.glb`; the add-on fills one by reading `bpy` data. A rule added to
-one front end instead of to the core is a rule the other will not have, and
-every trap in this file was learned once already.
+frozen clip, the placement list, the shot, the refusals — behind one
+`ImportRequest`. `gltfimport` fills one by reading a `.glb`; the add-on fills
+one by reading `bpy` data. A rule added to one front end instead of to the core
+is a rule the other will not have, and every trap in this file was learned once
+already. The shot's serialisation lives in `scenewrite.scene_extras` for the
+same reason: it is the shape both front ends speak, not a glTF detail.
 
 ## Invariants a writer must honour
 
@@ -123,6 +125,12 @@ They are not style preferences.
   authoring tool's, so even a reshape with the same triangle count can want more
   room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
   owned).
+- **A shot's emitter names its mesh by *id*, and its position is in the
+  parent's frame.** The reader reports a resolved index and a world position;
+  writing either straight back is wrong. `mesh_index` has to go back as
+  `0x2000 | (index + 1)` — writing the index instead made eight emitters vanish
+  from a shot patched with nothing changed — and a sub-scene's emitter position
+  has to have the parent frame taken off again, exactly as a track's keys do.
 - **The placement list is live data, and it is how a level's set is changed.**
   Both fields answer to the file: taking `warp_room1`'s count from 81 to 80 —
   one byte — draws the room with its last object gone, and repointing the array
@@ -355,10 +363,19 @@ They are not style preferences.
   Nearest-neighbour matching against rest positions cannot tell apart two
   vertices at one position, and that is the failure above wearing a different
   hat. The distance path stays for a source with no vertices of its own.
-- **A blended frame names the lower key first.** Every shipped frame does, and
-  the two orderings are not interchangeable in practice: `a + (b−a)·0.75` and
-  `b + (a−b)·0.25` are the same blend read from opposite ends, and the game's
-  INTPL works in fixed point, so they round apart by a unit.
+- **A blended frame states its pair in either order, so do not rebuild one to
+  get the file's own ordering back.** `chars/crate/coco`'s BREATHE frame 11 is
+  key 1 → key 0 at weight 409, while every frame of `cutscene/level_shot12` runs
+  ascending. Reading the pair back off two shape key values recovers the blend
+  and not the order it was written in, so a comparison that decides whether a
+  clip changed has to canonicalise — swap to the lower key and use
+  `4096 − weight` — or every such clip looks edited and is rebuilt for nothing.
+- **Rewriting a clip that did not change is not free.** Stripping the animation
+  region and putting the same blobs back costs `chars/crate/coco` four bytes
+  and grows `mainmenu/models` from 276,712 to 343,660 — a quarter again, on an
+  edit that changed nothing. `import_payload` leaves the region alone entirely
+  when nothing was installed and every clip was copied, which is also the only
+  way an untouched import comes back byte-identical.
 - **The glTF carries the facing; never re-derive it.** The game flips the sign
   of the NCLIP backface test per vertex flag bit 0 (§11.3), so an inverted
   parity culls a triangle rather than drawing it — and nothing on a static

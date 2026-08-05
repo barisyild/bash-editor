@@ -385,12 +385,20 @@ as materials, clip keyframes as shape keys, clip timings as actions at 30 fps,
 and the collision volumes as a property you can read. **File → Export → Crash
 Bash Model** writes the entry back, ready for *Replace selected file…* here.
 
+A **level** comes in as its placement list (§8.5) — the objects the room is
+actually made of, standing where the file stands them — so moving one and
+exporting changes that record and nothing else: one byte on `warp_room1`, the
+file the same size. A **cutscene** comes in with its particle emitters
+(§9.11.7), every field of them editable, and *Bake Particle Preview* runs the
+game's own simulation so the spray can be watched before the disc is built.
+
 It is not a second implementation: the add-on and this editor drive the same
 `crashbash` package, so a rule learned on one side is in force on the other.
 [blender/README.md](blender/README.md) says what maps to what and what an export
-refuses; taking 120 shipped models in and straight back out reproduces
-111,127 of 111,127 triangles — position, colour, UV, texture entry and corner
-order — with all 244 clips intact frame by frame.
+refuses. An import that changes nothing comes back **byte for byte identical** —
+a character, a level and a cutscene all measured at 0 bytes different — and
+forcing 90 shipped models through the writer reproduces 71,311 of 71,311
+triangles, position, colour, UV, texture entry and corner order alike.
 
 ## Command line
 

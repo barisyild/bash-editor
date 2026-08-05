@@ -41,6 +41,7 @@ LIBRARY = [
     "crashbash/formats/mdl.py",
     "crashbash/formats/mdlwrite.py",
     "crashbash/formats/modelimport.py",
+    "crashbash/formats/placewrite.py",
     "crashbash/formats/scenewrite.py",
     "crashbash/formats/tex.py",
     "crashbash/formats/texwrite.py",

@@ -347,11 +347,77 @@ Five things had to be got right for that, and each was wrong first:
   matching cannot tell apart two vertices at one position, which is the same
   failure from the other end.
 
-One convention came out of the same measurement: a frame that blends two keys
-names **the lower key first**, as every shipped frame does. Naming the stronger
-key first is the same blend read from the other end — `a + (b−a)·0.75` against
-`b + (a−b)·0.25` — and the game's INTPL works in fixed point, so the two round
-apart by a unit.
+A frame that blends two keys states them in **either order**: `chars/crate/coco`'s
+BREATHE frame 11 is key 1 → key 0 at weight 409, while every frame of
+`cutscene/level_shot12` runs ascending. `a + (b−a)·w` and `b + (a−b)·(1−w)` are
+the same blend read from opposite ends, and reading the pair back off two shape
+key values recovers the blend and not the order — so an add-on that decides
+whether a clip changed has to canonicalise, and one that wants the file's own
+ordering back has to keep the clip rather than rebuild it.
+
+## Editing nothing costs nothing
+
+An import that changed nothing comes back **byte for byte identical**, which is
+the sharpest thing that can be said about a pipeline: meshes recognised as
+untouched and never re-striped, clips copied, the shot's tracks, camera keys and
+particle emitters written back exactly as the file stated them. Measured on
+`chars/crate/coco`, `mainmenu/models`, `cutscene/intro_eurocom` and
+`arena/crate_jungle`: 0 bytes differ on all four.
+
+That took two rules the writer did not have:
+
+* **A clip that did not change is copied, not rebuilt.** Rebuilding lays down a
+  fresh pose pool, and the pose pool is most of what a model weighs. Whether an
+  unchanged clip *may* be copied depends on the mesh, so the front end says only
+  that it is unchanged and `import_payload` decides: a clip whose mesh was
+  rebuilt indexes a different pool and has to be rebuilt with it.
+* **The animation region is left alone entirely when nothing was installed and
+  every clip was copied.** Stripping it and putting the same blobs back is not
+  free: `chars/crate/coco` comes back four bytes short and `mainmenu/models`
+  grows 276,712 → 343,660, a quarter again, for an edit that changed nothing.
+  The hub is where the memory budget bites, so a file that grows for nothing is
+  a file that may not load.
+
+## A level, and its particles
+
+Two things a model holds that no interchange format carries, and both are
+editable through the add-on:
+
+**The placement list (§8.5)** is what a level *is*. `warp_room1` has 81 records
+and not one names any of its 42 numbered meshes, so the room the player walks
+through is object-pool meshes standing where these records put them. The add-on
+builds an object per record, sharing the mesh data of what the record names.
+Move one and export: measured on `warp_room1`, **one byte** changes and the file
+keeps its size; on `arena/crate_jungle`, three. No other record moves.
+
+Getting that right needed the same reference trick the meshes use. The file's
+rotation is quantised to 1/4096 and so is not exactly orthonormal, and Blender
+keeps a transform as location, euler and scale — so recomposing it never gives
+the nine values back. Compared against the file, 24 of `warp_room1`'s 81
+untouched records read as moved; compared against what the importer's own
+transform reads back as, none do. (Assigning a nested Python list to
+`matrix_basis` is also accepted and quietly does nothing, which stood every
+placement at the origin while the check agreed with itself throughout.)
+
+**A particle emitter (§9.11.7)** is a node that sprays copies of one mesh: a
+budget, a rate, a lifetime, a speed range, a yaw and pitch cone, an
+acceleration, a damping, a spin, and two ramps that fade and grow each particle.
+The add-on gives each one an empty carrying every field, and changing one writes
+one word — measured on `cutscene/intro_eurocom`, a lifetime of 24 to 29 is
+**one byte**. *Bake Particle Preview* runs the game's own simulation and
+keyframes every live particle so the spray can be watched: 136 particles over
+672 ticks for that shot's eight emitters. It is a preview, the export ignores
+it, and it goes stale the moment an emitter is edited.
+
+The rest of the shot — the actor and prop tracks, the camera keys, the
+sub-scene frames — is carried through as the file states it rather than
+re-derived from anything Blender could say about it. Two traps were paid for
+there: the node names its mesh by *id* in the 0x2000 namespace and the reader
+reports an *index*, so writing the index back aimed every emitter at the wrong
+mesh and eight of them vanished from a shot that had been patched with nothing
+changed; and a sub-scene's emitter has its position moved into the parent's
+frame, which has to come off again before the node's own three words are
+written.
 
 ## The whole trip, measured
 
