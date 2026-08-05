@@ -222,10 +222,10 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
 
 
 class CRASHBASH_OT_bake_particles(bpy.types.Operator):
-    """Simulate every emitter and keyframe its particles so the spray is visible"""
+    """Play the shot: actors and props on their tracks, the camera, the particles"""
 
-    bl_idname = "crashbash.bake_particles"
-    bl_label = "Bake Particle Preview"
+    bl_idname = "crashbash.bake_shot"
+    bl_label = "Bake Shot Preview"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -247,27 +247,47 @@ class CRASHBASH_OT_bake_particles(bpy.types.Operator):
             model = read_model(model_data)
             clips = read_animations(model_data, model)
             stem = collection.get(N.PROP_ENTRY, "model").rsplit("/", 1)[-1]
-            made, frames = build_scene.bake_particles(
+            made = build_scene.bake_shot(
                 collection, model_data, model, clips, stem.rsplit(".", 1)[0])
         except Exception as exc:  # noqa: BLE001
             self.report({"ERROR"}, f"{type(exc).__name__}: {exc}")
             return {"CANCELLED"}
         if not made:
-            self.report({"INFO"}, "this shot has no particle emitters")
+            self.report({"INFO"}, "this model carries no shot")
             return {"CANCELLED"}
         self.report({"INFO"}, (
-            f"{made} particles keyframed over {frames} ticks. It is a preview: "
-            f"the export ignores it, and editing an emitter makes it stale"))
+            f"{made['actors']} actors, {made['props']} props, "
+            f"{made['cameras']} cameras and {made['particles']} particles "
+            f"keyframed over {made['ticks']} ticks. It is a preview: the "
+            f"export ignores it and it goes stale when the shot is edited"))
         return {"FINISHED"}
 
 
 def _target(context) -> bpy.types.Collection | None:
-    """The imported collection the user means: the active object's, or the only one."""
-    obj = context.active_object
-    if obj is not None:
+    """The imported collection the user means.
+
+    Widest to narrowest, because two models open at once is the ordinary case:
+    whatever the active object belongs to, then whatever the scene holds, then
+    the only one in the file. Stopping at "the only one" left both operators
+    unavailable the moment a second model was imported.
+    """
+    def owner(obj):
         for collection in obj.users_collection:
             if collection.get(N.PROP_ENTRY):
                 return collection
+            for parent in bpy.data.collections:
+                if (parent.get(N.PROP_ENTRY)
+                        and collection.name in parent.children):
+                    return parent
+        return None
+
+    for obj in [context.active_object] + list(context.selected_objects or []):
+        if obj is not None and owner(obj) is not None:
+            return owner(obj)
+    here = [c for c in context.scene.collection.children_recursive
+            if c.get(N.PROP_ENTRY)]
+    if len(here) == 1:
+        return here[0]
     found = [c for c in bpy.data.collections if c.get(N.PROP_ENTRY)]
     return found[0] if len(found) == 1 else None
 

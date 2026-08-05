@@ -60,10 +60,14 @@ EMITTER_FIELDS = (
 # On anything the add-on drew only to be looked at. The exporter skips it, and
 # it goes stale the moment the emitter it came from is edited.
 PROP_PREVIEW = "crashbash_preview"
+# What each preview object stands for, so the panel can name it.
+PROP_SHOT_PROP = "crashbash_shot_prop"
+PROP_SHOT_ACTOR = "crashbash_shot_actor"
+PROP_SHOT_CAMERA = "crashbash_shot_camera"
 
 OBJECT_EMITTER = "{stem}_emitter{index:02d}"
 COLLECTION_SHOT = "{stem} shot"
-COLLECTION_PREVIEW = "{stem} particle preview"
+COLLECTION_PREVIEW = "{stem} shot preview"
 
 # On an object, for information: what the file says and the add-on does not edit.
 PROP_VOLUMES = "crashbash_volumes"  # the +0x2C collision records (§8.4)

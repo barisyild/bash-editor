@@ -23,7 +23,8 @@ import bpy
 from . import actions, build_scene, naming as N
 from .build_scene import SCALE, read_image, to_model
 
-SHAPE_KEY = re.compile(r"^(?P<label>.+)#(?P<key>\d+)$")
+# The shape key naming lives with the half that writes it.
+SHAPE_KEY = build_scene.SHAPE_KEY_NAME
 
 
 def _objects(collection: bpy.types.Collection) -> dict[int, bpy.types.Object]:

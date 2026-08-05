@@ -16,11 +16,17 @@ every triangle it should draw and nothing on a static render would say so.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 import bpy
 
 from . import actions, naming as N
+
+# The shape keys a clip's poses are stored under. The exporter reads them back
+# with the same pattern; it lives here because the shot preview matches them too.
+SHAPE_KEY_NAME = re.compile(r"^(?P<label>.+)#(?P<key>\d+)$")
 
 # Model units to Blender units. The same scale the glTF exporter uses, so a
 # measurement taken through one path means the same through the other.
@@ -117,6 +123,10 @@ def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None
     single-texel reads a swatch face is made of.
     """
     material.use_nodes = True
+    # The console culls backfaces, so a surface seen from its wrong side is not
+    # there -- and a shot's camera stands inside the room it films. Left off,
+    # the backdrop shell drew over everything the shot was pointed at.
+    material.use_backface_culling = True
     tree = material.node_tree
     tree.nodes.clear()
     output = tree.nodes.new("ShaderNodeOutputMaterial")
@@ -599,8 +609,183 @@ def _build_shot(collection, model, model_data: bytes, clips, stem: str,
         f"{len(shot.emitters)} particle emitter(s) you can edit")
 
 
-def bake_particles(collection, model_data: bytes, model, clips, stem: str
-                   ) -> tuple[int, int]:
+def _point(scaled) -> tuple[float, float, float]:
+    """A shot's point -- eye, target, a key's position -- into Blender units."""
+    return tuple(float(v) for v in
+                 to_blender(np.asarray([scaled], dtype=np.float64) / SCALE)[0])
+
+
+def _orientation(quaternion):
+    """A key's rotation into Blender's frame, basis change and all."""
+    from mathutils import Matrix  # noqa: PLC0415
+
+    from crashbash.scene import rotation_matrix
+
+    turn = BASIS @ rotation_matrix(quaternion) @ BASIS.T
+    return Matrix([[float(v) for v in row] for row in turn]).to_quaternion()
+
+
+def _shot_object(name, data, collection, marker: str):
+    obj = bpy.data.objects.new(name, data)
+    obj[N.PROP_PREVIEW] = True
+    obj[marker] = True
+    obj.rotation_mode = "QUATERNION"
+    collection.objects.link(obj)
+    return obj
+
+
+def _key_window(obj, first: int, last: int, start: int, end: int) -> None:
+    """Hide the object outside the window its node is open in.
+
+    Keyed rather than faked by scaling to zero, which is what an interchange
+    format has to do: a node is drawn while its window is open and not before
+    or after, and `level_shot8` has one that opens at tick 63 in a shot running
+    295..372 -- so it never opens at all.
+    """
+    for frame, hidden in ((first, start > first), (start, False),
+                          (end + 1, True), (last, True)):
+        if not first <= frame <= last:
+            continue
+        obj.hide_viewport = obj.hide_render = hidden
+        obj.keyframe_insert("hide_viewport", frame=frame + 1)
+        obj.keyframe_insert("hide_render", frame=frame + 1)
+    for curve in (obj.animation_data.action and actions.curves(
+            obj.animation_data.action) or []):
+        if "hide" in curve.data_path:
+            for point in curve.keyframe_points:
+                point.interpolation = "CONSTANT"
+
+
+def bake_shot(collection, model_data: bytes, model, clips, stem: str) -> dict:
+    """The whole shot as Blender animation: actors, props, camera, particles.
+
+    A cutscene is not its meshes standing at the origin. It is nodes carrying
+    those meshes along tracks while a camera films them (§9.11), and until this
+    existed the add-on could open a shot and never play it. Everything it makes
+    is a preview keyed on the shot's own 30 Hz clock: the export ignores it, and
+    the shot itself is carried back to the file exactly as it was read.
+    """
+    from crashbash.scene import read_scene
+
+    shot = read_scene(model_data, model, clips)
+    if shot is None:
+        return {}
+    old = bpy.data.collections.get(N.COLLECTION_PREVIEW.format(stem=stem))
+    if old is not None:
+        for obj in list(old.all_objects):
+            bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.collections.remove(old)
+    preview = bpy.data.collections.new(N.COLLECTION_PREVIEW.format(stem=stem))
+    collection.children.link(preview)
+
+    sources = {obj.get(N.PROP_MESH): obj for obj in collection.all_objects
+               if obj.type == "MESH" and obj.get(N.PROP_MESH) is not None
+               and not obj.get(N.PROP_PREVIEW)}
+    first, last = shot.start, shot.end
+    made = {"props": 0, "actors": 0, "cameras": 0, "particles": 0,
+            "ticks": max(last - first + 1, 0)}
+
+    for number, prop in enumerate(shot.props):
+        source = sources.get(prop.mesh_index)
+        if source is None:
+            continue
+        obj = _shot_object(f"{stem}_prop{number:02d}", source.data, preview,
+                           N.PROP_SHOT_PROP)
+        for tick in range(first, last + 1):
+            position, rotation, scale = prop.track.at(tick)
+            obj.location = _point(position)
+            obj.rotation_quaternion = _orientation(rotation)
+            obj.scale = tuple(float(v) for v in scale)
+            for path in ("location", "rotation_quaternion", "scale"):
+                obj.keyframe_insert(path, frame=tick + 1)
+        _key_window(obj, first, last, prop.track.start, prop.track.end)
+        made["props"] += 1
+
+    for number, actor in enumerate(shot.actors):
+        source = sources.get(actor.mesh_index)
+        if source is None:
+            continue
+        # Its own copy of the mesh: an actor plays a clip on the *shot's* clock
+        # and the source object plays it on the clip's own, and one set of shape
+        # keys cannot be driven two ways.
+        data = source.data.copy()
+        obj = _shot_object(f"{stem}_actor{number:02d}", data, preview,
+                           N.PROP_SHOT_ACTOR)
+        clip = clips[actor.clip_index] if 0 <= actor.clip_index < len(clips) else None
+        blocks = {}
+        if clip is not None and data.shape_keys is not None:
+            for block in data.shape_keys.key_blocks:
+                match = SHAPE_KEY_NAME.match(block.name)
+                if match and match.group("label") == clip.label:
+                    blocks[int(match.group("key"))] = block
+            if blocks:
+                actions.assign(data.shape_keys,
+                               actions.make(f"{stem}_shot_actor{number:02d}"))
+        at_key = {k: i for i, k in enumerate(clip.keyframes())} if clip else {}
+        for tick in range(first, last + 1):
+            position, rotation, scale = actor.track.at(tick)
+            obj.location = _point(position)
+            obj.rotation_quaternion = _orientation(rotation)
+            obj.scale = tuple(float(v) for v in scale)
+            for path in ("location", "rotation_quaternion", "scale"):
+                obj.keyframe_insert(path, frame=tick + 1)
+            if not blocks or clip is None:
+                continue
+            frame = clip.frames[actor.frame(tick, clip.frame_count)]
+            blend = frame.weight / 4096.0 if frame.key_b else 0.0
+            wanted = {at_key.get(frame.key_a): 1.0 - blend}
+            if frame.key_b:
+                wanted[at_key.get(frame.key_b)] = wanted.get(
+                    at_key.get(frame.key_b), 0.0) + blend
+            for number_key, block in blocks.items():
+                block.value = wanted.get(number_key, 0.0)
+                block.keyframe_insert("value", frame=tick + 1)
+        _key_window(obj, first, last, actor.track.start, actor.track.end)
+        made["actors"] += 1
+
+    if shot.cameras:
+        from mathutils import Vector  # noqa: PLC0415
+
+        lens = bpy.data.cameras.new(f"{stem}_camera")
+        lens.sensor_fit = "VERTICAL"
+        obj = _shot_object(f"{stem}_camera", lens, preview, N.PROP_SHOT_CAMERA)
+        obj.rotation_mode = "QUATERNION"
+        for tick in range(first, last + 1):
+            camera = shot.camera_at(tick)
+            if camera is None:
+                continue
+            eye, target = camera.at(tick)
+            obj.location = _point(eye)
+            obj.rotation_quaternion = (
+                Vector(_point(target)) - Vector(_point(eye))
+            ).to_track_quat("-Z", "Y")
+            lens.angle_y = np.radians(camera.field_of_view)
+            obj.keyframe_insert("location", frame=tick + 1)
+            obj.keyframe_insert("rotation_quaternion", frame=tick + 1)
+            lens.keyframe_insert("lens", frame=tick + 1)
+        made["cameras"] = len(shot.cameras)
+        bpy.context.scene.camera = obj
+
+    made["particles"] = _bake_particles(preview, shot, sources, stem)
+
+    # A mesh a node owns is drawn where the node carries it and nowhere else,
+    # so the source object standing at the origin is not part of the shot --
+    # and with the camera's eye a quarter of a unit from that origin, the pile
+    # of them is the only thing it can see.
+    owned = shot.mesh_indices
+    for index, obj in sources.items():
+        if index in owned:
+            obj.hide_set(True)
+            obj.hide_render = True
+    made["hidden"] = sum(1 for i in sources if i in owned)
+
+    scene = bpy.context.scene
+    scene.frame_start, scene.frame_end = first + 1, last + 1
+    scene.frame_set(first + 1)
+    return made
+
+
+def _bake_particles(preview, shot, sources, stem: str) -> int:
     """Instance every live particle, tick by tick, so the spray can be watched.
 
     A preview and nothing else: it is keyframed from the simulation the game
@@ -609,24 +794,10 @@ def bake_particles(collection, model_data: bytes, model, clips, stem: str
     otherwise invisible until the disc is built -- there is no other way to see
     whether an emitter aims where it was meant to.
     """
-    from crashbash.scene import read_scene
-
-    shot = read_scene(model_data, model, clips)
-    if shot is None or not shot.emitters:
-        return 0, 0
-    old = bpy.data.collections.get(N.COLLECTION_PREVIEW.format(stem=stem))
-    if old is not None:
-        for obj in list(old.objects):
-            bpy.data.objects.remove(obj, do_unlink=True)
-        bpy.data.collections.remove(old)
-    preview = bpy.data.collections.new(N.COLLECTION_PREVIEW.format(stem=stem))
-    collection.children.link(preview)
-
-    meshes = {obj.get(N.PROP_MESH): obj.data for obj in collection.all_objects
-              if obj.type == "MESH" and obj.get(N.PROP_MESH) is not None}
-    made = frames = 0
+    made = 0
     for index, emitter in enumerate(shot.emitters):
-        data = meshes.get(emitter.mesh_index)
+        source = sources.get(emitter.mesh_index)
+        data = source.data if source is not None else None
         slots = [bpy.data.objects.new(f"{stem}_spark{index:02d}_{n:03d}", data)
                  for n in range(emitter.budget)]
         for obj in slots:
@@ -635,7 +806,6 @@ def bake_particles(collection, model_data: bytes, model, clips, stem: str
         made += len(slots)
         for tick in range(emitter.start, emitter.end + 1):
             live = emitter.particles(tick)
-            frames += 1
             for slot, obj in enumerate(slots):
                 shown = live[slot] if slot < len(live) else None
                 if shown is None:
@@ -650,7 +820,7 @@ def bake_particles(collection, model_data: bytes, model, clips, stem: str
                 obj.keyframe_insert("location", frame=tick + 1)
                 obj.keyframe_insert("rotation_euler", frame=tick + 1)
                 obj.keyframe_insert("scale", frame=tick + 1)
-    return made, frames
+    return made
 
 
 # --- the whole model ------------------------------------------------------

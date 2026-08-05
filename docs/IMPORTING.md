@@ -441,9 +441,24 @@ export ignores it, and it goes stale the moment an emitter is edited.
 What cannot be done is add one. A node lives in a fixed graph and `patch_scene`
 resizes nothing, so the 23 emitters the game has are the 23 it can have.
 
-The rest of the shot — the actor and prop tracks, the camera keys, the
-sub-scene frames — is carried through as the file states it rather than
-re-derived from anything Blender could say about it. Two traps were paid for
+The rest of the shot **plays** rather than merely travelling. *Bake Shot
+Preview* keys every actor and prop along its track, opens and closes each node's
+window, drives each actor's clip from the shot's clock rather than the clip's
+own (§9.11 — the frame is counted from the node's window and re-zeroed against
+the play range), and sets the camera with the field of view its node names.
+`cutscene/level_shot12` comes out as 6 actors, 1 prop and a camera over 198
+ticks, and scrubbing the timeline is the cutscene. Two things had to be right
+for it to be watchable at all: the meshes a node owns are hidden where they
+stand at the origin, since that is not where the shot draws them; and materials
+are built with **backface culling on**, which is what the console does — without
+it the backdrop shell, whose faces correctly point inward, drew over everything
+the camera was aimed at.
+
+None of it is read back: the preview is marked and the exporter skips it, so an
+export with 144 preview objects in the scene still comes out byte-identical. The
+shot's own data — the tracks, the camera keys, the sub-scene frames — is carried
+as the file states it rather than re-derived from anything Blender could say
+about it. Two traps were paid for
 there: the node names its mesh by *id* in the 0x2000 namespace and the reader
 reports an *index*, so writing the index back aimed every emitter at the wrong
 mesh and eight of them vanished from a shot that had been patched with nothing

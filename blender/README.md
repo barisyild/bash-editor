@@ -55,6 +55,24 @@ An **object-pool mesh** can be rebuilt, but only inside the span it already
 owns: the pool is one packed run and a mesh whose blocks leave it boots to a
 black screen. The writer measures and refuses rather than build that disc.
 
+## Watching a cutscene
+
+**Bake Shot Preview** in the sidebar plays the shot (§9.11): every actor and
+prop keyed along its own track, each clip playing on the shot's clock rather
+than its own, the node windows opening and closing, the camera set as the
+scene's with the field of view its node names — and the particles with them.
+Scrub the timeline and the cutscene plays; `cutscene/level_shot12` comes out as
+6 actors, 1 prop and a camera over 198 ticks.
+
+It is a preview and nothing else: everything it makes is marked, the export
+ignores it, and the shot itself goes back to the file exactly as it was read.
+The meshes a node owns are hidden where they stand at the origin, because that
+is not where the shot draws them.
+
+Materials are built with **backface culling on**, which is what the console
+does. Without it the backdrop shell — whose faces correctly point inward — drew
+over everything the camera was aimed at.
+
 A **particle emitter** has no representation in any interchange format, so it
 gets one here: an empty carrying all sixteen fields — the window it runs in,
 when it stops spawning, the budget, the rate, the lifetime, the mesh it sprays,
