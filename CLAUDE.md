@@ -500,3 +500,15 @@ Distrust previews. A flat-shaded preview cannot show sub-triangle texture, and
 no static render can show draw-time flags. For those the emulator is the only
 honest renderer, and the user runs it — so state plainly what has and has not
 been checked on screen.
+
+**The Blender path has reached hardware.** `out/crashbash-eurocom-burst.bin`
+runs: the intro's first emitter edited in Blender and exported through the
+add-on, built by patching the original image, and confirmed on screen by the
+user. Read back out of the built disc with the same parser, **1 of its 992
+entries differs** and it is the same 44,764 bytes as the one it replaced —
+`intro_eurocom`'s emitter 0 at lifetime 24 → 72, speed (100, 300) → (400, 1200)
+and window end 110 → 170. So a scene-node field edit survives Blender, the
+exporter, the DAT repack and the ISO patch, and the game's simulation runs on
+what came back. Nothing else about the add-on is settled by this: it changed no
+geometry, no clip and no texture, which are the parts a console has still never
+been shown.

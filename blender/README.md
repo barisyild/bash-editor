@@ -95,7 +95,12 @@ when it stops spawning, the budget, the rate, the lifetime, the mesh it sprays,
 the speed range, the yaw and pitch cones, the acceleration, the damping, the
 spin, and the fade and grow ramps. Change one and export: one field, one word,
 the file the same size. Every field of every one of the game's 23 emitters was
-changed and read back — 368 of 368 survived. You cannot *add* one; a node lives
+changed and read back — 368 of 368 survived. **One of those edits has been run on
+hardware**: the intro's first emitter taken to a lifetime of 72, a speed range of
+(400, 1200) and a window reaching tick 170, exported here, built into a disc by
+patching the original image, and confirmed on screen. Read back out of that disc
+with the same parser, 1 of its 992 entries differs and it is the same 44,764 bytes
+as the one it replaced. You cannot *add* an emitter; a node lives
 in a fixed graph. **Bake Particle Preview** in the sidebar runs the game's own
 simulation and keyframes every live particle so the spray can be watched; it is
 a preview, the export ignores it, and it goes stale as soon as an emitter is

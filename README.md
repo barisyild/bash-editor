@@ -400,6 +400,12 @@ a character, a level and a cutscene all measured at 0 bytes different — and
 forcing 90 shipped models through the writer reproduces 71,311 of 71,311
 triangles, position, colour, UV, texture entry and corner order alike.
 
+A disc built through it **runs**: the intro's first particle emitter edited in
+Blender, exported, and the image patched in place. Read back out of that disc, 1
+of its 992 entries differs and it is the same size as the one it replaced. That
+settles the emitter path on hardware and nothing more — geometry, clips and
+textures from this add-on have not been on a console yet.
+
 ## Command line
 
 ```bash
