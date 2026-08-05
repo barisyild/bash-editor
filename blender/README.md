@@ -73,6 +73,16 @@ Materials are built with **backface culling on**, which is what the console
 does. Without it the backdrop shell — whose faces correctly point inward — drew
 over everything the camera was aimed at.
 
+They also take their result back to scene-linear before emitting it. What the
+console computes — `texel × colour / 128` — is a display value bound for a TV,
+and Blender treats what a shader emits as linear and encodes it on the way to
+the screen, so handing the product over as it stands brightens everything.
+Measured on a flat quad against the console's own formula: a texel of 128 under
+a colour of 128 should draw 128 and drew **188**, 32 drew 99. With the transfer
+in place the worst error over the range is **3 of 255**, in the deepest
+shadows. Keep the view transform on **Standard**, which the importer sets — the
+shader is the exact inverse of that one.
+
 A **particle emitter** has no representation in any interchange format, so it
 gets one here: an empty carrying all sixteen fields — the window it runs in,
 when it stops spawning, the budget, the rate, the lifetime, the mesh it sprays,

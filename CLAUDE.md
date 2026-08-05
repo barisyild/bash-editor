@@ -255,6 +255,14 @@ They are not style preferences.
   sampling it are the two mirrored triples at the sides of her head. Moving that
   palette to another pack still needs the entry translated to whatever the
   destination means by it; what was wrong was calling it that pack's key.
+- **`texel * colour / 128` is a display value, not a linear one.** A renderer
+  that treats it as scene-linear and encodes it for the screen brightens
+  everything: measured against the console's own formula on a flat quad, 128
+  under 128 should draw 128 and drew **188**, 32 drew 99. Blender's Standard
+  view transform is exactly the sRGB curve, measured emission to file byte, so
+  the preview shader applies its inverse — `((c + 0.055) / 1.055) ** 2.4`, with
+  the value at zero taken off again so black stays black. Worst error over the
+  range afterwards: 3 of 255.
 - **Magenta out of a *reader* is a different thing entirely** — `to_rgba` fills
   with it when there is no palette to decode through, which is how a swatch
   texture comes out (§6.2: it carries none of its own, `0x80028EE8` compares

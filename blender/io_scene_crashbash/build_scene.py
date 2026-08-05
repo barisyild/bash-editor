@@ -114,6 +114,59 @@ def read_image(image: bpy.types.Image) -> np.ndarray:
     return np.clip(np.round(rgba * 255.0), 0, 255).astype(np.uint8)
 
 
+# sRGB, and it has to be: measured emission to file byte, Blender's Standard
+# view transform is that curve to the unit. `(c + 0.055) / 1.055` raised to 2.4
+# is its inverse above the toe, and the toe itself is worth one more pair of
+# nodes -- without them black leaves at 3 of 255 instead of 0.
+SRGB_OFFSET = 0.055
+SRGB_SCALE = 1.0 / 1.055
+SRGB_POWER = 2.4
+SRGB_AT_ZERO = (SRGB_OFFSET * SRGB_SCALE) ** SRGB_POWER
+
+
+def _to_linear(tree, source):
+    """Take a display value back to scene-linear, so the view transform undoes it.
+
+    `texel * colour / 128` is what the console puts on a TV -- an 8-bit display
+    value -- and Blender treats what a shader emits as scene-linear and encodes
+    it on the way to the screen. Handing the product over as it stands therefore
+    brightens everything, and not slightly: measured on a flat quad, a texel of
+    128 under a colour of 128 should draw 128 and drew **188**; 32 drew 99. That
+    is the washed-out look, and it was in the viewport and the render alike.
+    """
+    offset = tree.nodes.new("ShaderNodeVectorMath")
+    offset.operation = "ADD"
+    offset.location = (100, -240)
+    offset.inputs[1].default_value = (SRGB_OFFSET,) * 3
+    tree.links.new(source.outputs["Vector"], offset.inputs[0])
+
+    scale = tree.nodes.new("ShaderNodeVectorMath")
+    scale.operation = "SCALE"
+    scale.location = (240, -240)
+    scale.inputs["Scale"].default_value = SRGB_SCALE
+    tree.links.new(offset.outputs["Vector"], scale.inputs[0])
+
+    curve = tree.nodes.new("ShaderNodeGamma")
+    curve.location = (380, -240)
+    curve.inputs["Gamma"].default_value = SRGB_POWER
+    tree.links.new(scale.outputs["Vector"], curve.inputs["Color"])
+
+    # The curve does not pass through the origin -- sRGB has a linear toe there
+    # -- so its value at zero comes off again and the result is floored.
+    lift = tree.nodes.new("ShaderNodeVectorMath")
+    lift.operation = "SUBTRACT"
+    lift.location = (520, -240)
+    lift.inputs[1].default_value = (SRGB_AT_ZERO,) * 3
+    tree.links.new(curve.outputs["Color"], lift.inputs[0])
+
+    floor = tree.nodes.new("ShaderNodeVectorMath")
+    floor.operation = "MAXIMUM"
+    floor.location = (660, -240)
+    floor.inputs[1].default_value = (0.0, 0.0, 0.0)
+    tree.links.new(lift.outputs["Vector"], floor.inputs[0])
+    return floor
+
+
 def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None:
     """Draw the face the way the console does: texel x colour x 2, no lighting.
 
@@ -144,9 +197,11 @@ def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None
     gain.location = (0, -100)
     gain.inputs["Scale"].default_value = COLOUR_GAIN
 
+    display = _to_linear(tree, gain)
+
     if image is None:
         tree.links.new(attribute.outputs["Color"], gain.inputs[0])
-        tree.links.new(gain.outputs["Vector"], emission.inputs["Color"])
+        tree.links.new(display.outputs["Vector"], emission.inputs["Color"])
         tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
         return
 
@@ -162,7 +217,7 @@ def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None
     tree.links.new(texture.outputs["Color"], product.inputs[0])
     tree.links.new(attribute.outputs["Color"], product.inputs[1])
     tree.links.new(product.outputs["Vector"], gain.inputs[0])
-    tree.links.new(gain.outputs["Vector"], emission.inputs["Color"])
+    tree.links.new(display.outputs["Vector"], emission.inputs["Color"])
 
     # BGR555 0x0000 is the hardware's skip pixel, which `to_rgba` gives an alpha
     # of zero; a genuinely black texel carries the STP bit and stays opaque.
