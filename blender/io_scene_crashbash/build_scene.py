@@ -794,10 +794,21 @@ def bake_shot(collection, model_data: bytes, model, clips, stem: str) -> dict:
         clip = clips[actor.clip_index] if 0 <= actor.clip_index < len(clips) else None
         blocks = {}
         if clip is not None and data.shape_keys is not None:
-            for block in data.shape_keys.key_blocks:
+            # Every clip of the mesh is a shape key on it, and Blender's are
+            # *relative*: a key left at 1 adds its whole delta to whatever else
+            # is set. The copy arrives with the source object's values frozen
+            # at whatever frame it was on, so an actor playing one clip was
+            # also carrying every other clip at full strength -- 21 of
+            # `level_shot12` actor 0's 28 keys, which pulled Crash's arms into
+            # spikes. The ones this clip does not use are removed outright.
+            for block in list(data.shape_keys.key_blocks):
+                if block == data.shape_keys.reference_key:
+                    continue
                 match = SHAPE_KEY_NAME.match(block.name)
                 if match and match.group("label") == clip.label:
                     blocks[int(match.group("key"))] = block
+                else:
+                    obj.shape_key_remove(block)
             if blocks:
                 actions.assign(data.shape_keys,
                                actions.make(f"{stem}_shot_actor{number:02d}"))

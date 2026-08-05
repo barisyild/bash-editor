@@ -454,6 +454,15 @@ are built with **backface culling on**, which is what the console does — witho
 it the backdrop shell, whose faces correctly point inward, drew over everything
 the camera was aimed at.
 
+An actor gets its own copy of the mesh, and that copy keeps **only the shape
+keys of the clip it plays**. Blender's shape keys are relative and they sum, so
+a key left at 1 adds its whole delta to whatever else is set — and the copy
+arrives with the source object's values frozen at whatever frame it was on. An
+actor playing one clip was therefore carrying every other clip at full
+strength: 21 of `level_shot12` actor 0's 28 keys, which pulled Crash's arms out
+into spikes several times his own height. A mesh with one clip had nothing to
+pile on, which is why Coco next to him looked right.
+
 None of it is read back: the preview is marked and the exporter skips it, so an
 export with 144 preview objects in the scene still comes out byte-identical. The
 shot's own data — the tracks, the camera keys, the sub-scene frames — is carried
