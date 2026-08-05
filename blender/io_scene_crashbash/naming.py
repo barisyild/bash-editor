@@ -124,3 +124,8 @@ FRAMES_PER_SECOND = 30
 # A stored texel is one byte, so 256 carries every value a face can hold and
 # the round trip stays exact even though nothing can be previewed.
 UNKNOWN_SIZE = (256, 256)
+
+# On a material: the GPU's semi-transparency for the faces wearing it (§6.3),
+# as the colour index's top three bits. Kept so the exporter reads the blend
+# back from the material rather than guessing it from corner positions.
+PROP_BLEND = "crashbash_blend"

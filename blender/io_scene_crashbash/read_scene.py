@@ -242,6 +242,10 @@ def read_mesh(obj, pack, sizes, problems, warnings):
 
     textures = np.full(len(triangles), -1, dtype=np.int64)
     uvs = np.zeros((len(triangles), 3, 2), dtype=np.uint8)
+    # The GPU's semi-transparency (§6.3), read off the material rather than
+    # recovered by matching corner positions: the material is where the
+    # importer put it, and two faces can share their sorted corners.
+    blend = np.zeros(len(triangles), dtype=np.uint8)
     outside: dict[int, int] = {}
     for row, triangle in enumerate(triangles):
         polygon = mesh.polygons[triangle.polygon_index]
@@ -249,6 +253,8 @@ def read_mesh(obj, pack, sizes, problems, warnings):
                     if polygon.material_index < len(mesh.materials) else None)
         entry, size = _texture_entry(material, sizes, problems, where)
         textures[row] = entry
+        if material is not None and material.get(N.PROP_BLEND) is not None:
+            blend[row] = int(material[N.PROP_BLEND]) & 7
         if size is None or uv_values is None:
             continue
         width, height = size
@@ -276,7 +282,7 @@ def read_mesh(obj, pack, sizes, problems, warnings):
     # of these vertices. Without it the core falls back to matching by rest
     # position, which cannot tell apart two vertices a clip drives apart.
     return MI.MeshPayload(positions=positions, colours=colours, uvs=uvs,
-                          textures=textures, vertices=vertices,
+                          textures=textures, blend=blend, vertices=vertices,
                           corner_vertices=corners)
 
 

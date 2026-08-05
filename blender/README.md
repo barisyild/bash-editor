@@ -110,6 +110,15 @@ its own swatch faces; what the console puts in that CLUT is not established
 (`0x80028EE8` compares against `0x7FFF` and skips the lookup), so this is a
 stated choice rather than a reading of the hardware.
 
+**Semi-transparency is drawn, not ignored.** Bits 13–15 of a face's colour index
+are the GPU's blend (§6.3), and 42,969 of the archive's triangles ask for one —
+including every particle the intro sprays, all of them `B + F`. Drawn opaque, a
+dark spark texture is a black square, which is what the sparks were. A material
+carries the mode (`crashbash_blend`, and an `_add` / `_avg` tail on its name) and
+the shader wires `B + F`, `B + F/4` and `B/2 + F/2` through Blender's own
+blending. `B − F` has no equivalent in EEVEE and is approximated by `B/2 + F/2`;
+it is 854 triangles of the archive.
+
 Magenta that is still there afterwards is the file's own: 120 palettes across 46
 packs hold `0xFC1F`, and every one of them also holds the `0x0000` the hardware
 skips — so it is a colour, and it draws.

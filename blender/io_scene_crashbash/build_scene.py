@@ -167,13 +167,29 @@ def _to_linear(tree, source):
     return floor
 
 
-def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None:
+# The GPU's semi-transparency, by the value of the colour index's top three
+# bits (§6.3). Bit 15 turns blending on and 13-14 pick the mode, and the two
+# never occur apart, so 0..3 are opaque and 4..7 are the four ABR modes. What
+# each mode does to the background B and the fragment F, and how much of F this
+# preview adds for it.
+BLEND_ADD = {5: 1.0, 7: 0.25}          # B + F, B + F/4
+BLEND_AVERAGE = {4: 0.5, 6: 0.5}       # B/2 + F/2, and B - F approximated by it
+
+
+def _shader(material: bpy.types.Material, image: bpy.types.Image | None,
+            blend: int = 0) -> None:
     """Draw the face the way the console does: texel x colour x 2, no lighting.
 
     An emission shader rather than a lit one, because the vertex colour *is* the
     lighting -- the hardware has no other. Nearest-neighbour sampling, because
     the console has no other either, and a bilinear preview hides exactly the
     single-texel reads a swatch face is made of.
+
+    `blend` is the colour index's top three bits (§6.3). 42,969 of the archive's
+    triangles ask for semi-transparency and every particle in `intro_eurocom`
+    asks for `B + F` -- drawn opaque, a dark spark texture is a black square,
+    which is what the sparks were. `B - F` has no equivalent in EEVEE and is
+    approximated by `B/2 + F/2`; it is 854 triangles of the archive.
     """
     material.use_nodes = True
     # The console culls backfaces, so a surface seen from its wrong side is not
@@ -199,8 +215,63 @@ def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None
 
     display = _to_linear(tree, gain)
 
+    def blended(alpha) -> bool:
+        """Wire the surface through the GPU's blend, and say whether it did."""
+        share = BLEND_ADD.get(blend) or BLEND_AVERAGE.get(blend)
+        if share is None:
+            return False
+        material.use_backface_culling = True
+        if hasattr(material, "surface_render_method"):
+            material.surface_render_method = "BLENDED"
+        elif hasattr(material, "blend_method"):
+            material.blend_method = "BLEND"
+        transparent = tree.nodes.new("ShaderNodeBsdfTransparent")
+        transparent.location = (400, 160)
+        if blend in BLEND_ADD:
+            # B + F: the background shows through everywhere and the fragment
+            # is added on top, which is what an Add Shader over a Transparent
+            # BSDF does. The skip pixel is honoured by scaling F by the alpha,
+            # so a skipped texel adds nothing at all.
+            weight = tree.nodes.new("ShaderNodeVectorMath")
+            weight.operation = "SCALE"
+            weight.location = (300, -240)
+            weight.inputs["Scale"].default_value = share
+            tree.links.new(display.outputs["Vector"], weight.inputs[0])
+            if alpha is not None:
+                fade = tree.nodes.new("ShaderNodeVectorMath")
+                fade.operation = "SCALE"
+                fade.location = (340, -320)
+                tree.links.new(weight.outputs["Vector"], fade.inputs[0])
+                tree.links.new(alpha, fade.inputs["Scale"])
+                weight = fade
+            tree.links.new(weight.outputs["Vector"], emission.inputs["Color"])
+            add = tree.nodes.new("ShaderNodeAddShader")
+            add.location = (520, 0)
+            tree.links.new(transparent.outputs["BSDF"], add.inputs[0])
+            tree.links.new(emission.outputs["Emission"], add.inputs[1])
+            tree.links.new(add.outputs["Shader"], output.inputs["Surface"])
+            return True
+        # B/2 + F/2, and B - F approximated by it: half of each.
+        tree.links.new(display.outputs["Vector"], emission.inputs["Color"])
+        mix = tree.nodes.new("ShaderNodeMixShader")
+        mix.location = (520, 0)
+        mix.inputs["Fac"].default_value = share
+        if alpha is not None:
+            scale = tree.nodes.new("ShaderNodeMath")
+            scale.operation = "MULTIPLY"
+            scale.location = (340, 120)
+            scale.inputs[1].default_value = share
+            tree.links.new(alpha, scale.inputs[0])
+            tree.links.new(scale.outputs["Value"], mix.inputs["Fac"])
+        tree.links.new(transparent.outputs["BSDF"], mix.inputs[1])
+        tree.links.new(emission.outputs["Emission"], mix.inputs[2])
+        tree.links.new(mix.outputs["Shader"], output.inputs["Surface"])
+        return True
+
     if image is None:
         tree.links.new(attribute.outputs["Color"], gain.inputs[0])
+        if blended(None):
+            return
         tree.links.new(display.outputs["Vector"], emission.inputs["Color"])
         tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
         return
@@ -217,6 +288,8 @@ def _shader(material: bpy.types.Material, image: bpy.types.Image | None) -> None
     tree.links.new(texture.outputs["Color"], product.inputs[0])
     tree.links.new(attribute.outputs["Color"], product.inputs[1])
     tree.links.new(product.outputs["Vector"], gain.inputs[0])
+    if blended(texture.outputs["Alpha"]):
+        return
     tree.links.new(display.outputs["Vector"], emission.inputs["Color"])
 
     # BGR555 0x0000 is the hardware's skip pixel, which `to_rgba` gives an alpha
@@ -258,7 +331,8 @@ class Materials:
         return None
 
     def for_slot(self, slot: int, notes: list[str],
-                 palette: int | None = None) -> bpy.types.Material:
+                 palette: int | None = None,
+                 blend: int = 0) -> bpy.types.Material:
         texture = (self.pack.textures[slot]
                    if self.pack and 0 <= slot < len(self.pack.textures) else None)
         # A slot may *be* the pack's swatch image -- 23,413 textured faces
@@ -271,18 +345,20 @@ class Materials:
         # mesh names for its own swatch faces is a choice, and a far better one
         # than magenta.
         if texture is not None and texture.is_swatch and palette is not None:
-            key = ("slot", slot, palette)
+            key = ("slot", slot, palette, blend)
             if key in self.by_key:
                 return self.by_key[key]
             material = bpy.data.materials.new(
-                f"{texture.name}_p{palette:03d}")
+                f"{texture.name}_p{palette:03d}{_blend_suffix(blend)}")
             material[N.PROP_SLOT] = slot
+            material[N.PROP_BLEND] = blend
             _shader(material, _image(
                 f"{N.IMAGE_SLOT.format(stem=self.stem, slot=slot)}_p{palette:03d}",
-                texture.to_rgba(self.pack.palettes, palette_override=palette)))
+                texture.to_rgba(self.pack.palettes, palette_override=palette)),
+                blend)
             self.by_key[key] = material
             return material
-        key = ("slot", slot)
+        key = ("slot", slot, blend)
         if key in self.by_key:
             return self.by_key[key]
         if texture is None:
@@ -291,9 +367,11 @@ class Materials:
             # picture cannot be shown, but the entry and its texels still have
             # to survive the trip, so the UVs are addressed against a nominal
             # 256x256: a stored texel is a byte, so that carries all of them.
-            material = bpy.data.materials.new(f"tex_{slot:03d}_unresolved")
+            material = bpy.data.materials.new(
+                f"tex_{slot:03d}_unresolved{_blend_suffix(blend)}")
             material[N.PROP_SLOT] = slot
-            _shader(material, None)
+            material[N.PROP_BLEND] = blend
+            _shader(material, None, blend)
             notes.append(
                 f"slot {slot} is not in this pack ({len(self.pack.textures) if self.pack else 0} "
                 f"textures), so its faces have no picture to show; the slot and "
@@ -303,11 +381,12 @@ class Materials:
         # The pack's own name for it, `_swatch` suffix and all: a face may name
         # the swatch image as an ordinary slot, and that is worth seeing in the
         # material list rather than discovering from a magenta preview.
-        material = bpy.data.materials.new(texture.name)
+        material = bpy.data.materials.new(texture.name + _blend_suffix(blend))
         material[N.PROP_SLOT] = slot
+        material[N.PROP_BLEND] = blend
         _shader(material, _image(
             N.IMAGE_SLOT.format(stem=self.stem, slot=slot),
-            texture.to_rgba(self.pack.palettes)))
+            texture.to_rgba(self.pack.palettes)), blend)
         # A slot the pack animates does not hold one picture. Shown so an
         # artist repainting it knows what they are repainting -- the base
         # frame -- and not written back: nothing in this project writes a
@@ -328,13 +407,15 @@ class Materials:
         self.by_key[key] = material
         return material
 
-    def for_swatch(self, palette: int, notes: list[str]) -> bpy.types.Material:
-        key = ("swatch", palette)
+    def for_swatch(self, palette: int, notes: list[str],
+                   blend: int = 0) -> bpy.types.Material:
+        key = ("swatch", palette, blend)
         if key in self.by_key:
             return self.by_key[key]
         material = bpy.data.materials.new(
-            N.MATERIAL_SWATCH.format(palette=palette))
+            N.MATERIAL_SWATCH.format(palette=palette) + _blend_suffix(blend))
         material[N.PROP_PALETTE] = palette
+        material[N.PROP_BLEND] = blend
         image = None
         if self.swatch is not None:
             # Decoded through this palette, so the artist sees the colours the
@@ -342,15 +423,17 @@ class Materials:
             image = _image(
                 N.IMAGE_SWATCH.format(stem=self.stem, palette=palette),
                 self.swatch.to_rgba(self.pack.palettes, palette_override=palette))
-        _shader(material, image)
+        _shader(material, image, blend)
         self.by_key[key] = material
         return material
 
-    def plain(self) -> bpy.types.Material:
-        key = ("plain",)
+    def plain(self, blend: int = 0) -> bpy.types.Material:
+        key = ("plain", blend)
         if key not in self.by_key:
-            material = bpy.data.materials.new(N.MATERIAL_PLAIN)
-            _shader(material, None)
+            material = bpy.data.materials.new(
+                N.MATERIAL_PLAIN + _blend_suffix(blend))
+            material[N.PROP_BLEND] = blend
+            _shader(material, None, blend)
             self.by_key[key] = material
         return self.by_key[key]
 
@@ -404,14 +487,19 @@ def _weld(payload) -> tuple[np.ndarray, np.ndarray]:
     return unique, inverse.reshape(-1, 3)
 
 
+def _blend_suffix(blend: int) -> str:
+    """A readable tail for a material that asks for semi-transparency (§6.3)."""
+    return {4: "_avg", 5: "_add", 6: "_sub", 7: "_add4"}.get(blend, "")
+
+
 def _entry_material(entry: int, materials: Materials, notes: list[str],
-                    swatch: int = 0) -> bpy.types.Material:
+                    swatch: int = 0, blend: int = 0) -> bpy.types.Material:
     if entry >= 0:
         return materials.for_slot(entry, notes,
-                                  (swatch & 0x1FF) if swatch else None)
+                                  (swatch & 0x1FF) if swatch else None, blend)
     if entry < -1:
-        return materials.for_swatch((-entry) & 0x1FF, notes)
-    return materials.plain()
+        return materials.for_swatch((-entry) & 0x1FF, notes, blend)
+    return materials.plain(blend)
 
 
 def build_mesh(name: str, payload, materials: Materials, notes: list[str],
@@ -449,15 +537,19 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
             f"so the mesh is built one vertex per corner and has no shared edges")
 
     # Materials, and the face -> material map that carries the texture entry.
-    order: dict[int, int] = {}
+    order: dict[tuple, int] = {}
     material_index = np.zeros(faces, dtype=np.int32)
+    blends = (payload.blend if payload.blend is not None
+              else np.zeros(faces, dtype=np.uint8))
     for face in range(faces):
-        entry = int(payload.textures[face])
-        if entry not in order:
-            order[entry] = len(order)
+        # The blend is per face and belongs in the key: a slot drawn opaque and
+        # the same slot drawn additively are two materials.
+        key = (int(payload.textures[face]), int(blends[face]))
+        if key not in order:
+            order[key] = len(order)
             mesh.materials.append(
-                _entry_material(entry, materials, notes, swatch))
-        material_index[face] = order[entry]
+                _entry_material(key[0], materials, notes, swatch, key[1]))
+        material_index[face] = order[key]
     mesh.polygons.foreach_set("material_index", material_index)
 
     # Colours per corner, 0..1 standing for the file's 0..255.
