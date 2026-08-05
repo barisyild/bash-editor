@@ -126,6 +126,13 @@ class ImportRequest:
     # this list names and nothing else (§8.5), so rewriting a record is the one
     # edit that changes a level -- and the list cannot be made longer.
     placements: dict[int, dict] = field(default_factory=dict)
+    # Records to add to the end of the list, each the same `{"id",
+    # "translation", "rotation"}` and a `"copies"` naming the record whose 160
+    # bytes to start from -- every field this project does not understand then
+    # arrives set to something the game already ran. The list can only grow into
+    # the padding the resident region ends with, so `placewrite.spare_capacity`
+    # bounds it and anything past that is refused rather than dropped.
+    new_placements: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     # Reasons to refuse. Collected rather than raised one at a time so an
     # artist sees every problem in the file at once.
@@ -150,6 +157,7 @@ class Report:
     textures_unchanged: list[int] = field(default_factory=list)
     palettes_shared: list[int] = field(default_factory=list)
     placements_written: list[int] = field(default_factory=list)
+    placements_added: list[int] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     scene: SW.Patched | None = None
     model: bytes = b""
@@ -710,6 +718,30 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             model = read_model(model_data)
             clips = read_animations(model_data, model)
 
+    if request.new_placements:
+        room = PW.spare_capacity(model_data, model)
+        if len(request.new_placements) > room:
+            raise ValueError(
+                f"{len(request.new_placements)} record(s) to add and room for "
+                f"{room}: the list grows into the padding the resident region "
+                f"ends with, and nothing past that is loaded at run time")
+        by_index = {i.index: i for i in model.instances}
+        for edit in request.new_placements:
+            source = by_index.get(edit.get("copies", 0))
+            if source is None:
+                raise ValueError(
+                    f"a new placement copies record {edit.get('copies')}, which "
+                    f"this model does not have")
+            model_data = PW.append_placement(
+                model_data, model, source,
+                identifier=edit.get("id"),
+                translation=edit.get("translation"),
+                rotation=edit.get("rotation"))
+            model = read_model(model_data)
+            by_index = {i.index: i for i in model.instances}
+            report.placements_added.append(model.instances[-1].index)
+        clips = read_animations(model_data, model)
+
     if not request.meshes:
         # A scene patch is already done and valid at this point, and five
         # arenas reach here every time: they have no numbered meshes at all,
@@ -717,7 +749,7 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         # writers cannot install into. Raising would throw away a finished edit
         # to their 56 placement records, so the scene-only result is returned
         # instead -- and only a source that changed nothing is an error.
-        wrote = bool(report.placements_written) or (
+        wrote = bool(report.placements_written or report.placements_added) or (
             report.scene is not None and report.scene.total)
         if not wrote:
             raise ValueError(request.empty_error)

@@ -73,6 +73,7 @@ PLACEMENT_STRIDE = 160
 PLACEMENT_FLAGS = 0x00
 PLACEMENT_TRANSLATION = 0x04
 PLACEMENT_MATRIX = 0x28  # a libgte MATRIX: i16 m[3][3], pad, i32 t[3]
+PLACEMENT_MATRIX_T = 0x3C  # that MATRIX's t[3], equal to +0x04 in 2689/2689
 PLACEMENT_ID = 0x88
 PLACEMENT_FLAG_DRAWN = 0x8000  # tested at 0x8001DD6C before anything is drawn
 GTE_ONE = 4096  # 1.0 in the 3.12 fixed point a MATRIX rotation holds

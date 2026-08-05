@@ -157,10 +157,16 @@ They are not style preferences.
   array and block each grew by one record, and `+0x14`'s block still runs to
   `T(0x44)` (73/73). Read back, the room holds 82 placements with all 81
   originals byte-identical and nothing removed.
-  **This has not been on a console.** What a static check cannot settle is
-  whether anything outside the span points into it: a scan finds 714 four-byte
-  words that resolve there, and it cannot tell a pointer from a vertex that
-  lands there by chance. `out/crashbash-82nd-record.bin` is the experiment.
+  **`out/crashbash-82nd-record.bin` runs**, so nothing outside the span points
+  into it — which no static check could have settled, since the scan that looks
+  finds 714 four-byte words resolving there and cannot tell a pointer from a
+  vertex that lands there by chance.
+  `spare_capacity` says how much room a level has, and it is the padding at the
+  end of its resident region divided by 160: **53 records across 8 models** —
+  all five warp rooms, both demo hubs, and Oxide's chase level at 1746 spare
+  bytes. `warp_room1` takes 3. The other 65 levels take none; an arena typically
+  ends its resident region with 6 or 18 bytes of alignment. So a level's set can
+  grow, but only into what its own file already left empty.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an

@@ -196,7 +196,8 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
             model = read_model(model_data)
             clips = read_animations(model_data, model)
             pack = read_pack(pack_data) if pack_data else None
-            request = read_scene.build_request(collection, model, clips, pack)
+            request = read_scene.build_request(collection, model, clips, pack,
+                                               model_data=model_data)
             report = MI.import_payload(model_data, pack_data, request,
                                        animation_only=self.animation_only)
         except Exception as exc:  # noqa: BLE001
@@ -217,6 +218,7 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
             f"{len(report.meshes_unchanged)} untouched, "
             f"{len(report.clips_rebuilt)} clips rebuilt, "
             f"{len(report.placements_written)} placements moved, "
+            f"{len(report.placements_added)} added, "
             f"{len(report.textures_written)} textures written"))
         return {"FINISHED"}
 
@@ -350,7 +352,7 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
             box = layout.box()
             box.label(text=f"placement {obj[N.PROP_PLACEMENT]} places "
                            f"{obj.get(N.PROP_PLACES, 0):04X}", icon="EMPTY_AXIS")
-            box.label(text="move it and export; the list cannot grow")
+            box.label(text="move it and export; one record changes")
             if obj.get(N.PROP_SPARE):
                 box.label(text="spare: another record already places this "
                                "object", icon="CHECKMARK")

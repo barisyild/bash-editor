@@ -689,8 +689,8 @@ def build_clips(obj, mesh, rows: np.ndarray | None, clips, stem: str,
 # --- the level's set ------------------------------------------------------
 
 
-def _build_placements(collection, model, stem: str, by_id: dict,
-                      notes: list[str]) -> None:
+def _build_placements(collection, model, model_data: bytes, stem: str,
+                      by_id: dict, notes: list[str]) -> None:
     """One object per placement record, standing where the record stands it.
 
     This is what a level *is*: it draws what its placement list names and
@@ -749,10 +749,17 @@ def _build_placements(collection, model, stem: str, by_id: dict,
         obj[N.PROP_PLACE_REST] = list(rotation) + list(translation)
         obj.hide_render = not instance.is_drawn
         places.objects.link(obj)
-    notes.append(f"{len(model.instances)} placements, {len(spare)} of them "
-                 f"spare -- a record whose object another record already places. "
-                 f"The list cannot be made longer, so re-aiming a spare is how "
-                 f"something new goes into a level, and it costs a duplicate")
+    room = placewrite.spare_capacity(model_data, model)
+    notes.append(
+        f"{len(model.instances)} placements. {len(spare)} are spare -- a record "
+        f"whose object another record already places -- and re-aiming one puts "
+        f"something new in the level at the cost of a duplicate. "
+        + (f"The list can also take {room} more record(s): put an object in this "
+           f"collection with a '{N.PROP_PLACES}' saying what it places, and the "
+           f"export appends it."
+           if room else
+           "The list cannot be made longer in this level -- its resident region "
+           "ends without the padding a new record grows into."))
     if missing:
         notes.append(f"{missing} placement(s) name something this file does not "
                      f"hold -- a clip, or an object in a model loaded alongside "
@@ -1143,7 +1150,7 @@ def build_model(entry: str, model_data: bytes, pack_data: bytes | None,
         build_clips(obj, mesh, None if mapping is None else first[mapping],
                     clips, stem, notes)
 
-    _build_placements(collection, model, stem, by_id, notes)
+    _build_placements(collection, model, model_data, stem, by_id, notes)
     _build_shot(collection, model, model_data, clips, stem, notes)
 
     scene = bpy.context.scene

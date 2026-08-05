@@ -59,6 +59,7 @@ from .mdl import (
     OBJECT_NAMESPACE,
     PLACEMENT_ID,
     PLACEMENT_MATRIX,
+    PLACEMENT_MATRIX_T,
     PLACEMENT_STRIDE,
     PLACEMENT_TRANSLATION,
     PTR_SUBOBJECTS,
@@ -111,6 +112,12 @@ def write_placement(data: bytes, instance: Instance, *,
             if not -(2 ** 31) <= value < 2 ** 31:
                 raise ValueError(f"translation {translation} does not fit i32")
         struct.pack_into("<3i", out, at + PLACEMENT_TRANSLATION, *packed)
+        # The MATRIX's own `t[3]` says the same thing, and the archive keeps the
+        # two in step in 2689/2689 records. Nothing is known to read it -- the
+        # loader takes the position from +0x04, and a disc built with the two
+        # disagreeing drew its object in the right place -- but a 2689/2689
+        # agreement is not something to break for free.
+        struct.pack_into("<3i", out, at + PLACEMENT_MATRIX_T, *packed)
 
     if rotation is not None:
         if len(rotation) != 9:
@@ -133,6 +140,40 @@ def _subobject(data: bytes, model: Model) -> int:
             f"expected one sub-object, this model states {i32(COUNT_SUBOBJECTS)}")
     entry = table + 4
     return entry + i32(entry)
+
+
+def spare_capacity(data: bytes, model: Model) -> int:
+    """How many more records this level's list can be grown by.
+
+    The padding at the end of the resident region is the whole of the room, so
+    this is that padding divided by a record. Across the game it comes to 53
+    records in 8 models -- all five warp rooms, both demo hubs and Oxide's chase
+    level, which has 1746 spare bytes. The other 65 levels get nothing: an arena
+    typically ends its resident region with 6 or 18 bytes of alignment and no
+    padding at all.
+
+    Zero is the answer for any level laid out differently from the corpus, so a
+    caller can treat this as "may `append_placement` be called" without
+    repeating its checks.
+    """
+    try:
+        sub = _subobject(data, model)
+    except ValueError:
+        return 0
+    i32 = lambda at: struct.unpack_from("<i", data, at)[0]  # noqa: E731
+    resident = i32(RESIDENT_SIZE)
+    if not 0 < resident <= len(data):
+        return 0
+    count = i32(sub + SUBOBJECT_COUNT)
+    records = sub + SUBOBJECT_RECORDS + i32(sub + SUBOBJECT_RECORDS)
+    end = records + PLACEMENT_STRIDE * count
+    targets = [sub + off + i32(sub + off) for off in TRAILING_POINTERS]
+    if min(targets) != end or max(targets) >= resident:
+        return 0
+    padding = 0
+    while padding < resident - end and data[resident - padding - 1] == 0:
+        padding += 1
+    return padding // PLACEMENT_STRIDE
 
 
 def append_placement(data: bytes, model: Model, source: Instance, *,

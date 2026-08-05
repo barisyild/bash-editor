@@ -2034,6 +2034,46 @@ The resolve, and the four fields of the sub-object the binder reads:
 | +0x24 | i32 | 0 (40), 0x01000000 (20), 13 distinct values. | ?unknown? |
 | +0x28..+0x30 | i32 | 0 in 73/73. | **confirmed** (zero) / ?unknown? (purpose) |
 
+### The list can be made longer, into the file's own padding
+
+The four blocks above sit nose to tail behind the record array — `+0x0C`'s
+target *is* the array's end in 73/73 — so there is no room to grow it in place,
+and no room to move it either: the largest run of zeros in `warp_room1`'s
+resident region is 1325 bytes against the 12,960 an 81-record array needs, and
+an array copied past the resident end draws nothing (§2.1).
+
+It does not have to move. **The four blocks slide.** Every pointer inside that
+span is self-relative, so source and target moving together leaves it valid, and
+only the sub-object's own four have to be stretched. What the slide costs is 160
+bytes at the far end — and the resident region already ends in padding, because
+the `+0x14` block states a count of 0 in `warp_room1` and so uses 8 of the 544
+bytes between it and `T(0x44)`.
+
+Both stated invariants survive: after the slide `+0x0C`'s target is still the
+array's end (array and block each moved on by one record), and `+0x14`'s block
+still runs to `T(0x44)`. The file keeps its length and `i32@0x50` its value.
+
+| Model | records | spare padding | records it can add |
+| --- | --- | --- | --- |
+| `arena/boss_oxide/chaselevel` | 244 | 1746 | 10 |
+| `demo_hub2/level` | 31 | 1631 | 10 |
+| `demo_hub1/level`, `warp_room4/level` | 35, 102 | 1379 | 8 |
+| `warp_room2/level` | 64 | 1203 | 7 |
+| `warp_room5/level` | 73 | 1007 | 6 |
+| `warp_room1/level` | 81 | 559 | 3 |
+| `warp_room3/level` | 100 | 251 | 1 |
+| the other 65 | — | 6 to 27 | 0 |
+
+**Confirmed on hardware.** `warp_room1` was built with an 82nd record placing a
+second `0x501C`, its other 81 byte-identical and nothing removed, and the room
+loads and draws it. That is what settles the question a static check cannot:
+whether anything outside the slid span points into it. A scan finds 714
+four-byte words that resolve there and cannot tell one of them from a vertex
+that lands there by chance — the disc can.
+
+`placewrite.append_placement` writes it and `placewrite.spare_capacity` bounds
+it; a level laid out any other way is refused rather than guessed at.
+
 ### The record: what is drawn, and where it stands
 
 The loader strides the array by **160 bytes** and copies six things out of each record. It is

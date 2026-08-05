@@ -20,6 +20,8 @@ import numpy as np
 
 import bpy
 
+from crashbash.formats import placewrite
+
 from . import actions, build_scene, naming as N
 from .build_scene import SCALE, read_image, to_model
 
@@ -51,13 +53,66 @@ def _objects(collection: bpy.types.Collection) -> dict[int, bpy.types.Object]:
     return found
 
 
+def _new_placements(collection, model, data, warnings: list[str]) -> list[dict]:
+    """Objects put in the *placements* collection that stand for no record yet.
+
+    The list can be grown, into the padding the resident region ends with, and
+    `placewrite.spare_capacity` says by how much -- 3 records for `warp_room1`,
+    10 for Oxide's chase level, none at all for an arena. So an object dropped
+    in here is a new record if there is room for one, and a warning if there is
+    not; it used to be nothing either way.
+
+    Each copies an existing record whole, so the fields this project has not
+    read arrive set to something the game already ran. The one it copies is the
+    record that places the same object where one does, which also settles the
+    rotation; otherwise record 0.
+    """
+    if not model.instances:
+        return []
+    fresh = [obj for obj in collection.all_objects
+             if obj.type == "MESH"
+             and obj.get(N.PROP_PLACEMENT) is None
+             and obj.get(N.PROP_MESH) is None
+             and obj.get(N.PROP_OBJECT) is None
+             and not obj.get(N.PROP_PREVIEW)]
+    if not fresh:
+        return []
+    room = placewrite.spare_capacity(data, model)
+    if not room:
+        warnings.append(
+            f"{len(fresh)} object(s) stand for no placement and this level has "
+            f"room for none; its resident region ends without the padding a new "
+            f"record grows into, so they were left out")
+        return []
+
+    added = []
+    for obj in fresh[:room]:
+        identifier = obj.get(N.PROP_PLACES)
+        if identifier is None:
+            warnings.append(
+                f"{obj.name}: no {N.PROP_PLACES} saying which object it places, "
+                f"so it was left out")
+            continue
+        identifier = int(identifier)
+        copies = next((i.index for i in model.instances if i.id == identifier),
+                      model.instances[0].index)
+        rotation, translation = build_scene.placement_record(obj.matrix_basis)
+        added.append({"copies": copies, "id": identifier,
+                      "translation": translation, "rotation": rotation})
+    if len(fresh) > room:
+        warnings.append(
+            f"{len(fresh)} object(s) stand for no placement and there is room "
+            f"for {room}; the rest were left out")
+    return added
+
+
 def _placements(collection, model, warnings: list[str]) -> dict[int, dict]:
     """Every placement record the collection moved, renamed or re-aimed.
 
     Only the ones that actually differ: a record is eleven bytes of a live list
-    and rewriting one that did not change is work the file does not need. The
-    list cannot be made longer (§8.5), so a new object here is not a new
-    placement -- it is nothing, and saying so is better than dropping it.
+    and rewriting one that did not change is work the file does not need. An
+    object standing for no record at all is a *new* one -- see
+    `_new_placements`, which is bounded by what the level can take.
     """
     edits: dict[int, dict] = {}
     by_index = {i.index: i for i in model.instances}
@@ -344,8 +399,15 @@ def read_clip(obj, clip, warnings):
                           frames=table, unchanged=bool(rest) and now == rest)
 
 
-def build_request(collection, model, clips, pack, materials_pack=None):
-    """Everything the collection has to say about the model it came from."""
+def build_request(collection, model, clips, pack, materials_pack=None,
+                  model_data: bytes | None = None):
+    """Everything the collection has to say about the model it came from.
+
+    `model_data` is the entry's own bytes. Only the new-placement path needs
+    them -- how much room the list has is a fact about the file's padding, not
+    about anything the reader keeps -- and without them that path is skipped
+    rather than guessed at.
+    """
     from crashbash.formats import modelimport as MI
 
     request = MI.ImportRequest(
@@ -364,6 +426,9 @@ def build_request(collection, model, clips, pack, materials_pack=None):
             f"scene's grid and will be resampled")
 
     request.placements = _placements(collection, model, request.warnings)
+    if model_data is not None:
+        request.new_placements = _new_placements(
+            collection, model, model_data, request.warnings)
     request.scene = _shot(collection, request.warnings)
 
     sizes = _sizes(pack)

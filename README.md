@@ -388,9 +388,12 @@ Bash Model** writes the entry back, ready for *Replace selected file…* here.
 A **level** comes in as its placement list (§8.5) — the objects the room is
 actually made of, standing where the file stands them — so moving one and
 exporting changes that record and nothing else: one byte on `warp_room1`, the
-file the same size. A **cutscene** comes in with its particle emitters
-(§9.11.7), every field of them editable, and *Bake Particle Preview* runs the
-game's own simulation so the spray can be watched before the disc is built.
+file the same size. Put a *new* object in that collection and the export
+**appends a record**, which takes `warp_room1` from 81 objects to 82 with the
+file still exactly its shipped size. A **cutscene** comes in with its particle
+emitters (§9.11.7), every field of them editable, and *Bake Particle Preview*
+runs the game's own simulation so the spray can be watched before the disc is
+built.
 
 It is not a second implementation: the add-on and this editor drive the same
 `crashbash` package, so a rule learned on one side is in force on the other.

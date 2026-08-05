@@ -48,18 +48,28 @@ A **level** draws what its placement list names and nothing else — `warp_room1
 has 81 records and not one names any of its 42 numbered meshes — so the
 *placements* collection is the room, and the numbered meshes beside it are the
 pieces. Move a placement, export, and one record changes: measured on
-`warp_room1`, **one byte**, the file the same size. The list cannot be made
-longer (§8.5), so a new object there is not a new placement.
+`warp_room1`, **one byte**, the file the same size.
 
-What it *can* be is a **spare** — a record whose object another record already
-places. The panel marks them, because 81 records with no marking is no way to
-find the ten `warp_room1` has (five objects it places more than once, four of
-them copies of 0x5041). Re-aim one and you have added an object to the room, at
-the cost of a duplicate: point record 69 at 0x501C and the room has two of that
-blue arm. Twenty-seven bytes, the file the same size. Remember that a record's
-translation is an **offset** and a pool mesh carries its own place in the room —
-0x501C is authored centred on (-9.71, -5.6, 0.4) — so a re-aimed record starts
-out translating the new object in the old one's frame, and needs moving.
+**Put a new object in that collection and it becomes a new record.** Give it a
+`crashbash_places` saying which object it draws, stand it where you want it, and
+the export appends it — measured on `warp_room1`, 81 records to 82, the file
+exactly the size it was, all 81 originals byte-identical, nothing removed. The
+disc runs. How many a level can take is its own padding divided by a record and
+the import says so: **53 across the game**, 3 for `warp_room1`, 10 for Oxide's
+chase level, and none at all for an arena, whose resident region ends with 6 or
+18 bytes of alignment and no room. Past that the export refuses rather than
+write a level that cannot load.
+
+A record can also be **re-aimed** rather than added, which costs nothing but a
+duplicate: a **spare** is a record whose object another record already places,
+the panel marks them, and `warp_room1` has ten (five objects placed more than
+once, four of them copies of 0x5041). Point record 69 at 0x501C and the room has
+two of that blue arm — twenty-seven bytes, the file the same size.
+
+Either way, remember that a record's translation is an **offset**: a pool mesh
+carries its own place in the room, 0x501C being authored centred on
+(-9.71, -5.6, 0.4), so a re-aimed record starts out translating the new object
+in the old one's frame and needs moving.
 
 An **object-pool mesh** can be rebuilt, but only inside the span it already
 owns: the pool is one packed run and a mesh whose blocks leave it boots to a
