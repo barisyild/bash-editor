@@ -432,19 +432,66 @@ def _resize_rgba(image: np.ndarray, height: int, width: int,
     )
 
 
-def _quantise(rgb: np.ndarray, colours: int) -> tuple[np.ndarray, np.ndarray] | None:
-    """A fresh palette and its indices, or None when nothing can build one."""
+def _median_cut(rgb: np.ndarray, colours: int) -> np.ndarray:
+    """A palette of at most `colours` entries, by median cut, in numpy alone.
+
+    Blender does not ship PIL, and without a quantiser a repainted texture can
+    only be mapped onto the sixteen colours the slot already had -- so an artist
+    who paints magenta into a texture with no magenta gets the nearest thing to
+    it and no warning worth the name. This is the same algorithm PIL's
+    MEDIANCUT is: split the box with the widest spread along its widest
+    channel, at the median, until there are enough boxes, then take each box's
+    mean.
+    """
+    flat = rgb.reshape(-1, 3).astype(np.int32)
+    unique, counts = np.unique(flat, axis=0, return_counts=True)
+    if len(unique) <= colours:
+        return unique.astype(np.uint8)
+    boxes = [(unique, counts)]
+    while len(boxes) < colours:
+        # The box worth splitting is the one whose widest channel is widest;
+        # a box of one colour cannot be split at all.
+        best, spread = None, -1
+        for index, (points, _) in enumerate(boxes):
+            if len(points) < 2:
+                continue
+            width = int((points.max(axis=0) - points.min(axis=0)).max())
+            if width > spread:
+                best, spread = index, width
+        if best is None:
+            break
+        points, weights = boxes.pop(best)
+        axis = int((points.max(axis=0) - points.min(axis=0)).argmax())
+        order = np.argsort(points[:, axis], kind="stable")
+        points, weights = points[order], weights[order]
+        half = len(points) // 2
+        boxes.append((points[:half], weights[:half]))
+        boxes.append((points[half:], weights[half:]))
+    palette = np.array([
+        np.round((points * weights[:, None]).sum(axis=0) / weights.sum())
+        for points, weights in boxes
+    ], dtype=np.int32)
+    return np.clip(palette, 0, 255).astype(np.uint8)
+
+
+def _quantise(rgb: np.ndarray, colours: int) -> tuple[np.ndarray, np.ndarray]:
+    """A fresh palette and one index per pixel."""
     try:
         from PIL import Image  # noqa: PLC0415
+
+        pil = Image.fromarray(rgb, "RGB").quantize(
+            colors=colours, method=Image.MEDIANCUT, dither=Image.NONE
+        )
+        palette = np.zeros((colours, 3), dtype=np.uint8)
+        raw = np.array(pil.getpalette() or [], dtype=np.uint8).reshape(-1, 3)
+        palette[: min(len(raw), colours)] = raw[:colours]
+        return palette, np.array(pil, dtype=np.uint8)
     except ImportError:
-        return None
-    pil = Image.fromarray(rgb, "RGB").quantize(
-        colors=colours, method=Image.MEDIANCUT, dither=Image.NONE
-    )
+        pass
+    found = _median_cut(rgb, colours)
     palette = np.zeros((colours, 3), dtype=np.uint8)
-    raw = np.array(pil.getpalette() or [], dtype=np.uint8).reshape(-1, 3)
-    palette[: min(len(raw), colours)] = raw[:colours]
-    return palette, np.array(pil, dtype=np.uint8)
+    palette[: len(found)] = found
+    return palette, _nearest_in_palette(rgb, palette.astype(np.int32))
 
 
 def _nearest_in_palette(rgb: np.ndarray, palette: np.ndarray) -> np.ndarray:
@@ -469,21 +516,30 @@ def write_slot(pack_data: bytes, pack: TexturePack, slot: int,
 
     rgb = np.ascontiguousarray(image[..., :3])
     colours = 1 << entry.bit_depth
-    fresh = _quantise(rgb, colours) if entry.palette_index in exclusive else None
-    if fresh is not None:
+    if entry.palette_index in exclusive:
         # The palette belongs to this import alone: requantise it outright.
-        palette, indices = fresh
+        palette, indices = _quantise(rgb, colours)
         r, g, b = (palette.astype(np.uint16) >> 3).T
         values = (b << 10) | (g << 5) | r
         values = np.where(values == 0, 0x8000, values)  # keep true black opaque
         pack_data = TW.replace_palette(pack_data, entry.palette_index, values)
     else:
-        # Shared palette, or no quantiser: keep it and map every pixel to its
-        # nearest colour. A palette named by a texture outside this import is
-        # never rewritten -- it paints faces nobody asked to change.
+        # A palette named by a texture outside this import is never rewritten
+        # -- it paints faces nobody asked to change -- so the picture is mapped
+        # onto the colours it already has. A repaint wanting a colour the
+        # palette does not hold lands on the nearest one, and saying so is the
+        # difference between a limit and a bug.
         report.palettes_shared.append(slot)
-        indices = _nearest_in_palette(
-            rgb, pack.palettes[entry.palette_index][:, :3].astype(np.int32))
+        existing = pack.palettes[entry.palette_index][:, :3].astype(np.int32)
+        indices = _nearest_in_palette(rgb, existing)
+        gap = int(np.abs(rgb.reshape(-1, 3).astype(np.int32)
+                         - existing[indices.reshape(-1)]).max())
+        if gap > 24:
+            report.warnings.append(
+                f"slot {slot} shares its palette with a texture outside this "
+                f"import, so its own colours were kept and the new pixels "
+                f"mapped onto them; the worst is {gap} of 255 from what was "
+                f"painted")
 
     pack_data = TW.replace_pixels(
         pack_data, slot, TW._pack_indices(indices, entry.bit_depth)
