@@ -223,6 +223,229 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
+    """Put the selected mesh into the active object's slot, painted for its pack
+
+    Select the mesh you are borrowing, then shift-select the model mesh it is
+    to replace, and run this. It does the three things a borrowed mesh needs
+    and cannot do for itself.
+    """
+
+    bl_idname = "crashbash.borrow_mesh"
+    bl_label = "Borrow Selected Mesh"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        if obj is None or obj.type != "MESH":
+            return False
+        if obj.get(N.PROP_MESH) is None and obj.get(N.PROP_OBJECT) is None:
+            return False
+        return any(o is not obj and o.type == "MESH"
+                   for o in context.selected_objects)
+
+    def execute(self, context):
+        if not _require_library(self, context):
+            return {"CANCELLED"}
+        import numpy as np
+        from crashbash.formats import modelimport as MI
+        from crashbash.formats.mdl import read_model
+        from crashbash.formats.tex import read_pack
+
+        from . import build_scene
+
+        target = context.active_object
+        source = next(o for o in context.selected_objects
+                      if o is not target and o.type == "MESH")
+        collection = _target(context)
+        try:
+            model_data, pack_data = _source_bytes(collection)
+            model = read_model(model_data)
+            pack = read_pack(pack_data) if pack_data else None
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"{exc}")
+            return {"CANCELLED"}
+        if pack is None:
+            self.report({"ERROR"}, (
+                "this model has no texture pack beside it, and a borrowed mesh "
+                "has to be painted through the destination's own palette"))
+            return {"CANCELLED"}
+
+        # A level's meshes are not all in `model.meshes`: the ones it actually
+        # draws are object-pool meshes (§8.3), reached through the object table
+        # and numbered on from where the plain ones stop. `warp_room1` has 42 of
+        # the first kind and 72 of the second, so looking in one list finds
+        # nothing for the very meshes a level edit is about.
+        index = target.get(N.PROP_MESH)
+        mesh = None
+        if index is not None:
+            index = int(index)
+            mesh = next((m for m in model.meshes if m.index == index), None)
+            if mesh is None:
+                mesh = next((o.mesh for o in model.objects
+                             if o.mesh is not None and o.mesh.index == index), None)
+        if mesh is None:
+            self.report({"ERROR"}, "the active object is not a mesh of this model")
+            return {"CANCELLED"}
+
+        borrowed = source.data.copy()
+        notes = []
+
+        # 1. The clips it brought. Blender sums every shape key that is on, and
+        #    a borrowed mesh is wanted for its shape, not its animation -- the
+        #    penguin's 34 keys drew a fan of shards over the whole room while
+        #    the exported file was already right.
+        if borrowed.shape_keys:
+            notes.append(f"cleared {len(borrowed.shape_keys.key_blocks)} shape keys")
+            holder = bpy.data.objects.new("_crashbash_borrow", borrowed)
+            holder.shape_key_clear()
+            bpy.data.objects.remove(holder)
+
+        # 2. Its art, which does not travel: the slots it names mean other
+        #    pictures here. Fold the texel each corner reads into its colour so
+        #    the shape keeps its look without naming a slot at all (§6.2).
+        uv = borrowed.uv_layers.get(N.UV_LAYER)
+        colour = borrowed.color_attributes.get(N.COLOUR_ATTRIBUTE)
+        if uv is None or colour is None:
+            self.report({"ERROR"}, (
+                f"'{source.name}' has no {N.UV_LAYER} or {N.COLOUR_ATTRIBUTE}; "
+                f"import it through this add-on so it carries both"))
+            return {"CANCELLED"}
+        pages = {}
+        for slot, material in enumerate(borrowed.materials):
+            image = _material_image(material)
+            if image is None:
+                continue
+            buffer = np.empty(len(image.pixels), dtype=np.float32)
+            image.pixels.foreach_get(buffer)
+            pages[slot] = buffer.reshape(image.size[1], image.size[0], 4)
+        baked = 0
+        for poly in borrowed.polygons:
+            page = pages.get(poly.material_index)
+            if page is None:
+                continue
+            height, width = page.shape[:2]
+            for loop in poly.loop_indices:
+                u, v = uv.data[loop].uv
+                x = min(max(int(round(u * (width - 1))), 0), width - 1)
+                y = min(max(int(round(v * (height - 1))), 0), height - 1)
+                texel = page[y, x]
+                have = colour.data[loop].color
+                # The hardware draws texel * colour / 128, so a stored 128 is
+                # neutral and the flat result is the product doubled.
+                colour.data[loop].color = tuple(
+                    min(texel[i] * have[i] * 2.0, 1.0) for i in range(3)
+                ) + (have[3],)
+            baked += 1
+        notes.append(f"baked the texture into the colour on {baked} faces")
+
+        # 3. The cell every face now reads. In a pinned model the UV table
+        #    cannot grow, so it has to be one the table already holds three in a
+        #    row of -- otherwise the export refuses and does not say which.
+        cell = MI.pinned_swatch_cell(model_data, model, mesh, pack)
+        loose = MI.neutral_swatch_cell(model_data, mesh, pack)
+        pinned = cell is not None and cell != loose
+        cell = cell or loose
+        if cell is None:
+            self.report({"ERROR"}, "this pack has no swatch texture to paint through")
+            return {"CANCELLED"}
+        swatch = next((t for t in pack.textures if t.is_swatch), None)
+        # The same conversion the importer uses, V flipped and all: Blender's
+        # V runs the other way from a texel row, and setting it unflipped puts
+        # every face on a cell the pinned table does not hold -- the export then
+        # refuses all 116 of them, which is right and unhelpful.
+        u = (cell[0] + 0.5) / swatch.width
+        v = 1.0 - (cell[1] + 0.5) / swatch.height
+        # The palette is the destination mesh's own -- `_swatch_entry` takes the
+        # one its texture list uses most, which is what a rebuild writes for
+        # every triangle anyway. Reuse the material the import already built for
+        # it rather than making a second one that means the same thing.
+        from crashbash.formats import mdlwrite as MW
+        palette = MW._swatch_entry(model_data, mesh) & 0x1FF
+        material = _collection_swatch(collection, palette)
+        if material is None:
+            self.report({"ERROR"}, (
+                f"no swatch material for palette {palette} in "
+                f"'{collection.name}'; re-import the entry"))
+            return {"CANCELLED"}
+        borrowed.materials.clear()
+        borrowed.materials.append(material)
+        for poly in borrowed.polygons:
+            poly.material_index = 0
+            for loop in poly.loop_indices:
+                uv.data[loop].uv = (u, v)
+        notes.append(f"put all {len(borrowed.polygons)} faces on {material.name} "
+                     f"cell {cell}" + (" (the pinned table allows it)" if pinned else ""))
+
+        # The colour has to have the cell's own value divided back out, or the
+        # baked look comes back multiplied by it a second time.
+        texel = _texel_at(material, u, v)
+        if texel is not None:
+            for loop in range(len(colour.data)):
+                have = colour.data[loop].color
+                colour.data[loop].color = tuple(
+                    min(max(have[i] / (texel[i] * 2.0), 0.0), 1.0)
+                    if texel[i] > 1 / 255 else 1.0 for i in range(3)
+                ) + (have[3],)
+
+        was = target.data
+        for obj in list(bpy.data.objects):
+            if obj.data is was:
+                obj.data = borrowed
+        borrowed.name = f"{target.name}_borrowed"
+
+        room = int(mesh.ptr_end - mesh.header_offset)
+        self.report({"INFO"}, (
+            f"{source.name} -> {target.name}: {len(borrowed.polygons)} faces "
+            f"replacing {len(was.polygons)}, in the {room} bytes the mesh owns. "
+            + "; ".join(notes)))
+        return {"FINISHED"}
+
+
+def _material_image(material):
+    """The picture a material samples, if it samples one."""
+    if material is None or not material.use_nodes:
+        return None
+    for node in material.node_tree.nodes:
+        if node.type == "TEX_IMAGE" and node.image:
+            return node.image
+    return None
+
+
+def _collection_swatch(collection, palette: int):
+    """The swatch material the import already built for that palette."""
+    fallback = None
+    for obj in collection.all_objects:
+        if obj.type != "MESH" or obj.data is None:
+            continue
+        for material in obj.data.materials:
+            if material is None or material.get(N.PROP_SLOT) is not None:
+                continue
+            have = material.get(N.PROP_PALETTE)
+            if have is None:
+                continue
+            if int(have) == palette:
+                return material
+            fallback = fallback or material
+    return fallback
+
+
+def _texel_at(material, u: float, v: float):
+    """What one texel of a material's picture is worth, 0..1 per channel."""
+    import numpy as np
+
+    image = _material_image(material)
+    if image is None:
+        return None
+    buffer = np.empty(len(image.pixels), dtype=np.float32)
+    image.pixels.foreach_get(buffer)
+    page = buffer.reshape(image.size[1], image.size[0], 4)
+    x = min(max(int(round(u * (image.size[0] - 1))), 0), image.size[0] - 1)
+    y = min(max(int(round(v * (image.size[1] - 1))), 0), image.size[1] - 1)
+    return page[y, x][:3]
+
+
 class CRASHBASH_OT_add_placement(bpy.types.Operator):
     """Put another copy of the active placement's object in the level"""
 
@@ -399,6 +622,8 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
             if obj.get(N.PROP_VOLUMES):
                 box.label(text=f"{len(obj[N.PROP_VOLUMES])} collision volumes "
                                f"(carried through, not edited)")
+            box.operator(CRASHBASH_OT_borrow_mesh.bl_idname, icon="LINK_BLEND")
+            box.label(text="select the mesh to borrow, then this one")
         if obj is not None and obj.get(N.PROP_OBJECT) is not None:
             layout.box().label(
                 text=f"object pool id {obj[N.PROP_OBJECT]:04X}; a rebuild has "
@@ -447,6 +672,7 @@ CLASSES = (
     CRASHBASH_AddonPreferences,
     CRASHBASH_OT_import,
     CRASHBASH_OT_export,
+    CRASHBASH_OT_borrow_mesh,
     CRASHBASH_OT_add_placement,
     CRASHBASH_OT_bake_particles,
     VIEW3D_PT_crashbash,

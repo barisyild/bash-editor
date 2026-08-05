@@ -92,22 +92,31 @@ black screen. The writer measures and refuses rather than build that disc.
 
 That span is also how a model from **another pack** gets into a level, which has
 been done and run: `arena/crate_snow`'s penguin stands in `warp_room1` today, in
-the 6592 bytes the decorative arm 0x501C owned. Import both, drop the borrowed
-geometry onto the pool object, and mind two things the level will not give you.
-Its **art does not travel** — the penguin's texture slots mean other pictures in
-the warp pack — so fold each face's texel into its vertex colour and give every
-face one of the level's own swatch materials; the console's `texel * colour /
-128` then draws what you baked, once you divide the cell's own value back out.
-And a §8.6 carrier's **UV table is pinned**, so a face needs a UV triple the
-table already holds: take one off a swatch face of the level's own mesh and put
-every borrowed face on it. Skip either and the export refuses or the model draws
-in someone else's colours.
+the 6592 bytes the decorative arm 0x501C owned.
 
-Clear the borrowed mesh's **shape keys** first. A model brought in for its shape
-still carries its clips, Blender adds them all together, and the penguin's 34
-keys drew a fan of shards across the whole room — while the exported file was
-already correct, because the export reads the base mesh. The preview is what
-lies, so a shard storm here is not evidence of a broken export.
+**Borrow Selected Mesh** does it. Import both models, select the mesh you are
+borrowing, shift-select the model mesh it replaces, and press it:
+
+```
+penguin_mesh00 -> level_object501C: 116 faces replacing 444, in the 6592 bytes
+the mesh owns. cleared 34 shape keys; baked the texture into the colour on 116
+faces; put all 116 faces on swatch_152 cell (13, 5) (the pinned table allows it)
+```
+
+Those three lines are three rules that each cost a broken export to find. The
+borrowed mesh brings its **clips as shape keys** — 34 of them, a dozen switched
+on — and Blender adds them all together, which drew a fan of shards across the
+whole room while the exported file was already right; a shard storm here is the
+preview lying, not the export. Its **art cannot travel**, because the slots it
+names mean other pictures in this pack, so each face's texel is folded into its
+vertex colour and every face made a swatch face on the destination's own palette
+— with the cell's own value divided back out, or `texel * colour / 128` applies
+it twice. And a §8.6 carrier's **UV table is pinned**, so a face needs a triple
+the table already holds: `warp_room1` accepts exactly one cell, and putting the
+faces anywhere else has the export refuse all 116 of them.
+
+Then stand it on its own feet, place it, and export. What comes out is what a
+hand-made version of the same edit produced, to the byte in colour and position.
 
 ## Watching a cutscene
 

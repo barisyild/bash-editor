@@ -346,6 +346,66 @@ def reference_bags(model_data: bytes, model: Model, pack: TexturePack | None,
 # --- what an untextured face still has to name ---------------------------
 
 
+def pinned_swatch_cell(model_data: bytes, model: Model, target: Mesh,
+                       pack: TexturePack) -> tuple[int, int] | None:
+    """A swatch cell a **pinned** model will accept from a rebuilt face.
+
+    In the seven §8.6 carriers the UV table cannot grow, so every triangle has
+    to find its own UV triple already in it (§2.1) -- and a face whose three
+    corners read one cell wants three identical entries in a row. Only some
+    cells have that run. Putting a borrowed mesh on the wrong one is not a
+    silent loss but a refused export, which is better and still no help: the
+    caller is told the mesh cannot be rebuilt and not which cell would work.
+
+    This reads the table and answers with one that does, preferring the cell
+    nearest the hardware's neutral so the vertex colour carries through
+    (`texel * colour / 128`) -- the same reasoning as `neutral_swatch_cell`,
+    against a table that gets no say.
+
+    `warp_room1` offers exactly one: its mesh 1 puts all 662 of its swatch
+    faces on a single triple, and every borrowed face has to read that cell.
+    """
+    swatch = next((t for t in pack.textures if t.is_swatch), None)
+    if swatch is None:
+        return None
+    entry = MW._swatch_entry(model_data, target)
+    palette_index = entry & TEXTURE_INDEX_MASK
+    if not 0 <= palette_index < len(pack.palettes):
+        return None
+    palette = pack.palettes[palette_index]
+
+    runs = _uv_runs(model_data, model)
+    cells = swatch.indices()
+    best, best_cost = None, None
+    for y in range(swatch.height):
+        for x in range(swatch.width):
+            if (x, y, x, y, x, y) not in runs:
+                continue
+            cell = int(cells[y, x])
+            if cell >= palette.shape[0]:
+                continue
+            cost = int(np.abs(palette[cell][:3].astype(np.int32) - 128).sum())
+            if best_cost is None or cost < best_cost:
+                best, best_cost = (x, y), cost
+    return best
+
+
+def _uv_runs(model_data: bytes, model: Model) -> set[tuple[int, ...]]:
+    """Every three-in-a-row the model's UV table already holds.
+
+    The writer indexes a face's triple by looking three consecutive entries up
+    (`mdlwrite`'s `uv_runs`), so this reads the same table the same way. Its
+    length is the span `T(0x24)..T(0x28)` and not the reader's count of entries
+    -- the two agree in only 168 of 373 models, because the reader stops at the
+    last entry a triangle names.
+    """
+    _, start, length = MW._table_bounds(model_data, model)
+    if not 0 < start or start + length > len(model_data):
+        return set()
+    table = model_data[start:start + length]
+    return {tuple(table[at:at + 6]) for at in range(0, len(table) - 5, 2)}
+
+
 def neutral_swatch_cell(model_data: bytes, target: Mesh, pack: TexturePack
                         ) -> tuple[int, int] | None:
     """The cell of the pack's swatch texture that leaves a colour most alone.
@@ -424,6 +484,25 @@ def warn_if_inside_out(index: int, positions: np.ndarray, target: Mesh | None,
     before = signed_volume(np.array(was))
     after = signed_volume(np.asarray(positions, dtype=np.float64) * GTE_SCALE_SMALL)
     if before == 0.0 or after == 0.0 or np.sign(before) == np.sign(after):
+        return
+
+    # The comparison only means something when the mesh being replaced is a
+    # closed body. `warp_room1`'s 0x501C is an open shell -- it encloses
+    # 1,510,531 inside a bounding box of 1.7e9, nine parts in ten thousand --
+    # and against it a correctly wound penguin looked inverted. The penguin
+    # encloses exactly what the shipped penguin does, to the unit, and every
+    # shipped character encloses negative; the arm was the odd one. So say what
+    # the measurement can carry and no more.
+    shell = np.array(was).reshape(-1, 3)
+    box = float(np.prod(shell.max(axis=0) - shell.min(axis=0)))
+    if box > 0 and abs(before) < 0.01 * box:
+        report.warnings.append(
+            f"mesh {index} winds against the mesh it replaces ({after:+.3f} "
+            f"against {before:+.3f}), but that mesh encloses almost nothing of "
+            f"its own bounding box, so it is an open shell and the comparison "
+            f"decides nothing. Check the winding against the model this mesh "
+            f"came from instead."
+        )
         return
     report.warnings.append(
         f"mesh {index} is wound against the mesh it replaces: it encloses "

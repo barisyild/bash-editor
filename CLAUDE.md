@@ -195,6 +195,14 @@ They are not style preferences.
   faces at that one satisfies the lookup. Nothing new is needed below the
   resident end — the colour and UV tables never moved, and the penguin's indices
   land at 139..4380 of the shipped 4516.
+  All three are the add-on's *Borrow Selected Mesh* now, and `pinned_swatch_cell`
+  is the core's answer to "which cell will this model take": it reads the UV
+  table's own three-in-a-row runs and picks the one nearest neutral among them,
+  where `neutral_swatch_cell` picks the nearest neutral full stop and a pinned
+  model refuses it. **Write that cell through the importer's own V flip** — a
+  texel row and Blender's V run opposite ways, and setting it unflipped put
+  every face on a cell the table does not hold, all 116 refused by the check
+  doing exactly its job.
 - **Judge a replacement's winding against the model it came from, not the mesh
   it replaces.** The exporter warned that the penguin encloses −2.052 where the
   arm encloses +0.090, which reads as inside out. It is not: every shipped
