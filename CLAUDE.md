@@ -245,14 +245,23 @@ They are not style preferences.
   sat at the source's cell — black hair. Matched by the colour each
   face means, over every cell read through every palette (125 reachable in the
   warp pack, 175 in the crate one), 231 land exactly and the worst is 8 of 255.
-- **A pack's colour key is not universal.** The skip pixel is the rule — 10,823
-  of the disc's 11,234 palettes carry `0x0000` — but 120 palettes across 46 of
-  the 400 packs carry magenta instead, and the cutscene pack Coco comes from is
-  one of them: one palette of its 27, holding `0xFC1F` as colour 15, which fills
-  **33.4 % of the texels** of the single texture that uses it. Copying that
-  palette across without translating the entry drew the magenta, and the six
-  faces sampling that texture are the two mirrored triples at the sides of her
-  head — which is why it read as pink patches by her ears.
+- **Magenta in a palette is a colour, not a key.** `0x0000` is the skip pixel
+  and 10,823 of the disc's 11,234 palettes carry it; 120 palettes across 46 of
+  the 400 packs also carry `0xFC1F`, and **all 120 carry `0x0000` as well** —
+  none uses magenta in its place. So those texels draw, and a viewer showing
+  them pink is showing what the file says. The cutscene pack Coco comes from is
+  one of the 46: one palette of its 27 holds `0xFC1F` as colour 15, filling
+  **33.4 % of the texels** of the single texture that uses it, and the six faces
+  sampling it are the two mirrored triples at the sides of her head. Moving that
+  palette to another pack still needs the entry translated to whatever the
+  destination means by it; what was wrong was calling it that pack's key.
+- **Magenta out of a *reader* is a different thing entirely** — `to_rgba` fills
+  with it when there is no palette to decode through, which is how a swatch
+  texture comes out (§6.2: it carries none of its own, `0x80028EE8` compares
+  against `0x7FFF` and skips the CLUT lookup). **23,413 faces across 225 models
+  name the swatch image as an ordinary textured slot**, so a viewer that decodes
+  it the plain way puts pink patches on a quarter of the game. Decode it through
+  the palette the mesh names for its own swatch faces instead.
 - **An external model must be welded before anything else is done to it.** A
   Sketchfab Suzanne arrived as a triangle soup: 1966 vertices for 968 triangles,
   and **1966 of its 2435 edges carried a single face**. Merging by distance

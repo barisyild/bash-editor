@@ -202,12 +202,34 @@ class Materials:
             return self.swatch.width, self.swatch.height
         return None
 
-    def for_slot(self, slot: int, notes: list[str]) -> bpy.types.Material:
+    def for_slot(self, slot: int, notes: list[str],
+                 palette: int | None = None) -> bpy.types.Material:
+        texture = (self.pack.textures[slot]
+                   if self.pack and 0 <= slot < len(self.pack.textures) else None)
+        # A slot may *be* the pack's swatch image -- 23,413 textured faces
+        # across 225 models name it -- and that image carries no palette of its
+        # own, so decoding it the ordinary way gives the reader's "no palette"
+        # magenta and a quarter of the game's models come in with pink patches.
+        # The disassembly says the descriptor simply gets no CLUT (0x80028EE8
+        # compares against 0x7FFF and skips the lookup), so what the console
+        # puts there is not established. Showing it through the palette the
+        # mesh names for its own swatch faces is a choice, and a far better one
+        # than magenta.
+        if texture is not None and texture.is_swatch and palette is not None:
+            key = ("slot", slot, palette)
+            if key in self.by_key:
+                return self.by_key[key]
+            material = bpy.data.materials.new(
+                f"{texture.name}_p{palette:03d}")
+            material[N.PROP_SLOT] = slot
+            _shader(material, _image(
+                f"{N.IMAGE_SLOT.format(stem=self.stem, slot=slot)}_p{palette:03d}",
+                texture.to_rgba(self.pack.palettes, palette_override=palette)))
+            self.by_key[key] = material
+            return material
         key = ("slot", slot)
         if key in self.by_key:
             return self.by_key[key]
-        texture = (self.pack.textures[slot]
-                   if self.pack and 0 <= slot < len(self.pack.textures) else None)
         if texture is None:
             # A model may name a slot its own pack does not hold -- the cutscene
             # models do, drawing from a pack the shot loads alongside them. The
@@ -310,16 +332,18 @@ def _weld(payload) -> tuple[np.ndarray, np.ndarray]:
     return unique, inverse.reshape(-1, 3)
 
 
-def _entry_material(entry: int, materials: Materials,
-                    notes: list[str]) -> bpy.types.Material:
+def _entry_material(entry: int, materials: Materials, notes: list[str],
+                    swatch: int = 0) -> bpy.types.Material:
     if entry >= 0:
-        return materials.for_slot(entry, notes)
+        return materials.for_slot(entry, notes,
+                                  (swatch & 0x1FF) if swatch else None)
     if entry < -1:
         return materials.for_swatch((-entry) & 0x1FF, notes)
     return materials.plain()
 
 
-def build_mesh(name: str, payload, materials: Materials, notes: list[str]):
+def build_mesh(name: str, payload, materials: Materials, notes: list[str],
+               swatch: int = 0):
     """One `MeshPayload` as a Blender mesh, with its colours, UVs and materials.
 
     Returns the mesh and the vertex map: which of the payload's vertices each
@@ -357,7 +381,8 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str]):
         entry = int(payload.textures[face])
         if entry not in order:
             order[entry] = len(order)
-            mesh.materials.append(_entry_material(entry, materials, notes))
+            mesh.materials.append(
+                _entry_material(entry, materials, notes, swatch))
         material_index[face] = order[entry]
     mesh.polygons.foreach_set("material_index", material_index)
 
@@ -830,6 +855,7 @@ def build_model(entry: str, model_data: bytes, pack_data: bytes | None,
                 source: str, pack_entry: str = "") -> tuple[bpy.types.Collection,
                                                             list[str]]:
     """Everything in one model entry, as a collection ready to be edited."""
+    from crashbash.formats import mdlwrite as MW
     from crashbash.formats import modelimport as MI
     from crashbash.formats.anim import read_animations
     from crashbash.formats.mdl import read_model
@@ -860,7 +886,8 @@ def build_model(entry: str, model_data: bytes, pack_data: bytes | None,
         pool = np.round(np.asarray(mesh_record.positions, dtype=np.float64)
                         / SCALE)
         _, first = MI.weld_vertices(pool, pool_poses(mesh_record, clips))
-        mesh, mapping = build_mesh(name, payload, materials, notes)
+        mesh, mapping = build_mesh(name, payload, materials, notes,
+                                   MW._swatch_entry(model_data, mesh_record))
         rows = None if mapping is None else first[mapping]
         obj = bpy.data.objects.new(name, mesh)
         obj[N.PROP_MESH] = mesh_record.index
@@ -895,7 +922,8 @@ def build_model(entry: str, model_data: bytes, pack_data: bytes | None,
         pool = np.round(np.asarray(record.mesh.positions, dtype=np.float64)
                         / SCALE)
         _, first = MI.weld_vertices(pool, pool_poses(record.mesh, clips))
-        mesh, mapping = build_mesh(name, payload, materials, notes)
+        mesh, mapping = build_mesh(name, payload, materials, notes,
+                                   MW._swatch_entry(model_data, record.mesh))
         obj = bpy.data.objects.new(name, mesh)
         obj[N.PROP_OBJECT] = record.id
         obj[N.PROP_MESH] = record.mesh.index

@@ -387,6 +387,13 @@ def build_request(collection, model, clips, pack, materials_pack=None):
         if slot is None:
             continue
         request.slots.add(int(slot))
+        # Not the swatch image: it has no palette of its own, so what the
+        # importer showed is one of the many pictures it can be -- decoded
+        # through the palette one mesh happens to name -- and handing that back
+        # as "the texture" would repaint it for every face that names another.
+        if pack is not None and 0 <= int(slot) < len(pack.textures) \
+                and pack.textures[int(slot)].is_swatch:
+            continue
         image = next((node.image for node in material.node_tree.nodes
                       if node.type == "TEX_IMAGE" and node.image is not None),
                      None) if material.use_nodes else None

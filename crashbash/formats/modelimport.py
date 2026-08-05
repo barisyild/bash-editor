@@ -506,6 +506,19 @@ def write_slot(pack_data: bytes, pack: TexturePack, slot: int,
                image: np.ndarray, exclusive: set[int], report: Report) -> bytes:
     """Put a repainted image back into its slot, honouring palette sharing."""
     entry = pack.textures[slot]
+    if entry.is_swatch:
+        # The swatch image has no palette of its own (§6.2): its pixels are
+        # indices that each face reads through the palette *it* names, so there
+        # is no one picture to repaint and no palette to requantise. Writing it
+        # anyway crashed on `palette_offsets(data)[0x7FFF]`, which is the
+        # "no palette" marker being used as an index.
+        report.warnings.append(
+            f"slot {slot} is the pack's swatch image, which has no palette of "
+            f"its own -- every face reads one of its texels through a palette "
+            f"it names for itself, so it cannot be repainted as a picture and "
+            f"was left alone")
+        report.textures_unchanged.append(slot)
+        return pack_data
     current = entry.to_rgba(pack.palettes)
     if image.shape[:2] != current.shape[:2]:
         image = _resize_rgba(image, current.shape[0], current.shape[1],

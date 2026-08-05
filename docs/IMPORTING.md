@@ -683,13 +683,16 @@ takes, per source face, the destination palette and cell that give the colour it
 palette, 125 colours reachable in the warp pack and 175 in the crate one, 231 of
 the 279 faces land exactly and the worst is 8 of 255 out.
 
-**A pack's colour key is not universal.** One palette of the cutscene pack's 27
-holds opaque magenta, `0xFC1F`, as its colour 15, and that colour fills 33.4 % of
-the one texture reading it — the part a character pack would have left at
-`0x0000`, which the hardware skips (§10.2). Copy the palette across without
-translating the entry and the magenta draws. The six faces sampling that texture
-are two mirrored triples at the sides of Coco's head, so it appeared as pink
-patches beside her ears.
+**Magenta is a colour, and a palette that holds it still holds the key.** One
+palette of the cutscene pack's 27 has opaque magenta, `0xFC1F`, as its colour 15,
+and that colour fills 33.4 % of the one texture reading it. It is tempting to
+read it as that pack's own skip colour, and the measurement says otherwise: 120
+palettes across 46 of the 400 packs carry `0xFC1F`, and **every one of them also
+carries `0x0000`**, which is what the hardware skips (§10.2). So the magenta
+draws where it stands, in its home pack too — and copying the palette across
+still needs the entry translated to whatever the destination means by it. The six
+faces sampling that texture are two mirrored triples at the sides of Coco's head,
+so it appeared as pink patches beside her ears.
 
 The rest is the ordinary route. The destination's clips are poses of its own
 vertex count, so they are retargeted rather than copied — `crashbash.retarget`

@@ -85,6 +85,19 @@ simulation and keyframes every live particle so the spray can be watched; it is
 a preview, the export ignores it, and it goes stale as soon as an emitter is
 edited.
 
+A slot that *is* the pack's swatch image gets a material per palette —
+`tex_045_16x16_4bpp_swatch_p045` — because that image carries none of its own
+and 23,413 faces across 225 models name it as an ordinary textured slot. Decoded
+the plain way it comes out as the reader's "no palette" magenta, which put pink
+patches on a quarter of the game. The palette shown is the one the mesh names for
+its own swatch faces; what the console puts in that CLUT is not established
+(`0x80028EE8` compares against `0x7FFF` and skips the lookup), so this is a
+stated choice rather than a reading of the hardware.
+
+Magenta that is still there afterwards is the file's own: 120 palettes across 46
+packs hold `0xFC1F`, and every one of them also holds the `0x0000` the hardware
+skips — so it is a colour, and it draws.
+
 **Texture animation** is shown but not edited. A slot the pack flips through
 stored frames, or slides under its own UVs, says so on its material
 (`crashbash_flipbook`, `crashbash_scroll`) and in the import's notes — 86 of the
