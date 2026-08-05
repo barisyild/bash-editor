@@ -400,11 +400,14 @@ a character, a level and a cutscene all measured at 0 bytes different — and
 forcing 90 shipped models through the writer reproduces 71,311 of 71,311
 triangles, position, colour, UV, texture entry and corner order alike.
 
-A disc built through it **runs**: the intro's first particle emitter edited in
-Blender, exported, and the image patched in place. Read back out of that disc, 1
-of its 992 entries differs and it is the same size as the one it replaced. That
-settles the emitter path on hardware and nothing more — geometry, clips and
-textures from this add-on have not been on a console yet.
+Two discs built through it **run**. One carries the intro's first particle
+emitter, edited in Blender and exported here. The other carries the M of the
+EUROCOM logo scaled ×1.9 in Blender and its mesh rebuilt from scratch — so the
+strip list and the corner order on that disc are this project's own, and the
+console drew them. Both were built by patching the original image, and read back
+out of the built disc **992 of 992 entries hold exactly what was meant for
+them**. A clip rebuilt here, a texture repainted here and a placement moved here
+have corpus round trips behind them but have not been on a console yet.
 
 ## Command line
 

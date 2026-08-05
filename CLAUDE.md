@@ -509,6 +509,27 @@ entries differs** and it is the same 44,764 bytes as the one it replaced —
 `intro_eurocom`'s emitter 0 at lifetime 24 → 72, speed (100, 300) → (400, 1200)
 and window end 110 → 170. So a scene-node field edit survives Blender, the
 exporter, the DAT repack and the ISO patch, and the game's simulation runs on
-what came back. Nothing else about the add-on is settled by this: it changed no
-geometry, no clip and no texture, which are the parts a console has still never
-been shown.
+what came back.
+
+**A rebuilt mesh has too**, which is the harder half: `out/crashbash-tall-m.bin`
+runs, and it carries `intro_eurocom`'s mesh 6 — the M of the logo — with 37 of
+its 41 vertices scaled ×1.9 upward in Blender and the mesh put through
+`mdlwrite` from scratch. On screen the M towers over the other six letters and
+everything around it is where it was. That is the first time this project's
+**striper and its winding** have been shown to a console: a strip list built
+here rather than copied, and a corner order handed over as §11.3 states it. Both
+are invisible to every check that is not a console — a strip list that walks
+past its block draws stale world-space vertices only once the model moves, and a
+triangle handed over backwards is *culled*, so it renders as nothing at all.
+
+Read back out of that disc, **992 of 992 entries hold exactly what was meant for
+them**. The export reported 1 mesh rebuilt and 27 untouched, the colour table
+chained 1162 → 1208 of its 8192, and the entry came back 180 bytes *smaller*
+than the shipped one — this striper is usually looser than the authoring tool's,
+but on those 67 triangles it chained longer strips than the original and won
+back more than the colour table cost.
+
+Still never shown to a console from this path: a **clip** rebuilt here, a
+**texture** repainted here, a **placement** moved here, and an **object-pool**
+mesh. The first three have corpus round trips behind them and the fourth refuses
+rather than guess.

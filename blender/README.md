@@ -183,3 +183,13 @@ anything this project wrote on the way:
 `tools/native_roundtrip.py` runs the rebuild comparison over the whole archive
 without Blender in the way, which is how the library half is checked on its own:
 347,509 of 347,509 triangles and 132,330 of 132,330 swatch faces.
+
+None of that can see the two failures only a console shows, so one rebuilt mesh
+has been put on one. `intro_eurocom`'s mesh 6 — the M of the logo — was scaled
+×1.9 in Blender, exported here, and built into a disc: **1 mesh rebuilt, 27
+untouched**, the colour table chained 1162 → 1208 of its 8192, and the entry came
+back 180 bytes *smaller* than the shipped one. It draws. So a strip list this
+project built rather than copied walks correctly, and a corner order handed over
+as §11.3 states it survives the backface test — a strip list that overruns draws
+stale vertices only once the model moves, and a triangle handed over backwards is
+culled and renders as nothing.
