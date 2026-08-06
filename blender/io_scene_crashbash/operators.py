@@ -725,6 +725,52 @@ def _texel_at(material, u: float, v: float):
     return page[y, x][:3]
 
 
+class CRASHBASH_OT_put_on_stage(bpy.types.Operator):
+    """Give this mesh a node of its own in the shot, so the cutscene draws it"""
+
+    bl_idname = "crashbash.put_on_stage"
+    bl_label = "Put On Stage"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.get(N.PROP_MESH) is not None
+
+    def execute(self, context):
+        if not _require_library(self, context):
+            return {"CANCELLED"}
+        from crashbash.formats.anim import read_animations
+        from crashbash.formats.mdl import read_model
+        from crashbash import scene as SC
+
+        collection = _target(context)
+        obj = context.active_object
+        index = int(obj[N.PROP_MESH])
+        try:
+            model_data, _ = _source_bytes(collection)
+            model = read_model(model_data)
+            shot = SC.read_scene(model_data, model,
+                                 read_animations(model_data, model))
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"{exc}")
+            return {"CANCELLED"}
+        if shot is None or not shot.props:
+            self.report({"ERROR"}, "this model has no shot with a prop to copy, "
+                                   "so there is no node shape to follow")
+            return {"CANCELLED"}
+        if index in shot.mesh_indices:
+            self.report({"ERROR"}, f"mesh {index} is already drawn by this shot; "
+                                   f"move what draws it instead of adding another")
+            return {"CANCELLED"}
+        obj[N.PROP_ON_STAGE] = True
+        self.report({"INFO"}, (
+            f"mesh {index} will get a prop node of its own on export, copied "
+            f"from one the shot already has. Its keys come across with it, so "
+            f"move the object to place it"))
+        return {"FINISHED"}
+
+
 class CRASHBASH_OT_add_placement(bpy.types.Operator):
     """Put another copy of the active placement's object in the level"""
 
@@ -904,6 +950,12 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
                                f"(carried through, not edited)")
             box.operator(CRASHBASH_OT_borrow_mesh.bl_idname, icon="LINK_BLEND")
             box.label(text="select the mesh to borrow, then this one")
+            if obj.get(N.PROP_ON_STAGE):
+                box.label(text="on stage: the shot gets a node for this mesh",
+                          icon="CHECKMARK")
+            else:
+                box.operator(CRASHBASH_OT_put_on_stage.bl_idname, icon="PLAY")
+                box.label(text="for a slot the cutscene does not draw yet")
         if obj is not None and obj.get(N.PROP_OBJECT) is not None:
             layout.box().label(
                 text=f"object pool id {obj[N.PROP_OBJECT]:04X}; a rebuild has "
@@ -954,6 +1006,7 @@ CLASSES = (
     CRASHBASH_OT_export,
     CRASHBASH_OT_borrow_mesh,
     CRASHBASH_OT_add_placement,
+    CRASHBASH_OT_put_on_stage,
     CRASHBASH_OT_bake_particles,
     VIEW3D_PT_crashbash,
 )

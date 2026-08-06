@@ -279,7 +279,12 @@ def relayout(data: bytes, model: Model | None = None,
                 # onto the region start wrote four of `warp_room1`'s five
                 # descriptor rows as zero-length, which on hardware is a room
                 # whose door previews simply never appear.
-                if start in replace and len(replace[start]) != end - start:
+                # The same holds for a region *extended* at its end: adding a
+                # scene node after the ones already there moves nothing in
+                # front of it. What decides it is whether the replacement still
+                # opens with what it replaced, which is exact and cheap.
+                if (start in replace
+                        and replace[start][:end - start] != data[start:end]):
                     return at
                 return at + (offset - start)
         for start, end, at, stop in moves:

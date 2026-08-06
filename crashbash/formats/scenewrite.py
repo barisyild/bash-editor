@@ -405,3 +405,108 @@ def patch_scene(model_data: bytes, extras: dict) -> tuple[bytes, Patched]:
 
     assert len(data) == len(model_data), "a scene patch must not resize the file"
     return bytes(data), report
+
+
+# --- adding a node to a shot ----------------------------------------------
+
+ROOT_CHILD_COUNT = 0x00
+ROOT_CHILDREN = SC.ROOT_CHILDREN     # 0x1C, the self-relative child pointers
+NODE_COMMAND_ID = 0x14               # 0x2000 | (mesh index + 1), for a prop
+PROP_KEYS = SC.PROP_KEYS             # 0x24, where a prop's key list begins
+
+
+def prop_span(model_data: bytes, node: int) -> int:
+    """How many bytes a prop node occupies, keys and all.
+
+    Its key list ends at the first key whose duration is zero, and that key is
+    still part of the record (§9.11.1) -- so the span is the header plus every
+    key up to and including that one.
+    """
+    at = node + PROP_KEYS
+    keys = 0
+    while 0 <= at + 8 <= len(model_data) and keys < SC.MAX_KEYS:
+        keys += 1
+        duration = struct.unpack_from("<i", model_data, at + KEY_DURATION)[0]
+        if duration == 0:
+            break
+        at += PROP_STRIDE
+    return PROP_KEYS + PROP_STRIDE * keys
+
+
+def append_prop(model_data: bytes, model, clips, mesh_index: int,
+                template: int = 0, root_index: int = 0) -> bytes:
+    """Add a prop node that draws `mesh_index`, copied from an existing one.
+
+    A cutscene draws through §9.11's nodes, so putting geometry in a mesh slot
+    nothing names shows nothing: `intro_eurocom` has 28 meshes and its shot
+    draws 26 of them, leaving 10 and 11 on the shelf. This is what puts one on
+    stage.
+
+    The record is copied from a prop the file already has rather than authored,
+    for the same reason `placewrite.spare_records` copies one: the shape is the
+    file's to state. Only the mesh id changes; the keys come across as they are
+    and the artist moves them afterwards.
+
+    Everything is appended to the end of the shot's own region and the root is
+    re-emitted there with one more child, so nothing in front of it moves --
+    which is what lets `modelwrite.relayout` carry every offset across
+    untouched. The old root's bytes stay where they are, superseded.
+    """
+    scene = SC.read_scene(model_data, model, clips)
+    if scene is None or not scene.props:
+        raise ValueError("this model has no shot with a prop to copy")
+    if not 0 <= template < len(scene.props):
+        raise ValueError(f"prop {template} is not one of the {len(scene.props)}")
+    if not 0 <= mesh_index < len(model.meshes):
+        raise ValueError(f"mesh {mesh_index} is not one this model holds")
+
+    root = SC._root_offset(model_data, root_index)
+    if root is None:
+        raise ValueError("this model states no scene root")
+    children = struct.unpack_from("<i", model_data, root + ROOT_CHILD_COUNT)[0]
+
+    node = int(scene.props[template].track.node)
+    span = prop_span(model_data, node)
+    tail = bytearray(model_data)
+
+    # The new node, and then the root again with room for one more child.
+    def align(buffer: bytearray) -> None:
+        if len(buffer) % 4:
+            buffer.extend(b"\x00" * (4 - len(buffer) % 4))
+
+    align(tail)
+    node_at = len(tail)
+    tail.extend(model_data[node:node + span])
+    struct.pack_into("<i", tail, node_at + NODE_COMMAND_ID,
+                     SC.MESH_NAMESPACE | (mesh_index + 1))
+
+    align(tail)
+    root_at = len(tail)
+    tail.extend(model_data[root:root + ROOT_CHILDREN + 4 * children])
+    struct.pack_into("<i", tail, root_at + ROOT_CHILD_COUNT, children + 1)
+    # Each child pointer is self-relative to its own slot, and the slots have
+    # moved, so every one is recomputed against the target it already named.
+    for index in range(children):
+        was = root + ROOT_CHILDREN + 4 * index
+        now = root_at + ROOT_CHILDREN + 4 * index
+        target = was + struct.unpack_from("<i", model_data, was)[0]
+        struct.pack_into("<i", tail, now, target - now)
+    slot = root_at + ROOT_CHILDREN + 4 * children
+    tail.extend(struct.pack("<i", node_at - slot))
+
+    # And the root array points at the copy. `model+0x4C` is self-relative like
+    # everything else, and its slot has not moved.
+    base = 0x4C + struct.unpack_from("<i", model_data, 0x4C)[0]
+    entry = base + 4 * root_index
+    struct.pack_into("<i", tail, entry, root_at - entry)
+
+    # The new bytes have to be inside the image the game loads, and for a model
+    # with no clips that end is stated twice: `i32@0x50` is the resident size
+    # and `T(0x44)` is where the clip table would begin, and the two agree in
+    # 399 of 400 (§2.1). Both move to the new end, so the pair still holds.
+    clips_at = 0x44 + struct.unpack_from("<i", model_data, 0x44)[0]
+    resident = struct.unpack_from("<i", model_data, 0x50)[0]
+    if clips_at == resident == len(model_data):
+        struct.pack_into("<i", tail, 0x50, len(tail))
+        struct.pack_into("<i", tail, 0x44, len(tail) - 0x44)
+    return bytes(tail)

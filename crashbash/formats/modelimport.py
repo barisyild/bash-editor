@@ -140,6 +140,12 @@ class ImportRequest:
     # the padding the resident region ends with, so `placewrite.spare_capacity`
     # bounds it and anything past that is refused rather than dropped.
     new_placements: list[dict] = field(default_factory=list)
+    # Mesh indices to put on stage in the shot. A cutscene draws through
+    # §9.11's nodes, not through a placement list, so geometry in a slot no
+    # node names shows nothing -- `intro_eurocom` carries 28 meshes and its
+    # shot draws 26. Each index here gets a prop node copied from one the file
+    # already has, which is what makes a model *added* rather than swapped in.
+    new_props: list[int] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     # Reasons to refuse. Collected rather than raised one at a time so an
     # artist sees every problem in the file at once.
@@ -939,6 +945,17 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         if report.placements_written:
             model = read_model(model_data)
             clips = read_animations(model_data, model)
+
+    for mesh_index in request.new_props:
+        # Before the geometry, because this grows the shot's own region and
+        # `install_meshes` lays the file out again around whatever it finds.
+        model_data = SW.append_prop(model_data, model, clips, mesh_index)
+        model = read_model(model_data)
+        clips = read_animations(model_data, model)
+        report.warnings.append(
+            f"mesh {mesh_index} now has a prop node of its own in the shot, "
+            f"copied from one the file already had; move its keys in Blender "
+            f"to place it")
 
     if request.new_placements:
         room = PW.spare_capacity(model_data, model)

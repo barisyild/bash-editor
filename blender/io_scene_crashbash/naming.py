@@ -46,6 +46,10 @@ PROP_PLACE_REST = "crashbash_placement_rest"
 # is free -- `warp_room1` has ten, spread over five objects it places more than
 # once, and 0x5041 alone accounts for four of them.
 PROP_SPARE = "crashbash_spare"
+# Set on a mesh object the shot does not draw, to say it should. A cutscene
+# draws through §9.11's nodes, so geometry in a slot no node names shows
+# nothing -- this is what turns a borrowed model into one that is on stage.
+PROP_ON_STAGE = "crashbash_on_stage"
 
 # On the collection: the shot as the file holds it (§9.11), JSON. Everything an
 # artist does not edit here is carried through untouched, which is how a scene

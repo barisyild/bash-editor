@@ -541,6 +541,12 @@ def build_request(collection, model, clips, pack, materials_pack=None,
             f"bytes were not passed, so how much room the list has could not be "
             f"read; they were left out")
     request.scene = _shot(collection, request.warnings)
+    # A mesh the artist put on stage: the shot gets a node of its own for it,
+    # which is what makes a borrowed model *added* to a cutscene rather than
+    # swapped in for something already drawn.
+    request.new_props = sorted(
+        int(obj[N.PROP_MESH]) for obj in collection.all_objects
+        if obj.get(N.PROP_ON_STAGE) and obj.get(N.PROP_MESH) is not None)
 
     sizes = _sizes(pack)
     found = _objects(collection)
