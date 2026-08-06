@@ -136,10 +136,30 @@ def _sibling_pack(archive: BashArchive, entry: Entry):
     return None
 
 
+def _replacements(archive: BashArchive, pairs: list[str] | None) -> dict[int, bytes]:
+    """`--replace name=file` resolved to the file-table indices `build` takes."""
+    by_name = {entry.name: entry for entry in archive}
+    out: dict[int, bytes] = {}
+    for pair in pairs or []:
+        name, _, path = pair.partition("=")
+        entry = by_name.get(name)
+        if entry is None:
+            raise SystemExit(f"no archive entry named {name!r}")
+        if not path:
+            raise SystemExit(f"--replace wants ENTRY=FILE, got {pair!r}")
+        out[entry.index] = Path(path).read_bytes()
+    return out
+
+
 def cmd_build(archive: BashArchive, args) -> int:
     """Rebuild the disc tree: repacked DAT, patched EXE, everything else copied."""
     out = Path(args.output)
-    report = build.build(archive, out)
+    staged = _replacements(archive, getattr(args, "replace", None))
+    report = build.build(archive, out, staged)
+    for index, blob in staged.items():
+        entry = next(e for e in archive if e.index == index)
+        print(f"  staged {entry.name}: {len(archive.read(entry)):,} -> "
+              f"{len(blob):,} bytes")
     print(f"Wrote a disc tree to {out}")
     print(f"  {report.entries} entries in {report.groups} groups")
     print(
@@ -149,7 +169,7 @@ def cmd_build(archive: BashArchive, args) -> int:
     for warning in report.warnings:
         print(f"  warning: {warning}")
 
-    matched, problems = build.verify(archive, out / archive.exe_path.name)
+    matched, problems = build.verify(archive, out / archive.exe_path.name, staged)
     print(f"  verified {matched}/{report.entries} entries byte-identical")
     for problem in problems[:5]:
         print(f"  PROBLEM: {problem}")
@@ -296,6 +316,15 @@ def main(argv: list[str] | None = None) -> int:
         "--original",
         help="build: an original disc image to patch instead of mastering the "
         "tree, which keeps the licence area and the XA streams a folder loses",
+    )
+    parser.add_argument(
+        "--replace",
+        action="append",
+        metavar="ENTRY=FILE",
+        help="build: put FILE in place of the archive entry ENTRY, e.g. "
+        "--replace models/arena/boss_oxide/arena.mdl=arena.mdl. Repeatable. "
+        "Every other entry is packed from the original, and the build verifies "
+        "each one against that intent",
     )
     args = parser.parse_args(argv)
 

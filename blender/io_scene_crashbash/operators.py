@@ -161,10 +161,12 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
         name="Keep the shared tables in place",
         description=("Do not rewrite the colour and UV tables: map each colour "
                      "onto an entry the model already has and each UV onto a "
-                     "triple it already holds. A model with an object pool "
-                     "cannot reclaim the old tables, so without this a one-mesh "
-                     "edit to boss_oxide/arena costs 32,764 bytes of which "
-                     "30,528 are the shipped tables stranded -- with it, four"),
+                     "triple it already holds. Only the seven hub models need "
+                     "this and they turn it on themselves -- the exporter now "
+                     "lays a model out again rather than appending to it, so a "
+                     "table grows where it stands and nothing is stranded. "
+                     "Forcing it on costs colour: a borrowed model came back "
+                     "91 of 255 off at worst against 0 without it"),
         default=False,
     )
     animation_only: BoolProperty(

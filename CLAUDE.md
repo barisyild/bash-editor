@@ -277,6 +277,20 @@ They are not style preferences.
   every check passing. `plan` now carries any gap that is not entirely zero,
   and 400/400 models keep every non-zero byte; the 38,540 bytes that *are* zero
   are padding and alignment reproduces them.
+- **A rebuilt mesh's `+0x2C` block has to be carried, and losing it reads as
+  the object spinning on the spot.** `_install_relaid` asked `landed` for the
+  attachment's new home, but `landed` answers for a region's *start* and an
+  attachment block's start usually is not one — it sits in the padding between
+  two pool meshes, which `plan` carries as a region beginning at the previous
+  mesh's end. Defaulting to zero wrote a null `+0x2C` for exactly the meshes
+  being rebuilt. `boss_oxide/arena` came back with 14 of its 16 blocks, the two
+  missing ones the two meshes the export touched, and on hardware that arena
+  loaded and drew correctly while some of its objects **spun where they stood**.
+  Nothing static saw it: the geometry comparison passed, the placements were
+  byte-identical, the disc verified 992/992 against intent. `tools/relayout.py`
+  now counts the blocks, and a block inside the span a rebuild overwrites is
+  copied into that mesh's own blob rather than looked up — 271 of 271 rebuilds
+  of a §8.4 carrier keep it.
 - **An object record's `+4` is the one field in this format that is not
   self-relative.** `0x8001DD20` adds it to the load-time base named through
   `+8`, so it is a plain offset from the start of that file, and reference 0 is

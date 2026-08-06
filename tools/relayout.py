@@ -58,6 +58,20 @@ def compare(data: bytes, model, out: bytes, back, pack) -> str | None:
         return f"{len(model.meshes)} meshes became {len(back.meshes)}"
     if len(model.instances) != len(back.instances):
         return f"{len(model.instances)} placements became {len(back.instances)}"
+    # §8.4's attachment block, before the geometry: it is the collision volume,
+    # nothing in a payload carries it, and a rebuilt mesh that comes back with a
+    # null `+0x2C` reads on screen as an object spinning on the spot. Two pool
+    # meshes lost theirs to a `landed.get(..., 0)` while every geometry
+    # comparison passed.
+    volumes = {m.header_offset: len(m.volumes) for m in model.meshes}
+    volumes.update({o.mesh.header_offset: len(o.mesh.volumes)
+                    for o in model.objects if o.mesh is not None})
+    after = {m.header_offset: len(m.volumes) for m in back.meshes}
+    after.update({o.mesh.header_offset: len(o.mesh.volumes)
+                  for o in back.objects if o.mesh is not None})
+    if sorted(volumes.values()) != sorted(after.values()):
+        return (f"{sum(1 for v in volumes.values() if v)} meshes carried an "
+                f"attachment block and {sum(1 for v in after.values() if v)} do")
     for index in [m.index for m in model.meshes] + pooled:
         want = MI.payload_from_model(data, model, pack, index, {})
         got = MI.payload_from_model(out, back, pack, index, {})

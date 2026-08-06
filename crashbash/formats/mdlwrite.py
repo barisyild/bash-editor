@@ -1403,7 +1403,14 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
     dest_colour, dest_uv, _ = MOW.table_bounds(dest_data)
     replace_map: dict[int, bytes] = {dest_colour: colours, dest_uv: uvs}
     pooled = {id(o.mesh) for o in dest.objects if o.mesh is not None}
-    inner: dict[int, tuple[int, list[int], int]] = {}
+    regions = MOW.plan(dest_data, dest)
+    inner: dict[int, tuple[int, list[int], int, int]] = {}
+
+    def region_of(offset: int) -> int | None:
+        for start, end in regions:
+            if start <= offset < end:
+                return start
+        return None
 
     for index, (target, blocks) in prepared.items():
         low = min(target.ptr_bounds, target.ptr_strips, target.ptr_uv_index,
@@ -1422,30 +1429,65 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
                 blob.extend(b"\x00" * (4 - len(blob) % 4))
             offsets.append(len(blob))
             blob.extend(block)
+        end = len(blob)
+        # §8.4's attachment block, when it lies inside the span this rebuild is
+        # overwriting: it is the mesh's collision volume and nothing in a
+        # payload carries it, so it is copied along here rather than lost. It
+        # goes after `ptr_end`, which is where the shipped meshes keep it.
+        attach = 0
+        if target.ptr_attachment and region_of(target.ptr_attachment) == start:
+            keep = _attachment_bytes(dest_data, target)
+            if not keep:
+                return None
+            if len(blob) % 4:
+                blob.extend(b"\x00" * (4 - len(blob) % 4))
+            attach = len(blob)
+            blob.extend(keep)
         if start in replace_map:
             return None
         replace_map[start] = bytes(blob)
-        inner[index] = (start, offsets, len(blob))
+        inner[index] = (start, offsets, end, attach)
 
     landed: dict[int, int] = {}
     out = bytearray(MOW.relayout(dest_data, dest, replace_map, landed))
-    if any(start not in landed for start, _, _ in inner.values()):
+    if any(start not in landed for start, _, _, _ in inner.values()):
         # A pool mesh whose span overlaps its neighbour's is not a region of
         # its own -- 96 of the archive's 1971 -- so there is nothing to replace.
         return None
 
+    def carried(offset: int) -> int | None:
+        """Where a byte this rebuild does not own ended up.
+
+        `landed` answers for a region's *start*, and an attachment block's
+        start is often not one -- it sits in the padding between two pool
+        meshes, which `plan` carries as a region beginning at the previous
+        mesh's end. Reading `landed` directly and defaulting to zero wrote a
+        null `+0x2C` for exactly the meshes being rebuilt: §8.4 is the
+        collision volume, and on hardware the objects that lost it spun on the
+        spot in an arena that was otherwise correct. A block inside a replaced
+        region has already been copied into that mesh's own blob.
+        """
+        start = region_of(offset)
+        if start is None or start in replace_map:
+            return None
+        return landed[start] + (offset - start)
+
     for index, (target, blocks) in prepared.items():
-        start, offsets, length = inner[index]
+        start, offsets, length, attach = inner[index]
         at = landed[start]
         strips, geometry, uv_index, texture, colour_index = (
             at + off for off in offsets)
         header = (landed[start] if id(target) in pooled
                   else landed[MESH_HEADER_START]
                   + (target.header_offset - MESH_HEADER_START))
+        attachment = 0
+        if target.ptr_attachment:
+            attachment = (at + attach) if attach else (carried(target.ptr_attachment) or 0)
+            if not attachment:
+                return None  # the block is gone; do not write a null +0x2C
         _finish_header(out, header, blocks["faces"], target.format,
                        target.unk13, target.unk14, geometry, strips, uv_index,
-                       texture, colour_index, at + length,
-                       landed.get(target.ptr_attachment, 0),
+                       texture, colour_index, at + length, attachment,
                        geometry + blocks["normals"] if blocks["normals"] else 0)
 
     if notes is not None:
