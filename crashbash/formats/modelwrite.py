@@ -54,6 +54,15 @@ HEADER_FIELDS = (0x08, 0x10, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2C, 0x3C, 0x44,
 # byte, which is why `moved` answers for an offset equal to a region's end.
 MESH_POINTERS = (0x10, 0x14, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2C)
 
+# §8.1's descriptor rows: `[count]` then `count + 1` records of 16 bytes, each
+# stating a sub-block's start and end as plain file offsets. `0x800163E0`
+# streams them off the disc, so they are read a sector at a time -- and the
+# measurement agrees: all seven §8.6 carriers put every row on a 0x800
+# boundary, four of them at exactly that granularity rather than 0x1000. A
+# block that moves has to land on the same grid or every row inside it slips.
+CHUNK_STRIDE = 16
+CHUNK_ALIGN = 0x800
+
 
 class Unmapped(ValueError):
     """A pointer names a byte no planned region covers."""
@@ -127,8 +136,18 @@ def plan(data: bytes, model: Model) -> list[tuple[int, int]]:
     tail = min((resolve(field) for field in (0x1C, 0x18, 0x3C, 0x44)
                 if 0 < resolve(field) <= len(data)), default=len(data))
     tail = max(tail, resolve(0x08))
+    # A §8.6 carrier's door-preview block is streamed from disc a sub-block at
+    # a time through §8.1's descriptor rows, which state plain file offsets, so
+    # it is emitted as a region of its own: it has to stay sector-aligned and
+    # its rows have to move with it. Splitting it out is what lets a carrier be
+    # laid out at all instead of pinned.
+    block = resolve(0x44) if struct.unpack_from("<i", data, 0x38)[0] else 0
     if tail < len(data):
-        spans.append((tail, len(data)))
+        if 0 < tail < block < len(data):
+            spans.append((tail, block))
+            spans.append((block, len(data)))
+        else:
+            spans.append((tail, len(data)))
 
     # Whatever the pool holds between its meshes is emitted as regions of its
     # own rather than left to alignment. §8.3's run puts the next header exactly
@@ -200,10 +219,15 @@ def relayout(data: bytes, model: Model | None = None,
     model = model or read_model(data)
     replace = replace or {}
     regions = plan(data, model)
+    # §8.1's rows name their sub-blocks by plain file offset and the loader
+    # streams them from disc, so every shipped one is 0x1000-aligned. Land the
+    # block on the same grid and each row inside it keeps its alignment.
+    carrier = (0x44 + struct.unpack_from("<i", data, 0x44)[0]
+               if struct.unpack_from("<i", data, 0x38)[0] else 0)
     out = bytearray()
     moves: list[tuple[int, int, int, int]] = []   # (start, end, new start, new end)
     for start, end in regions:
-        _align(out, 4)
+        _align(out, CHUNK_ALIGN if start == carrier else 4)
         at = len(out)
         out.extend(replace.get(start, data[start:end]))
         moves.append((start, end, at, len(out)))
@@ -212,11 +236,17 @@ def relayout(data: bytes, model: Model | None = None,
     _align(out, 4)
 
     def moved(offset: int) -> int:
+        # Containment first, everywhere, before any one-past-the-end reading.
+        # Two regions meet at one offset -- the end of the first and the start
+        # of the second -- and taking whichever came first in the list answered
+        # "the end of the first" for the §8.6 block's own start, which put a
+        # descriptor row 156 bytes short of the block it names.
         for start, end, at, stop in moves:
             if start <= offset < end:
                 # Inside a replaced region only its start is meaningful, and
                 # only the header names one, so this is exact where it is used.
                 return at if start in replace else at + (offset - start)
+        for start, end, at, stop in moves:
             if offset == end:            # a one-past-the-end pointer, and the
                 return stop                # tables use them
         raise Unmapped(f"{offset:#x} is in no region")
@@ -247,10 +277,36 @@ def relayout(data: bytes, model: Model | None = None,
                 struct.pack_into("<i", out, at + field,
                                  moved(target) - (at + field))
     _repoint_objects(data, out, model, moved)
+    _repoint_chunks(data, out, moved)
     struct.pack_into("<i", out, RESIDENT_SIZE,
                      moved(min(struct.unpack_from("<i", data, RESIDENT_SIZE)[0],
                                len(data))))
     return bytes(out)
+
+
+def _repoint_chunks(data: bytes, out: bytearray, moved) -> None:
+    """Move §8.1's descriptor rows to where their sub-blocks landed.
+
+    A row states its sub-block's start and end as **plain file offsets**, not
+    self-relative ones, and `0x800163E0` hands them straight to the disc read.
+    They are the reason a §8.6 carrier's door-preview block was said to be
+    unmovable: the block may move, its rows just have to move with it.
+
+    Row 0 is the model itself and is all zeros on disc, so only rows 1..count
+    are touched, and only when they resolve inside this file.
+    """
+    count = struct.unpack_from("<i", data, 0x38)[0]
+    if count <= 0:
+        return
+    rows = 0x3C + struct.unpack_from("<i", data, 0x3C)[0] + 4
+    at = moved(rows - 4) + 4
+    for index in range(count + 1):
+        row = rows + CHUNK_STRIDE * index
+        start, end = struct.unpack_from("<2I", data, row)
+        if not start or not (start < end <= len(data)):
+            continue
+        struct.pack_into("<2I", out, at + CHUNK_STRIDE * index,
+                         moved(start), moved(end))
 
 
 def _repoint_objects(data: bytes, out: bytearray, model: Model, moved) -> None:

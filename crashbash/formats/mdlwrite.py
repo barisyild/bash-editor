@@ -1144,7 +1144,8 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                    pin_tables: bool = False,
                    notes: list[str] | None = None,
                    plans: dict[int, "np.ndarray"] | None = None,
-                   rebuild_tables: bool = False) -> bytes:
+                   rebuild_tables: bool = False,
+                   relayout_carrier: bool = False) -> bytes:
     """Install several meshes in one pass, sharing one copy of the tables.
 
     `install_mesh` appends a colour table, a UV table and the vector pool on
@@ -1325,7 +1326,8 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
 
     if not pin_tables:
         relaid = _install_relaid(dest_data, dest, prepared, per_mesh,
-                                 bytes(colours), bytes(uvs), notes)
+                                 bytes(colours), bytes(uvs), notes,
+                                 relayout_carrier)
         if relaid is not None:
             return relaid
 
@@ -1426,7 +1428,8 @@ def _aim_object(out: bytearray, dest: Model, dest_data: bytes, target: Mesh,
 
 def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
                     per_mesh: dict, colours: bytes, uvs: bytes,
-                    notes: list[str] | None) -> bytes | None:
+                    notes: list[str] | None,
+                    relayout_carrier: bool = False) -> bytes | None:
     """Install by laying the model out again, rather than by appending to it.
 
     Everything above this function decides *what* each mesh and each table
@@ -1450,8 +1453,13 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
     neighbour's and so has no identity to replace -- and the caller falls back
     to the path that was there before.
     """
-    if struct.unpack_from("<i", dest_data, 0x38)[0]:
-        return None  # a §8.6 carrier: its block may not move (§2.1)
+    if struct.unpack_from("<i", dest_data, 0x38)[0] and not relayout_carrier:
+        # A §8.6 carrier. Its door-preview block *can* move now -- `relayout`
+        # lands it on the sector grid and moves §8.1's descriptor rows with it,
+        # 14 of 14 measured -- but what that costs on hardware is unproven, and
+        # §2.1 says repointing `T(0x24)` alone scrambles every textured surface
+        # in these seven rooms. So it is the caller's call, not a default.
+        return None
 
     dest_colour, dest_uv, _ = MOW.table_bounds(dest_data)
     replace_map: dict[int, bytes] = {dest_colour: colours, dest_uv: uvs}

@@ -889,6 +889,12 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     # placement and clip passes run and the resident-end check has to measure
     # against where the tables started, not where the last pass left them.
     shipped_model = model_data
+    # `pin_tables=False` stated outright is a caller saying "do not pin this",
+    # and for a §8.6 carrier the only way to honour that is to lay the model
+    # out again and move its door-preview block with §8.1's rows. Left at
+    # `None` a carrier still pins, because what that costs on hardware is not
+    # yet known.
+    asked_not_to_pin = pin_tables is False
     if pin_tables is None:
         pin_tables = struct.unpack_from("<i", model_data, 0x38)[0] > 0
         if pin_tables:
@@ -1062,7 +1068,8 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     if staged:
         trimmed = MW.install_meshes(trimmed, staged, pin_tables=pin_tables,
                                     notes=report.warnings, plans=plans,
-                                    rebuild_tables=rebuild_tables)
+                                    rebuild_tables=rebuild_tables,
+                                    relayout_carrier=asked_not_to_pin)
     grown = trimmed
     rebuilt_model = read_model(grown)
 

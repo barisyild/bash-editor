@@ -170,18 +170,16 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
         default=False,
     )
     rebuild_tables: BoolProperty(
-        name="Rebuild the shared tables (breaks the menu)",
+        name="Rebuild the shared tables",
         description=("Build the colour and UV tables from nothing but the "
                      "meshes in the scene, so the file carries no entry no "
-                     "mesh reads. This RENUMBERS every entry and it is known "
-                     "to be wrong on hardware: the menu came back with whole "
-                     "faces flat grey, twice, because it draws from code that "
-                     "holds indices of its own and nothing in the file can see "
-                     "them. It saves nothing either -- the rebuilt tables are "
-                     "a median 8 colour and 25 UV entries BIGGER than shipped, "
-                     "and every mesh is re-striped so every clip is rebuilt "
-                     "with it. Off unless you are investigating this"),
-        default=False,
+                     "mesh reads. Every entry is renumbered, which the menu "
+                     "confirms on hardware: mainmenu/models draws correctly "
+                     "with its colour table rebuilt 5216 -> 5270 from index 0. "
+                     "What it costs is that every mesh must be re-striped and "
+                     "so every clip is rebuilt with it, which is why an "
+                     "unedited save is no longer byte-identical"),
+        default=True,
     )
     animation_only: BoolProperty(
         name="Animation only",
@@ -228,7 +226,11 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
                 model_data, pack_data, request,
                 animation_only=self.animation_only,
                 rebuild_tables=self.rebuild_tables and not self.animation_only,
-                pin_tables=True if self.pin_tables else None)
+                # False, not None: stated outright it means "do not pin this",
+                # and for a §8.6 carrier that is honoured by laying the model
+                # out again and moving its door-preview block with §8.1's rows
+                # rather than holding the tables still.
+                pin_tables=True if self.pin_tables else False)
         except Exception as exc:  # noqa: BLE001
             self.report({"ERROR"}, f"nothing was written. {exc}")
             return {"CANCELLED"}
