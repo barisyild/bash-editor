@@ -227,7 +227,24 @@ def relayout(data: bytes, model: Model | None = None,
     out = bytearray()
     moves: list[tuple[int, int, int, int]] = []   # (start, end, new start, new end)
     for start, end in regions:
-        _align(out, CHUNK_ALIGN if start == carrier else 4)
+        if start == carrier:
+            # A §8.6 carrier's block keeps its shipped file offset, and the
+            # reason is not the descriptor rows -- those move fine. For a
+            # carrier `i32@0x50` *is* this block's start (167,936 = 0x29000 in
+            # `warp_room1`), the pack's `u32@0x14` mirrors it in 400/400 pairs,
+            # and §10.4's 0x8002A62C carries that into the texture context at
+            # +0x24. Move the block and the room draws perfectly until a door
+            # preview is opened, at which point every textured surface in the
+            # level turns to garbage -- the preview load is what reads it.
+            # So everything below may be relaid freely; this lands where it was.
+            if len(out) > start:
+                raise Unmapped(
+                    f"the §8.6 block has to stay at {start:#x} -- `i32@0x50` "
+                    f"names it and the pack's `u32@0x14` mirrors it -- and "
+                    f"what goes before it now needs {len(out)} bytes")
+            out.extend(b"\x00" * (start - len(out)))
+        else:
+            _align(out, 4)
         at = len(out)
         out.extend(replace.get(start, data[start:end]))
         moves.append((start, end, at, len(out)))
