@@ -595,6 +595,27 @@ They are not style preferences.
   penguin's transparent texels were pulled into the nearest colour and came back
   opaque — worst channel 255 of 255 on three of its six pictures, 0 once the
   distinct RGBA values were used as the palette.
+  **`out/crashbash-warp-textured-penguin.bin` runs**, so all three rules are
+  confirmed on hardware at once: `warp_room1` loads with 176 textures where it
+  shipped 170, the six appended ones draw the penguin's own art, and the room's
+  own untextured triangles still find the swatch — which is the "insert before
+  the last" rule doing its job, since the swatch moved from slot 169 to 175 and
+  bit 15 still reaches it.
+- **A pinned UV table does not forbid textures, only arbitrary ones.** What a
+  §8.6 carrier fixes is the table, and a triple in it is only three texel pairs
+  — so an appended slot can be addressed through whatever triples the table
+  already holds. `pinned_uv_triples` finds them and `snap_to_triples` moves each
+  face onto the nearest. The set narrows three times and each narrowing was an
+  export that refused: `warp_room1` has 2665 triples, **82** inside a 16×16
+  picture, **23** that survive the writer rotating a triangle's corners, and
+  **17** that also survive the reversal §11.3 applies to every other triangle in
+  a strip. Snapping the penguin's 116 faces onto those 17 moves the worst by 33
+  texels over its six coordinates, and on the console that draws as its own art
+  with a smeared face — its eyes come back a black mask instead of two pupils.
+  **Size an appended slot from the picture, not from `UNKNOWN_SIZE`.** A slot
+  being added is not in the pack yet, so the exporter had nothing for it and put
+  its UVs through 256×256 while the snap had been done in 16×16: 115 of the 116
+  faces came back holding a triple the table does not have.
 - **BGR555 `0x0000` is the hardware's skip-pixel.** A genuinely black texel
   needs the STP bit: `0x8000`.
 - **Real triangle strips, not one strip per triangle.** No shipped mesh exceeds

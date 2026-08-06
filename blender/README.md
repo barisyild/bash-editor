@@ -126,7 +126,10 @@ the pool mesh owns is the **whole budget** (§8.3) and this writer stripes loose
 than the authoring tool, so the figure is a rough reading, not a promise; the
 export measures for real and refuses rather than break the pool.
 
-**It brings its own pictures, and takes nobody's slot.** *Bring its own
+**It brings its own pictures, and takes nobody's slot — and that disc runs.**
+`warp_room1` loads with 176 textures where it shipped 170, the six appended ones
+drawing the penguin's own art while the room's own untextured triangles still
+find the swatch that moved from slot 169 to 175. *Bring its own
 textures* adds them to the destination pack instead of overwriting anything —
 `crate_jungle/arena` went from 62 textures to 68 with all 61 of its own and all
 62 of its palettes byte-identical, and each added picture matching the
