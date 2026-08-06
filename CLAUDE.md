@@ -553,23 +553,26 @@ They are not style preferences.
   the select screen. `sole_sampler_slots` measures it: `warp_room1`'s arm
   0x501C is the sole reader of **none**, its four slots being read by 6, 13, 6
   and 7 other meshes, while `polar_polar`'s big arena mesh is sole reader of 14.
-- **A rebuild must not move the shared tables past the shipped `i32@0x50`, and
-  `install_meshes` lays them at the end of what it writes.** That is the whole
-  of why Jungle Bash came back as a screen of VRAM garbage after the penguin
-  went into `crate_jungle/arena`: `T(0x20)` moved from `0x58` to `0x8a1c`, which
-  is the shipped resident end **to the byte**, and every mesh of the model
-  indexes those tables, so nothing drew from real colours or real UVs. 168 of
-  the 400 models have `i32@0x50` equal to their whole length — 42 of the 73
-  levels — and for those there is no ground beyond it at all.
-  `_refuse_if_past_resident` measures it and refuses. It separates the cases
-  exactly: the three builds known to run on hardware (`intro_eurocom`'s tall M,
-  `warp_room1`'s penguin, `warp_room1`'s three objects) all pass, and the one
-  that crashed is refused naming both tables. A corpus sweep trips it on 233
-  models because forcing every mesh through the writer is not a shippable edit,
-  so the sweeps pass `check_resident=False` on purpose.
-  **What this costs is real:** an edit to such a model has to fit the colour and
-  UV entries it already has, which is the same discipline the pinned carriers
-  need, for a different reason.
+- **A rebuild must not move the shared tables past the shipped `i32@0x50` —
+  measured, not explained.** `install_meshes` lays the colour and UV tables at
+  the end of what it writes, and when the penguin went into
+  `crate_jungle/arena` that put `T(0x20)` at `0x8a1c`, the shipped `i32@0x50`
+  **to the byte**. Jungle Bash came back as a screen of VRAM garbage, which is
+  what every mesh indexing a table it cannot read looks like.
+  `_refuse_if_past_resident` refuses that, and it separates the cases exactly:
+  the three builds that run on hardware (`intro_eurocom`'s tall M,
+  `warp_room1`'s penguin, `warp_room1`'s three objects) all keep both tables
+  below the boundary; the one that crashed is refused naming both.
+  **The obvious mechanism is refuted, so do not repeat it.** The group loader at
+  `0x800126C0` carves each entry out of the group's sector run and shrinks it
+  with `0x80011498` to `row+4` — the **file table's byte size**, not `i32@0x50`
+  — so the whole entry is resident and the tail is in RAM. All four callers of
+  the shrink primitive are accounted for and none trims a model to `0x50`. That
+  is `docs/FORMAT.md` §2.1's paradox, now read a second way and standing.
+  `tools/mips.py` is the disassembler that settled it.
+  A corpus sweep trips the check on 233 models because forcing every mesh
+  through the writer is not a shippable edit, so the sweeps pass
+  `check_resident=False` on purpose.
 - **A pack can be made longer, so a borrowed model need take nobody's slot.**
   §10.4 closed VRAM placement — it was never in the file, the loader allocates a
   rect off the free list its size class names — so `texwrite.append_texture`

@@ -1181,19 +1181,27 @@ def _palette_for(rgba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _refuse_if_past_resident(shipped: bytes, built: bytes) -> None:
-    """Stop a rebuild that puts a shared table where the game will not load it.
+    """Stop a rebuild that lays a shared table past the shipped `i32@0x50`.
 
-    Nothing past the shipped `i32@0x50` is there at run time (§2.1), and 168 of
-    the 400 models -- 42 of the 73 levels -- have that value equal to their
-    whole length, so for them there is no room beyond it at all.
-    `install_meshes` lays the colour and UV tables at the end of what it writes,
-    which for such a model is exactly that unreachable ground.
+    **This is a rule fitted to observations, not a mechanism.** Say so plainly,
+    because the obvious explanation has been read out of the executable and is
+    wrong: the group loader at `0x800126C0` carves each entry out of the group's
+    sector run and shrinks it with `0x80011498` to `row+4` -- **the file table's
+    byte size, not `i32@0x50`** -- so the whole entry is resident and the tail is
+    in RAM. No caller trims a model to `0x50`; there are four and they are all
+    accounted for (three group loaders, one blob loader).
 
-    It draws as total corruption rather than as a missing mesh, because every
-    mesh of the model indexes those tables: `crate_jungle/arena` came back with
-    `T(0x20)` moved from 0x58 to 0x8a1c, which is the shipped resident end to
-    the byte, and Jungle Bash filled the screen with VRAM garbage. A disc was
-    handed over before this check existed.
+    What the boundary does have is behaviour, and now five builds' worth of it.
+    `crate_jungle/arena` came back with `T(0x20)` moved from 0x58 to 0x8a1c --
+    the shipped `i32@0x50` to the byte -- and Jungle Bash filled the screen with
+    VRAM garbage, which is what every mesh indexing a table it cannot read looks
+    like. The three builds that run on hardware (`intro_eurocom`'s tall M,
+    `warp_room1`'s penguin, `warp_room1`'s three objects) all keep both tables
+    below it. The warp-room probes of §2.1 say the same from their side.
+
+    So this refuses on the measurement while the mechanism is open. Two
+    candidates are still live and a padding-only probe separates them: whether
+    the entry may grow at all, or only where its tables land.
     """
     if len(shipped) < 0x54 or len(built) < 0x54:
         return
