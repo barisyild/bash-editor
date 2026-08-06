@@ -122,6 +122,7 @@ def main(argv: list[str]) -> int:
     clean = grown = 0
     failures: Counter[str] = Counter()
     growth: list[int] = []
+    cramped: list[str] = []
     before = after = 0
     for entry in archive:
         if not entry.name.endswith(".mdl"):
@@ -145,6 +146,13 @@ def main(argv: list[str]) -> int:
             clean += 1
         try:
             lost, added = check_grown(data, pack, model)
+        except MW.Unmapped as exc:
+            # A §8.6 carrier's block keeps its file offset, so the room below it
+            # is finite and a table can only grow into what is left. Refusing is
+            # the correct answer, not a failure -- what would be a failure is
+            # writing it anyway.
+            cramped.append(f"{entry.name}: {exc}")
+            continue
         except Exception as exc:  # noqa: BLE001
             failures[f"{entry.name}: grown, {type(exc).__name__} {exc}"] += 1
             continue
@@ -162,6 +170,11 @@ def main(argv: list[str]) -> int:
               f"shipped entry in place: {grown}")
         print(f"   cost: min {growth[0]}, median {growth[len(growth) // 2]}, "
               f"max {growth[-1]} bytes")
+    if cramped:
+        print(f"§8.6 carriers with no room left below their block: "
+              f"{len(cramped)}")
+        for line in cramped[:3]:
+            print(f"   {line}")
     print(f"failures: {sum(failures.values())}")
     print(f"total size {before} -> {after} ({after - before:+d})")
     for reason, _ in failures.most_common(8):

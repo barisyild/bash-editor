@@ -303,6 +303,29 @@ They are not style preferences.
   while the check reported 15 failures, because a comparison that skips a mesh
   the reader returned `None` for calls that model clean. **Count the meshes
   before comparing them.**
+- **A §8.6 carrier's door previews read the shared tables from outside the
+  model, and three discs say so.** This is the outside consumer the coverage
+  measurement could never find, and the tell is *when* it shows: the room draws
+  perfectly, and the instant a door preview is opened **every textured surface
+  in the level turns to garbage** — the player character included, and that
+  model is a different file. Three builds narrow it:
+  * block moved, tables renumbered → clean until a preview, then garbage.
+  * block held at its shipped offset (`i32@0x50` names it, the pack's
+    `u32@0x14` mirrors it, §10.4's `0x8002A62C` carries that into the texture
+    context), tables renumbered → **the same garbage**. So the block's position
+    is not what §2.1 was seeing.
+  * everything below the block relaid with the tables held → the pinned path,
+    which is what the shipped discs do.
+  So §2.1's "repointing `T(0x24)` alone scrambles every textured surface" is
+  real, it survives owning the layout, and its cause is now named: the preview
+  block indexes those tables. §8.1's descriptor rows were never the obstacle —
+  they repoint cleanly, 14/14 — and the block *can* move as far as the file is
+  concerned.
+  **And the room below the block is finite.** With the block fixed,
+  `warp_room1` has 167,936 bytes for everything else and a rebuild that grows
+  the colour table by one entry already wants 168,964. So in these seven models
+  a table can neither move nor grow, which is what pinning has always been.
+  `rebuild_tables` refuses to combine with it.
 - **A §8.6 carrier still pins, and that is a hardware fact rather than a
   shortcoming of the writer.** New colours mean a longer colour table, a longer
   colour table moves `T(0x24)`, and repointing `0x24` — three bytes, a

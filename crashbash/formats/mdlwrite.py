@@ -1199,6 +1199,12 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         # when its table was rebuilt this way. Every mesh of the model has to be
         # staged, or an unstaged one keeps indices into a table that no longer
         # means what it meant.
+        if pin_tables:
+            raise ValueError(
+                "the shared tables cannot be rebuilt and pinned at once: a "
+                "§8.6 carrier holds them still because its door previews read "
+                "them from outside the model, and renumbering is exactly what "
+                "that cannot survive")
         absent = sorted(set(mesh_index(dest)) - set(meshes))
         if absent:
             raise ValueError(

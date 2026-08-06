@@ -226,11 +226,12 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
                 model_data, pack_data, request,
                 animation_only=self.animation_only,
                 rebuild_tables=self.rebuild_tables and not self.animation_only,
-                # False, not None: stated outright it means "do not pin this",
-                # and for a §8.6 carrier that is honoured by laying the model
-                # out again and moving its door-preview block with §8.1's rows
-                # rather than holding the tables still.
-                pin_tables=True if self.pin_tables else False)
+                # None, so a §8.6 carrier still pins itself. Two discs settled
+                # that: the door previews read the shared tables from outside
+                # the model, so a carrier whose tables move or renumber draws
+                # perfectly until a preview is opened and then turns every
+                # textured surface in the level to garbage.
+                pin_tables=True if self.pin_tables else None)
         except Exception as exc:  # noqa: BLE001
             self.report({"ERROR"}, f"nothing was written. {exc}")
             return {"CANCELLED"}
