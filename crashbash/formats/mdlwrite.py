@@ -1228,7 +1228,13 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                 "§8.6 carrier holds them still because its door previews read "
                 "them from outside the model, and renumbering is exactly what "
                 "that cannot survive")
-        absent = sorted(set(mesh_index(dest)) - set(meshes))
+        # A mesh with no faces holds no index into either table, so there is
+        # nothing about it to renumber and nothing to stage. `mainmenu/models2`
+        # has one -- mesh 5, zero faces, an empty vertex pool and all five
+        # block pointers on the same byte -- and it was the single model in the
+        # archive this refused.
+        absent = sorted(index for index, target in mesh_index(dest).items()
+                        if index not in meshes and target.face_count_header)
         if absent:
             raise ValueError(
                 f"rebuilding the shared tables renumbers every entry, so every "

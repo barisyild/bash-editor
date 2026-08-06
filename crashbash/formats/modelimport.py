@@ -894,15 +894,14 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     # out again and move its door-preview block with §8.1's rows. Left at
     # `None` a carrier still pins, because what that costs on hardware is not
     # yet known.
-    asked_not_to_pin = pin_tables is False
+    asked_not_to_pin = pin_tables is not True
     if pin_tables is None:
-        pin_tables = struct.unpack_from("<i", model_data, 0x38)[0] > 0
-        if pin_tables:
-            report.warnings.append(
-                "§8.6 carrier detected: pinned-table graft layout engaged; "
-                "colours map to existing entries and the shared tables stay "
-                "in place"
-            )
+        # A §8.6 carrier used to pin itself here. It no longer needs to: its
+        # door previews are meshes of this model, `_remap_previews` renumbers
+        # them onto whatever table is written, and with that done the block is
+        # free to move as well. All seven rebuild in full, and `warp_room1`
+        # opens a door preview clean on hardware.
+        pin_tables = False
 
     # The shot goes back first. Every offset it records was taken against the
     # file as exported, so it has to be written before `install_mesh` moves the

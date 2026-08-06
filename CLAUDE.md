@@ -511,6 +511,22 @@ They are not style preferences.
   zeros, so the pose it carried was dropped — three of that model's twelve
   clips came back playing something else while every static check passed. This
   is what "the animation plays partially and broken" was.
+- **Split only the faces Blender cannot hold, never the whole mesh.** Two
+  triangles over the same three welded corners are one face to Blender and two
+  to the file, and it drops the second. The importer used to answer that by
+  rebuilding the *entire* mesh a corner per vertex, which leaves the exporter no
+  shared edge to chain along: `warp_room1` came back out of Blender in **3005
+  strips where the core needs 1548**, 26,096 bytes of blocks for the same
+  geometry. Splitting only the colliding faces takes it to 1903 strips and
+  206,776 bytes against the core's 200,632, and the 355 that remain are exactly
+  the **360 faces of that room which share their three corners with another** —
+  each is its own strip because it can chain to nothing, and that is inherent
+  to Blender's data model rather than a loss.
+- **A mesh with no faces holds no index, so it needs no staging.**
+  `mainmenu/models2`'s mesh 5 is empty -- zero faces, an empty vertex pool, all
+  five block pointers on the same byte -- and requiring every mesh to be staged
+  before the tables may be renumbered made it the single model in the archive a
+  full rebuild refused. With empty meshes exempt it is **378 of 378**.
 - **The Blender front end never carried §5.1's strip flag, and rebuilding every
   mesh is what finally showed it.** `read_scene` fills a payload's positions,
   colours, UVs, textures and blend and leaves `untextured` at `None` — the word
@@ -873,10 +889,11 @@ this writer, both tables built from nothing but the meshes, renumbered from
 index 0 (1162 -> 1259, 354 -> 372, 555 -> 561 colours) -- and all three play
 correctly. With `mainmenu/models` and `warp_room1` before them that is a
 cutscene, two arenas, the menu and a hub room. Measured over the archive,
-**377 of 378 models rebuild that way with every triangle identical**: 203,054
-in the levels, 117,512 in the cutscenes, 45,300 in the characters, 89,211 in
-the menu group. The one refusal is `mainmenu/models2`, which has a mesh no
-payload can be built from.
+**378 of 378 models rebuild that way with every triangle identical**: 203,054
+in the levels, 117,512 in the cutscenes, 45,300 in the characters, 93,373 in
+the menu group. Nothing is refused. `tools/native_roundtrip.py` now covers the
+seven §8.6 carriers too -- the level group went from 123 files and 92,790
+triangles to **130 and 108,288**.
 
 **A §8.6 hub room has too, tables and all.**
 `out/crashbash-warp-full-rebuild.bin` runs: `warp_room1` laid out again from

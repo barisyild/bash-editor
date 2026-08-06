@@ -522,21 +522,43 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
     mesh.validate(verbose=False)
     if len(mesh.polygons) != faces:
         # Two triangles over the same three welded corners are one face to
-        # Blender and two to the file. Rebuilding a corner per vertex keeps them
-        # apart; the surface loses its shared edges, which is worth saying.
-        dropped = faces - len(mesh.polygons)
+        # Blender and two to the file, and Blender drops the second. Splitting
+        # *only* those faces keeps every other shared edge: rebuilding the whole
+        # mesh a corner per vertex instead left the exporter nothing to chain
+        # along, and `warp_room1` came back out of Blender in 3005 strips where
+        # the core needs 1548 -- 26,096 bytes of blocks for the same geometry.
+        seen: set[tuple[int, ...]] = set()
+        split = []
+        extra = []
+        for face, row in enumerate(indices):
+            corners = tuple(sorted(int(v) for v in row))
+            if corners in seen:
+                base = len(vertices) + len(extra) * 3
+                extra.append(face)
+                # The stand-ins are appended in the payload's own corner order,
+                # so the face still has to name them reversed, exactly as
+                # `indices` is.
+                split.append(tuple(base + k for k in CORNER_ORDER))
+            else:
+                seen.add(corners)
+                split.append(tuple(int(v) for v in row))
+        stand_in = np.round(payload.positions[extra].reshape(-1, 3)).astype(np.int64)
+        points = np.concatenate([vertices, stand_in]) if len(extra) else vertices
+        mapping = np.concatenate([
+            mapping,
+            (np.asarray(payload.corner_vertices)[extra].reshape(-1)
+             if payload.corner_vertices is not None
+             else np.zeros(len(extra) * 3, dtype=np.int64)),
+        ]) if len(extra) else mapping
         bpy.data.meshes.remove(mesh)
         mesh = bpy.data.meshes.new(name)
-        vertices = np.round(payload.positions.reshape(-1, 3)).astype(np.int64)
-        indices = np.arange(faces * 3).reshape(-1, 3)[:, CORNER_ORDER]
-        mapping = (np.asarray(payload.corner_vertices).reshape(-1)
-                   if payload.corner_vertices is not None else None)
-        mesh.from_pydata(to_blender(vertices).tolist(), [],
-                         [tuple(int(v) for v in row) for row in indices])
+        mesh.from_pydata(to_blender(points).tolist(), [],
+                         [tuple(int(v) for v in row) for row in split])
         mesh.validate(verbose=False)
         notes.append(
-            f"{name}: {dropped} face(s) share their three corners with another, "
-            f"so the mesh is built one vertex per corner and has no shared edges")
+            f"{name}: {len(extra)} face(s) share their three corners with "
+            f"another, so those alone are built a vertex per corner; the rest "
+            f"keep their shared edges")
 
     # Materials, and the face -> material map that carries the texture entry.
     order: dict[tuple, int] = {}
