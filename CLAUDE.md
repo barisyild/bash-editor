@@ -318,37 +318,33 @@ They are not style preferences.
   when these meshes are renumbered with everything else, and the reason the
   corruption waits for a door to be opened is that this is when they are
   streamed in and drawn.
-- **A §8.6 carrier's door previews read the shared tables from outside the
-  model, and three discs say so.** This is the outside consumer the coverage
-  measurement could never find, and the tell is *when* it shows: the room draws
-  perfectly, and the instant a door preview is opened **every textured surface
-  in the level turns to garbage** — the player character included, and that
-  model is a different file. Three builds narrow it:
-  * block moved, tables renumbered → clean until a preview, then garbage.
-  * block held at its shipped offset (`i32@0x50` names it, the pack's
-    `u32@0x14` mirrors it, §10.4's `0x8002A62C` carries that into the texture
-    context), tables renumbered → **the same garbage**. So the block's position
-    is not what §2.1 was seeing.
-  * everything below the block relaid with the tables held → the pinned path,
-    which is what the shipped discs do.
-  So §2.1's "repointing `T(0x24)` alone scrambles every textured surface" is
-  real, it survives owning the layout, and its cause is now named: the preview
-  block indexes those tables. §8.1's descriptor rows were never the obstacle —
-  they repoint cleanly, 14/14 — and the block *can* move as far as the file is
-  concerned.
-  **And the room below the block is finite.** With the block fixed,
-  `warp_room1` has 167,936 bytes for everything else and a rebuild that grows
-  the colour table by one entry already wants 168,964. So in these seven models
-  a table can neither move nor grow, which is what pinning has always been.
-  `rebuild_tables` refuses to combine with it.
-- **A §8.6 carrier still pins, and that is a hardware fact rather than a
-  shortcoming of the writer.** New colours mean a longer colour table, a longer
-  colour table moves `T(0x24)`, and repointing `0x24` — three bytes, a
-  byte-identical copy — is exactly what scrambles every textured surface in
-  those seven rooms. The two tables are adjacent, so there is no layout that
-  grows one without moving the other's pointer. `_install_relaid` refuses a
-  carrier for that reason and the pinned path below still applies to it.
-  **What pinning costs is the colours, and it is not small.** A pinned rebuild maps
+- **A §8.6 carrier takes a full table rebuild, and the disc that proves it is
+  `out/crashbash-warp-full-rebuild.bin`.** The previews were never an obstacle
+  once they were understood: they are meshes of this model, so they are
+  renumbered with everything else, and then the block is free to move and the
+  room to grow. `warp_room1` rebuilt entirely — every mesh through this writer,
+  both tables built from nothing but the meshes and the previews, **renumbered
+  from entry 0** (4516 → 4546 colours, 2770 → 2795 UVs, the shipped numbering
+  not kept even as a prefix) — loads, draws, and **opens a door preview clean**.
+  All seven carriers rebuild that way. No pinning, no snapping, nothing
+  stranded.
+  **What the corruption actually was: renumbering under previews that still
+  held the old numbering.** Two discs showed it and neither was evidence about
+  the block, because both renumbered. The tell was *when* it showed — the room
+  perfect until a door opened, then every textured surface in the level in
+  garbage, the player character included, and that model is a different file.
+  §2.1's "repointing `T(0x24)` alone scrambles every textured surface" was
+  reading this consumer without knowing it.
+  **And one bug hid behind it.** With the previews renumbered but the block
+  moving, the room came back with *no previews at all*: `moved()` collapses any
+  offset inside a replaced region onto that region's start, so four of
+  `warp_room1`'s five §8.1 descriptor rows were written zero-length and the
+  loader read nothing for them. A replacement that keeps its length has moved
+  nothing inside itself — §8.6's block is renumbered in place — so its interior
+  maps straight across.
+- **Pinning is now only what a caller asks for, and what it costs is the
+  colours.** Nothing needs it: the seven carriers rebuild in full once §8.6's
+  preview meshes are renumbered alongside. A pinned rebuild maps
   each face onto an existing *triple* of consecutive entries, not onto three
   nearest colours, and `boss_oxide/arena`'s 5562 entries do not happen to hold
   the penguin's: measured corner by corner, worst **91 of 255** and **23 % of
@@ -873,6 +869,18 @@ entries differs** and it is the same 44,764 bytes as the one it replaced —
 and window end 110 → 170. So a scene-node field edit survives Blender, the
 exporter, the DAT repack and the ISO patch, and the game's simulation runs on
 what came back.
+
+**A §8.6 hub room has too, tables and all.**
+`out/crashbash-warp-full-rebuild.bin` runs: `warp_room1` laid out again from
+its own regions with **both shared tables built from nothing but its meshes and
+its door previews** — colours 4516 -> 4546, UVs 2770 -> 2795, every entry
+renumbered from index 0, the shipped numbering not kept even as a prefix — and
+pool mesh `0x501C` scaled 1.5x taller so the rebuild is visible. It loads, the
+room draws, and **a door preview opens clean**, which is the exact screen that
+turned every textured surface in the level to garbage twice before. Read back
+out of the disc, 992 of 992 entries hold what was meant for them, all 1156
+preview triangles still name the colour and the UV they named, and the only
+mesh that differs is the one that was edited.
 
 **A rebuilt mesh has too**, which is the harder half: `out/crashbash-tall-m.bin`
 runs, and it carries `intro_eurocom`'s mesh 6 — the M of the logo — with 37 of
