@@ -75,16 +75,20 @@ They are not style preferences.
   inserted length. Appending instead breaks both: a warp room has no clips to
   strip, so the only thing between `T(0x44)` and EOF is §8.6's block, and the
   new geometry lands inside it. `warp_room1` built that way would not load.
-- **In the seven §8.6 carriers the shared tables are pinned and the §8.6 block
-  must keep its file offset** (§2.1's fourteen-probe ledger). Repointing `0x20`
-  crashes the room; repointing `0x24` **alone** scrambles every textured
-  surface — three bytes of the file, a byte-identical copy, everything else
-  untouched — and doing it with `0x28` following or with `0x50` grown scrambles
-  too. Moving the block loses the map previews, and §8.6's solve says why: each
-  door's object record carries a **row index into the `T(0x3C)` descriptor
-  table**, and those rows hold the sub-block's *file offsets*, streamed from
-  disc by `0x800163E0` / polled by `0x80016450` / released by `0x8001636C`. So
-  the block may move only if those rows move with it.
+- **The seven §8.6 carriers renumber their tables like anything else — as long
+  as their door previews are renumbered with them.** That is settled on
+  hardware: `out/crashbash-warp-full-rebuild.bin` rebuilds `warp_room1` in
+  full, every entry renumbered from index 0, and opens a door preview clean.
+  §2.1's ledger read a real effect and named the wrong cause: repointing
+  `T(0x24)` scrambles every textured surface in these rooms *because §8.6's
+  preview sub-blocks are meshes of this model and index those tables*, and a
+  preview is streamed in when a door opens, which is why the room is perfect
+  until then. `mdlwrite.preview_meshes` finds them, `preview_runs` gathers what
+  they name, and their triples join the same packing pass as the model's own
+  faces. The block may move too, on the sector grid, with §8.1's rows following
+  it — each row states a sub-block's start and end as **plain file offsets**,
+  streamed by `0x800163E0` / polled by `0x80016450` / released by `0x8001636C`.
+  `pin_tables` remains only for a caller that asks for it.
   Use `install_mesh(pin_tables=True)` / `import_glb(pin_tables=True)` — engaged
   automatically now, since a carrier announces itself by a non-zero `i32@0x38`
   (7/400). It emits the **graft layout**: the file stays byte-identical through
