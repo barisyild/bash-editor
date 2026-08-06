@@ -272,9 +272,16 @@ def relayout(data: bytes, model: Model | None = None,
         # descriptor row 156 bytes short of the block it names.
         for start, end, at, stop in moves:
             if start <= offset < end:
-                # Inside a replaced region only its start is meaningful, and
-                # only the header names one, so this is exact where it is used.
-                return at if start in replace else at + (offset - start)
+                # A replacement that is the same length as what it replaces has
+                # not moved anything inside itself, so an interior offset maps
+                # straight across. §8.6's block is exactly that -- its preview
+                # meshes are renumbered in place -- and collapsing its interior
+                # onto the region start wrote four of `warp_room1`'s five
+                # descriptor rows as zero-length, which on hardware is a room
+                # whose door previews simply never appear.
+                if start in replace and len(replace[start]) != end - start:
+                    return at
+                return at + (offset - start)
         for start, end, at, stop in moves:
             if offset == end:            # a one-past-the-end pointer, and the
                 return stop                # tables use them
