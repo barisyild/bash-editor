@@ -646,6 +646,15 @@ They are not style preferences.
   own untextured triangles still find the swatch — which is the "insert before
   the last" rule doing its job, since the swatch moved from slot 169 to 175 and
   bit 15 still reaches it.
+- **A borrowed mesh's texture entries name its *source* pack's slots, and
+  appending pictures does not renumber them.** The add-on's `_carry_textures`
+  builds a material per appended slot and repoints every face; a caller that
+  appends the pictures and hands the payload over unchanged gets a mesh reading
+  the destination's own slots 0..4 — in `boss_oxide/arena` a 32×64, a 64×64 and
+  a 32×32 8bpp, so the penguin came back wearing someone else's pictures and
+  read on screen as a black bird. Two discs went out that way, both built by a
+  probe script of mine rather than through the front end. **Drive the front
+  end**: what it does around `import_payload` is not decoration.
 - **A pinned UV table does not forbid textures, only arbitrary ones.** What a
   §8.6 carrier fixes is the table, and a triple in it is only three texel pairs
   — so an appended slot can be addressed through whatever triples the table
