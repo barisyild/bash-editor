@@ -301,7 +301,38 @@ def _corner_colours(mesh, triangles, where, problems) -> np.ndarray:
     return np.clip(np.round(values[picks] * 255.0), 0, 255).astype(np.uint8)
 
 
-def read_mesh(obj, pack, sizes, problems, warnings):
+def _shipped_outside(model, pack, sizes, index) -> dict[int, int]:
+    """How many of this mesh's triangles already read outside their slot.
+
+    The game does it: `cutscene/level_intro_crashplain` has faces reading texel
+    31 of a 16x16 slot in the file the disc shipped. So an export that carries
+    those through is reporting the model, not breaking it, and only a UV the
+    edit put outside is a refusal.
+    """
+    from crashbash.formats import modelimport as MI
+
+    out: dict[int, int] = {}
+    mesh = next((m for m in list(model.meshes)
+                 + [o.mesh for o in model.objects if o.mesh is not None]
+                 if m.index == index), None)
+    if mesh is None:
+        return out
+    payload = MI.payload_from_model(None, model, pack, index, {})
+    if payload is None:
+        return out
+    for row in range(payload.positions.shape[0]):
+        entry = int(payload.textures[row])
+        size = sizes.get(("slot", entry) if entry >= 0 else ("swatch",))
+        if size is None:
+            continue
+        width, height = size
+        texel = payload.uvs[row]
+        if (texel[:, 0] >= width).any() or (texel[:, 1] >= height).any():
+            out[entry] = out.get(entry, 0) + 1
+    return out
+
+
+def read_mesh(obj, pack, sizes, problems, warnings, shipped=None):
     """One Blender object as a `MeshPayload`."""
     from crashbash.formats import modelimport as MI
 
@@ -357,6 +388,7 @@ def read_mesh(obj, pack, sizes, problems, warnings):
         layer.data.foreach_get("value", stored)
         untextured = np.array([bool(stored[t.polygon_index]) for t in triangles])
     outside: dict[int, int] = {}
+    shipped = shipped or {}
     for row, triangle in enumerate(triangles):
         polygon = mesh.polygons[triangle.polygon_index]
         material = (mesh.materials[polygon.material_index]
@@ -376,16 +408,34 @@ def read_mesh(obj, pack, sizes, problems, warnings):
         # its page, which is how one model's eyes came back blank.
         if ((u < 0) | (u >= width) | (v < 0) | (v >= height)).any():
             outside[entry] = outside.get(entry, 0) + 1
-        uvs[row, :, 0] = np.clip(u, 0, width - 1)
-        uvs[row, :, 1] = np.clip(v, 0, height - 1)
+        # Clamped to the byte the field is, not to the slot: the game itself
+        # reads past a slot -- `cutscene/level_intro_crashplain` samples texel
+        # 31 of a 16x16 one -- and clipping to `width - 1` silently rewrote
+        # those eight triangles on the way back out.
+        uvs[row, :, 0] = np.clip(u, 0, 255)
+        uvs[row, :, 1] = np.clip(v, 0, 255)
     for entry, count in sorted(outside.items()):
         width, height = sizes.get(("slot", entry), sizes.get(("swatch",), (0, 0)))
         what = (f"slot {entry}" if entry >= 0
                 else f"the swatch image palette {(-entry) & 0x1FF} reads")
+        # The game does this itself, so it cannot be a refusal on its own:
+        # `cutscene/level_intro_crashplain` ships triangles reading texel 31 of
+        # a 16x16 slot, four faces in each of two meshes. What the refusal is
+        # for is a UV the *edit* put outside -- a mesh moved between packs and
+        # rescaled by `dest / source` instead of `(dest-1)/(source-1)`, which
+        # is how one model's eyes came back blank. So only the excess counts,
+        # and matching what shipped is merely said.
+        already = shipped.get(entry, 0)
+        if count <= already:
+            warnings.append(
+                f"{where}: {count} triangle(s) read outside {what}, which is "
+                f"{width}x{height} -- as they do in the file the disc shipped")
+            continue
         problems.append(
-            f"{where}: {what} is {width}x{height} and {count} triangle(s) have "
-            f"a corner outside it (UVs run 0..{width - 1} and 0..{height - 1}); "
-            f"a slot cannot be resized, so the UVs have to fit it")
+            f"{where}: {what} is {width}x{height} and {count - already} more "
+            f"triangle(s) than shipped have a corner outside it (UVs run "
+            f"0..{width - 1} and 0..{height - 1}); a slot cannot be resized, "
+            f"so the UVs have to fit it")
 
     # `corner_vertices` is what lets the writer put a pose back exactly: each
     # pool entry it lays down names the corner it came from, and that names one
@@ -517,7 +567,8 @@ def build_request(collection, model, clips, pack, materials_pack=None,
                 f"{obj.name}: mesh {index} is not one this model holds, so it "
                 f"was left out")
             continue
-        payload = read_mesh(obj, pack, sizes, request.problems, request.warnings)
+        payload = read_mesh(obj, pack, sizes, request.problems, request.warnings,
+                            _shipped_outside(model, pack, sizes, index))
         if payload is not None:
             request.meshes[index] = payload
 

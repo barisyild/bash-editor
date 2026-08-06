@@ -97,11 +97,13 @@ def check(name: str, data: bytes, pack_data: bytes | None, source: str) -> bool:
     if request.problems:
         print(f"  REFUSED: {'; '.join(request.problems[:3])}")
         return False
-    # See `tools/native_roundtrip.py`: a forced rebuild of every mesh is not a
-    # shippable edit and would be refused for growing the tables past the
-    # resident end. The comparison here is about the geometry.
+    # `rebuild_tables` because that is what the add-on's export does, and
+    # because chaining every rebuilt mesh's triples onto the shipped table
+    # instead is what a shippable edit never asks for: `mainmenu/models` wants
+    # 8294 colour entries that way against the 8192 a 13-bit index can address,
+    # and 5282 with the table built from the meshes.
     report = MI.import_payload(data, pack_data, request, rebuild_all=True,
-                               check_resident=False)
+                               rebuild_tables=True, check_resident=False)
     rebuilt = read_model(report.model)
 
     good = True
