@@ -914,6 +914,14 @@ out of the disc, 992 of 992 entries hold what was meant for them, all 1156
 preview triangles still name the colour and the UV they named, and the only
 mesh that differs is the one that was edited.
 
+**And the artist's own path reaches the same screen.**
+`out/crashbash-warp-blender-rebuild.bin` runs too, and that one was authored
+end to end through the add-on: `warp_room1` imported into Blender and exported
+straight back, all **114 meshes through this writer**, both tables built from
+its meshes and previews and renumbered from index 0 (4516 -> 4568, 2770 ->
+2802). So a full rebuild is not something only the core can do -- it is what
+the export button does, with nothing to patch afterwards.
+
 **A rebuilt mesh has too**, which is the harder half: `out/crashbash-tall-m.bin`
 runs, and it carries `intro_eurocom`'s mesh 6 — the M of the logo — with 37 of
 its 41 vertices scaled ×1.9 upward in Blender and the mesh put through
