@@ -303,6 +303,21 @@ They are not style preferences.
   while the check reported 15 failures, because a comparison that skips a mesh
   the reader returned `None` for calls that model clean. **Count the meshes
   before comparing them.**
+- **The §8.6 sub-blocks are meshes of this model, and that is the whole of the
+  outside consumer.** §8.6 already records their signature — 0x34 bytes,
+  `i32@+0x00 == 0`, `i32@+0x04 == 0`, `u16@+0x0A == 4`, `i32@+0x14 == 32`, four
+  ascending offsets — and that is a **mesh header** field for field:
+  `MESH_HEADER_SIZE` is 0x34 and `0x14 + 32` puts the strip list immediately
+  after it. Read as meshes they index the model's shared tables and they use
+  them to the last triple: `warp_room1`'s five sub-blocks are 1156 triangles
+  whose highest indices are **colour 4513 of 4516 and UV 2767 of 2770**;
+  `demo_hub1`'s three are 541 triangles at 2228 of 2231 and 855 of 858.
+  So nothing outside the *file* holds an index, and **no executable edit is
+  needed or would help** — the indices are in the model, in a block this
+  project can already parse. Renumbering a carrier's tables is safe exactly
+  when these meshes are renumbered with everything else, and the reason the
+  corruption waits for a door to be opened is that this is when they are
+  streamed in and drawn.
 - **A §8.6 carrier's door previews read the shared tables from outside the
   model, and three discs say so.** This is the outside consumer the coverage
   measurement could never find, and the tell is *when* it shows: the room draws
