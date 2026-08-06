@@ -1392,6 +1392,10 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
     and 30,528 of those bytes were the tables left behind. It is also what ends
     the pinning, because pinning existed only to avoid paying that.
 
+    `out/crashbash-oxide-tall-pool.bin` runs, so this has been to a console: an
+    arena laid out again here, carrying a pool mesh whose rebuild wants more
+    bytes than the mesh owns -- the case the fit constraint used to refuse.
+
     Returns `None` when the layout writer cannot own this file -- a §8.6 carrier
     whose §8.6 block must keep its offset, or a mesh whose region merged with a
     neighbour's and so has no identity to replace -- and the caller falls back

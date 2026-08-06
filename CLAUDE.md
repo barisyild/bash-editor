@@ -125,18 +125,19 @@ They are not style preferences.
   authoring tool's, so even a reshape with the same triangle count can want more
   room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
   owned).
-  **The relaid layout removes the fit constraint, and that has not been to a
-  console.** It leaves no hole: the mesh's region grows where it stands, the
-  pool meshes after it slide on, `_repoint_objects` moves every object record
-  with them, and unchanged neighbours keep their exact spacing (1745/1745 pairs
+  **The relaid layout removes the fit constraint, and `out/crashbash-oxide-tall-pool.bin`
+  runs.** It leaves no hole: the mesh's region grows where it stands, the pool
+  meshes after it slide on, `_repoint_objects` moves every object record with
+  them, and unchanged neighbours keep their exact spacing (1745/1745 pairs
   measured). All **1964 pool meshes across the 70 level models rebuild**, none
   refused, where `_write_in_place` refused the ones that did not fit — the glTF
   round trip went from 49,326 level triangles to **98,960**, and 32 of its 63
-  level refusals disappeared. But what black-screened `warp_room1` was a
-  *pool built wrong*, and no static check distinguished that build from a good
-  one either. Sliding the run is a different construction from holing it and it
-  is only ever been checked inside the file. Until a disc built this way runs,
-  treat it as unproven.
+  level refusals disappeared. The disc carries `boss_oxide/arena`'s pool mesh
+  `0x500C` scaled 1.8× taller in Blender and rebuilt here: its rebuild wants
+  **2788 bytes against the 2444 it owns**, which is exactly what the old writer
+  refused, and 19 of that arena's 26 pool meshes are in the same position. On
+  screen it draws taller in all six of its placements, the room is otherwise
+  itself, and the borrowed penguin still wears its own art.
 - **A shot's emitter names its mesh by *id*, and its position is in the
   parent's frame.** The reader reports a resolved index and a world position;
   writing either straight back is wrong. `mesh_index` has to go back as
@@ -818,7 +819,22 @@ than the shipped one — this striper is usually looser than the authoring tool'
 but on those 67 triangles it chained longer strips than the original and won
 back more than the colour table cost.
 
+**An object-pool mesh has too, and with it the whole from-scratch layout.**
+`out/crashbash-oxide-tall-pool.bin` runs: `boss_oxide/arena` laid out again
+region by region — no pinning, nothing stranded, 233,202 → 233,198 bytes with
+two bytes unreachable — carrying pool mesh `0x500C` scaled 1.8× taller in
+Blender and rebuilt by this striper. That rebuild wants 2788 bytes against the
+2444 the mesh owns, which is exactly what `_write_in_place` refused, so the
+pool run slid: every pool mesh after it moved and every object record moved
+with it. It draws taller in all six of its placements and the room is otherwise
+itself.
+
+That disc also found what nothing static could. Its first build **loaded and
+drew while some objects spun where they stood** — the two rebuilt meshes had
+lost their §8.4 collision volumes to a lookup that defaulted to zero, and the
+geometry comparison, the placements and the 992/992 verification all passed
+regardless. The second build, with the blocks carried, is the one that runs.
+
 Still never shown to a console from this path: a **clip** rebuilt here, a
-**texture** repainted here, a **placement** moved here, and an **object-pool**
-mesh. The first three have corpus round trips behind them and the fourth refuses
-rather than guess.
+**texture** repainted here, and a **placement** moved here. All three have
+corpus round trips behind them.
