@@ -804,7 +804,8 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
                    pin_tables: bool | None = None,
                    animation_only: bool = False,
                    reference: dict[int, Counter] | None = None,
-                   rebuild_all: bool = False) -> Report:
+                   rebuild_all: bool = False,
+                   check_resident: bool = True) -> Report:
     """Rebuild `model_data`'s meshes and clips from `request`.
 
     `reference` is what an untouched mesh must equal, per mesh index; a front
@@ -827,6 +828,10 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     # shared tables and their §8.6 block are pinned on hardware, so the graft
     # layout is not optional there -- engage it whenever the caller did not
     # decide explicitly, and say so in the report.
+    # The bytes as they shipped, kept because `model_data` is rebound as the
+    # placement and clip passes run and the resident-end check has to measure
+    # against where the tables started, not where the last pass left them.
+    shipped_model = model_data
     if pin_tables is None:
         pin_tables = struct.unpack_from("<i", model_data, 0x38)[0] > 0
         if pin_tables:
@@ -1110,6 +1115,14 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     else:
         report.model = AW.write_clips(grown, specs, reclaim=False)
 
+    # A corpus sweep forces every mesh of every model through the writer, which
+    # grows the tables far past anything a real edit would and so trips this on
+    # 233 of the 400. That is not a writer fault and the sweep is there to
+    # measure the geometry, so it turns the check off deliberately; nothing that
+    # builds a disc should.
+    if check_resident:
+        _refuse_if_past_resident(shipped_model, report.model)
+
     # --- textures ------------------------------------------------------
     shipped_pack = pack_data
     if pack is not None and pack_data is not None and request.new_textures:
@@ -1165,6 +1178,40 @@ def _palette_for(rgba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     values = np.where(unique[:, 3] == 0, 0, np.where(values == 0, 0x8000, values))
     values = np.concatenate([values, np.zeros(16 - len(values), dtype=values.dtype)])
     return values, inverse.reshape(rgba.shape[:2]).astype(np.uint8)
+
+
+def _refuse_if_past_resident(shipped: bytes, built: bytes) -> None:
+    """Stop a rebuild that puts a shared table where the game will not load it.
+
+    Nothing past the shipped `i32@0x50` is there at run time (§2.1), and 168 of
+    the 400 models -- 42 of the 73 levels -- have that value equal to their
+    whole length, so for them there is no room beyond it at all.
+    `install_meshes` lays the colour and UV tables at the end of what it writes,
+    which for such a model is exactly that unreachable ground.
+
+    It draws as total corruption rather than as a missing mesh, because every
+    mesh of the model indexes those tables: `crate_jungle/arena` came back with
+    `T(0x20)` moved from 0x58 to 0x8a1c, which is the shipped resident end to
+    the byte, and Jungle Bash filled the screen with VRAM garbage. A disc was
+    handed over before this check existed.
+    """
+    if len(shipped) < 0x54 or len(built) < 0x54:
+        return
+    resident = struct.unpack_from("<i", shipped, MW.RESIDENT_SIZE)[0]
+    if not 0 < resident <= len(shipped):
+        return
+    for offset, name in ((MW.PTR_COLOUR_TABLE, "colour table"),
+                         (MW.PTR_UV_TABLE, "UV table")):
+        was = offset + struct.unpack_from("<i", shipped, offset)[0]
+        now = offset + struct.unpack_from("<i", built, offset)[0]
+        if was < resident <= now:
+            raise ValueError(
+                f"the rebuild moved the {name} from {was:#x} to {now:#x}, and "
+                f"this model's resident region ends at {resident:#x} -- nothing "
+                f"past that is loaded at run time, so every mesh would read it "
+                f"as whatever happens to be in memory. The tables have to stay "
+                f"below the resident end, which means the edit has to fit the "
+                f"entries the model already has")
 
 
 def _append_textures(pack_data: bytes, pack: TexturePack, model: Model,

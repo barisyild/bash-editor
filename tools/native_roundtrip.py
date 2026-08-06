@@ -99,7 +99,13 @@ def main() -> None:
         if not request.meshes:
             continue
         try:
-            report = MI.import_payload(data, pack_data, request, rebuild_all=True)
+            # Rebuilding every mesh of a model grows its shared tables far past
+            # anything a real edit does, so 233 of the 400 would be refused for
+            # putting them past the resident end. That is a shippability rule
+            # and this sweep measures geometry, so it is turned off here on
+            # purpose -- see `_refuse_if_past_resident`.
+            report = MI.import_payload(data, pack_data, request, rebuild_all=True,
+                                       check_resident=False)
             rebuilt = read_model(report.model)
             new_clips = read_animations(report.model, rebuilt)
         except Exception as exc:  # noqa: BLE001

@@ -539,6 +539,23 @@ They are not style preferences.
   the select screen. `sole_sampler_slots` measures it: `warp_room1`'s arm
   0x501C is the sole reader of **none**, its four slots being read by 6, 13, 6
   and 7 other meshes, while `polar_polar`'s big arena mesh is sole reader of 14.
+- **A rebuild must not move the shared tables past the shipped `i32@0x50`, and
+  `install_meshes` lays them at the end of what it writes.** That is the whole
+  of why Jungle Bash came back as a screen of VRAM garbage after the penguin
+  went into `crate_jungle/arena`: `T(0x20)` moved from `0x58` to `0x8a1c`, which
+  is the shipped resident end **to the byte**, and every mesh of the model
+  indexes those tables, so nothing drew from real colours or real UVs. 168 of
+  the 400 models have `i32@0x50` equal to their whole length — 42 of the 73
+  levels — and for those there is no ground beyond it at all.
+  `_refuse_if_past_resident` measures it and refuses. It separates the cases
+  exactly: the three builds known to run on hardware (`intro_eurocom`'s tall M,
+  `warp_room1`'s penguin, `warp_room1`'s three objects) all pass, and the one
+  that crashed is refused naming both tables. A corpus sweep trips it on 233
+  models because forcing every mesh through the writer is not a shippable edit,
+  so the sweeps pass `check_resident=False` on purpose.
+  **What this costs is real:** an edit to such a model has to fit the colour and
+  UV entries it already has, which is the same discipline the pinned carriers
+  need, for a different reason.
 - **A pack can be made longer, so a borrowed model need take nobody's slot.**
   §10.4 closed VRAM placement — it was never in the file, the loader allocates a
   rect off the free list its size class names — so `texwrite.append_texture`

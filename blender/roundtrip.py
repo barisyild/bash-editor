@@ -97,7 +97,11 @@ def check(name: str, data: bytes, pack_data: bytes | None, source: str) -> bool:
     if request.problems:
         print(f"  REFUSED: {'; '.join(request.problems[:3])}")
         return False
-    report = MI.import_payload(data, pack_data, request, rebuild_all=True)
+    # See `tools/native_roundtrip.py`: a forced rebuild of every mesh is not a
+    # shippable edit and would be refused for growing the tables past the
+    # resident end. The comparison here is about the geometry.
+    report = MI.import_payload(data, pack_data, request, rebuild_all=True,
+                               check_resident=False)
     rebuilt = read_model(report.model)
 
     good = True
