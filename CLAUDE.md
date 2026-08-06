@@ -874,6 +874,18 @@ and window end 110 → 170. So a scene-node field edit survives Blender, the
 exporter, the DAT repack and the ISO patch, and the game's simulation runs on
 what came back.
 
+**The full table rebuild is confirmed across every kind of model.**
+`out/crashbash-cutscene-and-levels.bin` carries `cutscene/intro_eurocom`,
+`arena/polar_polar` and `arena/pogo_painter` rebuilt whole -- every mesh through
+this writer, both tables built from nothing but the meshes, renumbered from
+index 0 (1162 -> 1259, 354 -> 372, 555 -> 561 colours) -- and all three play
+correctly. With `mainmenu/models` and `warp_room1` before them that is a
+cutscene, two arenas, the menu and a hub room. Measured over the archive,
+**377 of 378 models rebuild that way with every triangle identical**: 203,054
+in the levels, 117,512 in the cutscenes, 45,300 in the characters, 89,211 in
+the menu group. The one refusal is `mainmenu/models2`, which has a mesh no
+payload can be built from.
+
 **A §8.6 hub room has too, tables and all.**
 `out/crashbash-warp-full-rebuild.bin` runs: `warp_room1` laid out again from
 its own regions with **both shared tables built from nothing but its meshes and
