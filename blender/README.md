@@ -242,6 +242,32 @@ The identity of a mesh is a custom property, not its name — rename, duplicate
 or reorder objects freely. Blender's `.001` suffix, which broke matching on the
 glTF path more than once, cannot reach anything here.
 
+## Budgets
+
+The sidebar shows what the model can run out of and how much of it is spent,
+because every one of these was a disc that did not work:
+
+```
+colour entries     4516 / 8192     [###########.........]
+uv entries         2770                pinned: this model is a §8.6 carrier
+placements           81 / 84       [###################.]
+mesh region      167936 / 167936   [####################]
+texture slots       170                a pack can be appended to
+strips (mesh)         7 / 348      [....................]
+mesh span (mesh)    644 / 644      [####################]
+```
+
+A limit of *no limit* is an answer, not a gap: a pack can be appended to, so its
+slot count has no ceiling, while a colour index has thirteen bits and does. The
+two rows that read full on almost every model are telling the truth — an
+object-pool mesh owns exactly the bytes it uses, and the mesh region ends where
+`i32@0x50` says, so the room there is the clip directory's own bytes and a model
+with no clips has none. Those are the two walls a level edit actually hits.
+
+The export says the same thing after the fact: a budget that has gone over is
+reported with the number, and one that crossed 90 % while the edit was growing
+it is reported too, so it is read before the next edit rather than after.
+
 ## What it refuses
 
 The add-on stops an export rather than writing a file that draws wrong. Each of

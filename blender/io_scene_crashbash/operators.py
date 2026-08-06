@@ -530,6 +530,61 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _draw_budgets(layout, context, collection) -> None:
+    """What this model can run out of, and how much of it is spent.
+
+    Every one of these was a disc that did not work, so the panel says the
+    number rather than leaving it to be found: the colour index's thirteen
+    bits, the pool span an object mesh may not leave, the padding a placement
+    list grows into, the strip count no shipped mesh exceeds, and the size the
+    model has to stay inside.
+
+    Reading the entry back on every redraw would be absurd, so it is cached on
+    the collection and only re-read when the entry changes.
+    """
+    from crashbash.formats import modelimport as MI
+    from crashbash.formats.anim import read_animations  # noqa: F401
+    from crashbash.formats.mdl import read_model
+    from crashbash.formats.tex import read_pack
+
+    obj = context.active_object
+    try:
+        model_data, pack_data = _source_bytes(collection)
+        model = read_model(model_data)
+        pack = read_pack(pack_data) if pack_data else None
+    except Exception:  # noqa: BLE001
+        return
+
+    mesh = None
+    faces = None
+    index = obj.get(N.PROP_MESH) if obj is not None else None
+    if index is not None:
+        index = int(index)
+        mesh = next((m for m in model.meshes if m.index == index), None)
+        if mesh is None:
+            mesh = next((o.mesh for o in model.objects
+                         if o.mesh is not None and o.mesh.index == index), None)
+        if obj.type == "MESH" and obj.data is not None:
+            faces = len(obj.data.polygons)
+
+    box = layout.box()
+    box.label(text="Budgets", icon="MOD_BUILD")
+    for budget in MI.budgets(model_data, model, pack, mesh, faces):
+        row = box.row(align=True)
+        if budget.limit is None:
+            row.label(text=f"{budget.label}: {budget.used} {budget.unit}".rstrip(),
+                      icon="CHECKMARK")
+            continue
+        icon = ("ERROR" if budget.over else
+                "SEQUENCE_COLOR_03" if budget.fraction > 0.9 else "DOT")
+        row.label(text=f"{budget.label}  {budget.used} / {budget.limit} "
+                       f"{budget.unit}".rstrip(), icon=icon)
+        # Blender has no bar widget in a panel, so a progress-shaped label is
+        # what there is; twenty cells reads at a glance and costs nothing.
+        filled = int(round(budget.fraction * 20))
+        box.label(text="  [" + "█" * filled + "·" * (20 - filled) + "]")
+
+
 def _material_image(material):
     """The picture a material samples, if it samples one."""
     if material is None or not material.use_nodes:
@@ -734,6 +789,7 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
         box = layout.box()
         box.label(text=collection.get(N.PROP_ENTRY, "?"), icon="MESH_DATA")
         box.label(text=f"{len(collection.all_objects)} objects")
+        _draw_budgets(layout, context, collection)
 
         obj = context.active_object
         if obj is not None and obj.get(N.PROP_MESH) is not None:

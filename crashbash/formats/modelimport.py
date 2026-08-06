@@ -1123,6 +1123,28 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     if check_resident:
         _refuse_if_past_resident(shipped_model, report.model)
 
+    # And say what the edit spent, so a budget that is nearly gone is read
+    # before the next edit rather than after it.
+    # The limits belong to the model as it shipped and the usage to the model
+    # as it was built. Taking both from the built file has the ceiling rise with
+    # the floor: `i32@0x50` is rewritten by the install, so an edit that grew
+    # past it reported "40884 of 40884" and read as merely full.
+    was = {b.label: b for b in budgets(shipped_model, model, pack)}
+    for now in budgets(report.model, read_model(report.model), pack):
+        before = was.get(now.label)
+        if before is None or before.limit is None:
+            continue
+        now.limit = before.limit
+        if now.over:
+            report.warnings.append(
+                f"{now.label} is over its limit: {now.used} against {now.limit}"
+                f"{' ' + now.unit if now.unit else ''}. {now.note}")
+        elif now.fraction > 0.9 and now.used > before.used:
+            report.warnings.append(
+                f"{now.label} is at {now.fraction * 100:.0f}% of what this model "
+                f"allows: {now.used} of {now.limit}"
+                f"{' ' + now.unit if now.unit else ''} (was {before.used})")
+
     # --- textures ------------------------------------------------------
     shipped_pack = pack_data
     if pack is not None and pack_data is not None and request.new_textures:
@@ -1178,6 +1200,107 @@ def _palette_for(rgba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     values = np.where(unique[:, 3] == 0, 0, np.where(values == 0, 0x8000, values))
     values = np.concatenate([values, np.zeros(16 - len(values), dtype=values.dtype)])
     return values, inverse.reshape(rgba.shape[:2]).astype(np.uint8)
+
+
+@dataclass
+class Budget:
+    """One thing a model can run out of, and how much of it is spent.
+
+    `limit` is None when nothing bounds it — which is a real answer and not a
+    missing one, and worth saying: a texture pack can be appended to, so its
+    slot count has no ceiling, while a colour index has thirteen bits and does.
+    """
+
+    label: str
+    used: int
+    limit: int | None = None
+    unit: str = ""
+    note: str = ""
+
+    @property
+    def fraction(self) -> float:
+        if not self.limit:
+            return 0.0
+        return min(max(self.used / self.limit, 0.0), 1.0)
+
+    @property
+    def over(self) -> bool:
+        return self.limit is not None and self.used > self.limit
+
+    def __str__(self) -> str:
+        of = f" of {self.limit}" if self.limit is not None else ""
+        return f"{self.label}: {self.used}{of} {self.unit}".rstrip()
+
+
+def budgets(model_data: bytes, model: Model, pack: TexturePack | None = None,
+            mesh: Mesh | None = None, faces: int | None = None) -> list[Budget]:
+    """Everything this model can run out of, measured against what bounds it.
+
+    Each row is a wall this project has hit, and every limit here was paid for:
+    the colour index's thirteen bits, the pool span an object mesh may not
+    leave, the padding a placement list grows into, the strip count no shipped
+    mesh exceeds. `mesh` and `faces` add the rows that are about one mesh --
+    `faces` being what the edited mesh has now, so the pool row can say whether
+    it will still fit.
+    """
+    rows: list[Budget] = []
+    colour_at, uv_at, uv_length = MW._table_bounds(model_data, model)
+    rows.append(Budget(
+        "colour entries", max(0, (uv_at - colour_at) // 4), 8192,
+        note="a colour index has 13 bits; past this the mesh cannot be written"))
+
+    carrier = struct.unpack_from("<i", model_data, 0x38)[0] != 0
+    rows.append(Budget(
+        "uv entries", uv_length // 2, None,
+        note=("pinned: this model is a §8.6 carrier, so the table cannot grow "
+              "and every triangle needs a triple already in it"
+              if carrier else "the table can grow")))
+
+    if model.instances:
+        room = PW.spare_capacity(model_data, model)
+        rows.append(Budget(
+            "placements", len(model.instances), len(model.instances) + room,
+            note=(f"{room} more fit in the padding the resident region ends with"
+                  if room else
+                  "this level's resident region ends without padding, so the "
+                  "list cannot be made longer")))
+
+    # A rebuild relocates the shared tables to the end of the mesh region, so
+    # what decides whether they clear `i32@0x50` is simply whether the model
+    # grew. `intro_eurocom` and `crate_jungle/arena` both carry no clips and
+    # both have `T(0x44)`, `i32@0x50` and their own length equal -- and the one
+    # whose rebuild *shrank* put its tables at 0x68a4 and runs, while the one
+    # that grew put them on 0x8a1c to the byte and filled the screen with
+    # garbage. So the honest row is the file against that value.
+    resident = struct.unpack_from("<i", model_data, 0x50)[0]
+    region = 0x44 + struct.unpack_from("<i", model_data, 0x44)[0]
+    rows.append(Budget(
+        "mesh region", region, resident, unit="bytes",
+        note=("the tables are pinned in this model, so a rebuild does not move "
+              "them and this does not bind"
+              if carrier else
+              "a rebuild lays the shared tables at the end of this region and "
+              "past the limit they draw as garbage; the room here is the clip "
+              "directory's own bytes, so a model with no clips has none")))
+
+    if pack is not None:
+        rows.append(Budget(
+            "texture slots", len(pack.textures), None,
+            note="a pack can be appended to, so nothing bounds this"))
+
+    if mesh is not None:
+        rows.append(Budget(
+            "strips", len(mesh.strips), 348,
+            note="no shipped mesh exceeds 348; a 431-strip mesh crashed the game"))
+        owned = int(mesh.ptr_end - mesh.header_offset)
+        shipped_faces = len(mesh.face_colour_index) or 1
+        wanted = int(round(owned / shipped_faces * (faces or shipped_faces)))
+        rows.append(Budget(
+            "mesh span", wanted, owned, unit="bytes",
+            note=("what the mesh owns is the whole budget for an object-pool "
+                  "mesh (§8.3); the figure is a rough reading from its own "
+                  "bytes per triangle, and the export measures for real")))
+    return rows
 
 
 def _refuse_if_past_resident(shipped: bytes, built: bytes) -> None:
