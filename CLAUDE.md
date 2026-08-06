@@ -563,13 +563,20 @@ They are not style preferences.
   the three builds that run on hardware (`intro_eurocom`'s tall M,
   `warp_room1`'s penguin, `warp_room1`'s three objects) all keep both tables
   below the boundary; the one that crashed is refused naming both.
-  **The obvious mechanism is refuted, so do not repeat it.** The group loader at
-  `0x800126C0` carves each entry out of the group's sector run and shrinks it
-  with `0x80011498` to `row+4` — the **file table's byte size**, not `i32@0x50`
-  — so the whole entry is resident and the tail is in RAM. All four callers of
-  the shrink primitive are accounted for and none trims a model to `0x50`. That
-  is `docs/FORMAT.md` §2.1's paradox, now read a second way and standing.
-  `tools/mips.py` is the disassembler that settled it.
+  **`i32@0x50` is not a boundary the game keeps — three readings say so.** The
+  group loader at `0x800126C0` carves each entry out of the group's sector run
+  and shrinks it with `0x80011498` to `row+4`, the **file table's byte size**;
+  all four callers of that primitive are accounted for and none trims a model to
+  `0x50`, so the whole entry is resident. Nothing resolves the field as a
+  pointer either: scanning the image for this format's own idiom — a load of a
+  field followed by an `addiu` of that same offset — finds **0 sites for
+  `0x50`** and 0 for `0x08`, against 10 for the colour table, 12 for the clip
+  directory and exactly **1** for the UV table. And the value is derived rather
+  than chosen: `base + i32@0x50 == T(0x44) + 24×clips` in **399 of 400**, so it
+  states where the clip directory ends and the refetched sub-files begin.
+  So the rule above is a fence around observed behaviour whose cause is
+  elsewhere. `tools/mips.py` is the disassembler these readings were made with;
+  it reproduces the listings §2.1 and §10.4 were written from.
   A corpus sweep trips the check on 233 models because forcing every mesh
   through the writer is not a shippable edit, so the sweeps pass
   `check_resident=False` on purpose.

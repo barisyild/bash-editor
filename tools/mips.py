@@ -156,6 +156,41 @@ def constants(image: Image, value: int) -> list[int]:
     return found
 
 
+def self_relative(image: "Image", field: int) -> list[tuple[int, int]]:
+    """Sites resolving a self-relative pointer at `field`.
+
+    The idiom this format is written in, and the one the notes quote:
+
+        lw    $v0, 0x18($v1)      ; the field
+        addiu $v0, $v0, 0x18      ; bias it by its own offset
+        addu  $v1, $v1, $v0       ; and add the base
+
+    So the tell is a load of the field followed, within a short window and on
+    the same register, by an `addiu` of exactly that offset. Finding none for a
+    field is the strongest statement this tool can make about it.
+    """
+    found = []
+    window = 8
+    text = list(image.words())
+    by_index = {address: n for n, (address, _) in enumerate(text)}
+    for n, (address, word) in enumerate(text):
+        if (word >> 26) != 0x23:                      # lw
+            continue
+        if (word & 0xFFFF) != (field & 0xFFFF):
+            continue
+        rt = (word >> 16) & 31
+        for m in range(n + 1, min(n + 1 + window, len(text))):
+            later = text[m][1]
+            if (later >> 26) != 0x09:                 # addiu
+                continue
+            if ((later >> 21) & 31) != rt or ((later >> 16) & 31) != rt:
+                continue
+            if (later & 0xFFFF) == (field & 0xFFFF):
+                found.append((address, text[m][0]))
+                break
+    return found
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(__doc__)
