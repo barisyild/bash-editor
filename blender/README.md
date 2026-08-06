@@ -277,6 +277,18 @@ The export says the same thing after the fact: a budget that has gone over is
 reported with the number, and one that crossed 90 % while the edit was growing
 it is reported too, so it is read before the next edit rather than after.
 
+**Keep the shared tables in place**, on the export, is worth knowing about for a
+level. A model with an object pool cannot reclaim its old colour and UV tables —
+a pool mesh's blocks live in the same span and are not in `model.meshes`, so
+rewriting the region would drop them — and the appending path therefore leaves
+them where they lie. One borrowed penguin into `boss_oxide/arena` costs **32,764
+bytes** that way, of which **30,528 are the tables stranded**; with the tables
+pinned the same edit comes to **four bytes smaller than the original**, and the
+disc image stays its shipped size instead of growing 178 MB → 262 MB because the
+DAT no longer fits its sector run. The price is that colours map onto entries the
+model already has and every UV onto a triple it already holds. The export prints
+the number whenever the option is off and the tables were stranded.
+
 ## What it refuses
 
 The add-on stops an export rather than writing a file that draws wrong. Each of

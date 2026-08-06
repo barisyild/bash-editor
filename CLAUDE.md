@@ -238,15 +238,22 @@ They are not style preferences.
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
   the case, but the call still has to pass the pack.
-- **A rebuild strands the old shared tables where they lie, and for a big model
-  that is most of what an edit costs.** `install_meshes` appends fresh copies
-  and repoints; the originals stay put and unreachable. Putting one 116-triangle
-  penguin into `boss_oxide/arena` grew it 233,202 → 265,966 bytes, and 30,528 of
-  those 32,764 are the shipped colour and UV tables left behind — the edit's own
-  new entries are 176 colours and 60 UVs, under a kilobyte. It is not wrong, and
-  the disc verifies and the tables stay below the boundary, but it is what
-  pushed the DAT past its sector run so `patch_image` had to move the whole
-  73 MB file and the image went from 178 MB to 262 MB.
+- **A level edit strands the old shared tables, and pinning them costs nothing
+  instead.** `install_meshes` appends fresh copies and repoints; the originals
+  stay put and unreachable, and `_geometry_region` cannot reclaim them for any
+  model with an object pool — a pool mesh's blocks live in the same span and are
+  not in `model.meshes`, so rewriting the region would drop them. Putting one
+  116-triangle penguin into `boss_oxide/arena` grew it 233,202 → **265,966**
+  bytes, of which **30,528 are the shipped tables left behind**; the edit's own
+  new entries are 176 colours and 60 UVs, under a kilobyte. That growth is what
+  pushed the DAT past its sector run, so `patch_image` moved the whole 73 MB
+  file and the image went 178 MB → 262 MB.
+  The same edit with `pin_tables=True` comes to **233,198 bytes — four smaller
+  than the original**, and the image stays 178 MB with nothing moved. What it
+  costs is that colours map to entries the model already has and every UV must
+  be a triple it already holds, which `pinned_uv_triples` and `snap_to_triples`
+  supply. So for a level this is usually the right setting, and the export says
+  the number when it is not used.
 - **Install several meshes in one call, and rebuild only what was edited.**
   `install_mesh` appends the colour table, the UV table *and* the vector pool
   on every call, and each earlier copy is then unreachable. Nine meshes through

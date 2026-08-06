@@ -157,6 +157,16 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
 
     filename_ext = ".mdl"
     filter_glob: StringProperty(default="*.mdl", options={"HIDDEN"})
+    pin_tables: BoolProperty(
+        name="Keep the shared tables in place",
+        description=("Do not rewrite the colour and UV tables: map each colour "
+                     "onto an entry the model already has and each UV onto a "
+                     "triple it already holds. A model with an object pool "
+                     "cannot reclaim the old tables, so without this a one-mesh "
+                     "edit to boss_oxide/arena costs 32,764 bytes of which "
+                     "30,528 are the shipped tables stranded -- with it, four"),
+        default=False,
+    )
     animation_only: BoolProperty(
         name="Animation only",
         description=("Rebuild the clips and leave every mesh byte-identical. "
@@ -198,8 +208,10 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
             pack = read_pack(pack_data) if pack_data else None
             request = read_scene.build_request(collection, model, clips, pack,
                                                model_data=model_data)
-            report = MI.import_payload(model_data, pack_data, request,
-                                       animation_only=self.animation_only)
+            report = MI.import_payload(
+                model_data, pack_data, request,
+                animation_only=self.animation_only,
+                pin_tables=True if self.pin_tables else None)
         except Exception as exc:  # noqa: BLE001
             self.report({"ERROR"}, f"nothing was written. {exc}")
             return {"CANCELLED"}
