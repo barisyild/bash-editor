@@ -312,7 +312,8 @@ They are not style preferences.
   slot under `dest / source` and none do under `(dest-1)/(source-1)`; the four
   that showed are the eyes, two triangles each, spanning their texture corner to
   corner, and they came back blank. A slot cannot be resized to avoid the
-  rescale; pack VRAM placement is still unknown (§10.1).
+  rescale — a slot's size is fixed, and it is what picks the VRAM bucket
+  (§10.4).
 - **A swatch face needs its colour re-matched, not its palette number.** It is
   painted by one texel of the pack's palette-less swatch texture (§6.2), naming
   a palette and pointing its UVs at a cell — and neither the palette numbering
@@ -535,7 +536,24 @@ They are not style preferences.
 - **Texture slots may only be taken when the mesh being replaced is their sole
   sampler** (§10.3). "No mesh samples it" proves nothing — the menu draws its
   character-select portraits from code, and overwriting those slots corrupted
-  the select screen. Never move a slot; pack VRAM placement is still unknown.
+  the select screen. `sole_sampler_slots` measures it: `warp_room1`'s arm
+  0x501C is the sole reader of **none**, its four slots being read by 6, 13, 6
+  and 7 other meshes, while `polar_polar`'s big arena mesh is sole reader of 14.
+- **A pack can be made longer, so a borrowed model need take nobody's slot.**
+  §10.4 closed VRAM placement — it was never in the file, the loader allocates a
+  rect off the free list its size class names — so `texwrite.append_texture`
+  adds a picture and its palette and every existing number still means what it
+  meant. Three rules come with it. The record goes **before the last one**,
+  because the last is where bit 15 sends a face (§6.2): the swatch is found by
+  being last, not by its number, so appending after it would send every
+  untextured triangle to the newcomer. That moves the swatch's own slot number
+  on, and 21 of the 393 models with a growable table name their last texture
+  directly, so `_append_textures` refuses those rather than repaint them by
+  accident. And **take the source's colours verbatim rather than re-quantising**:
+  a 4bpp picture has at most sixteen, median cut clusters on RGB alone, and the
+  penguin's transparent texels were pulled into the nearest colour and came back
+  opaque — worst channel 255 of 255 on three of its six pictures, 0 once the
+  distinct RGBA values were used as the palette.
 - **BGR555 `0x0000` is the hardware's skip-pixel.** A genuinely black texel
   needs the STP bit: `0x8000`.
 - **Real triangle strips, not one strip per triangle.** No shipped mesh exceeds

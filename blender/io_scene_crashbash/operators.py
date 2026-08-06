@@ -235,6 +235,14 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
     bl_label = "Borrow Selected Mesh"
     bl_options = {"REGISTER", "UNDO"}
 
+    bring_textures: bpy.props.BoolProperty(
+        name="Bring its own textures",
+        description=("Add the borrowed model's pictures to this pack as new "
+                     "slots, taking none of the ones already there. Not "
+                     "possible in a model whose tables are pinned, where the "
+                     "art is baked into the vertex colours instead"),
+        default=True,
+    )
     stand_on_origin: bpy.props.BoolProperty(
         name="Stand on its own origin",
         description=("Move the borrowed geometry so it is centred in plan with "
@@ -253,6 +261,91 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
             return False
         return any(o is not obj and o.type == "MESH"
                    for o in context.selected_objects)
+
+    def _carry_textures(self, borrowed, collection, pack, notes):
+        """Give every borrowed material a slot of its own, appended to the pack.
+
+        The numbers have to be decided here, because they go into the faces:
+        appending puts a record before the last one, so the first newcomer
+        takes the swatch's old number and each one after it the next. The
+        export checks that against where the append actually lands.
+
+        `_carry_textures` is called from `execute`, which imports the library
+        itself; the shader builder is the add-on's own.
+
+        A swatch face travels too. It reads one texel of the source pack's
+        swatch image through a palette the *model* names, and all 87 of the
+        penguin's read one palette -- so a copy of that image, decoded through
+        that palette, is an ordinary picture and the face an ordinary textured
+        face reading the same cell.
+        """
+        from . import build_scene
+
+        base = len(pack.textures) - 1
+        renumber = {}
+        for index, material in enumerate(borrowed.materials):
+            image = _material_image(material)
+            if image is None or tuple(image.size) == (0, 0):
+                self.report({"ERROR"}, (
+                    f"'{material.name if material else index}' carries no "
+                    f"picture to add; import the source through this add-on"))
+                return None
+            slot = base + len(renumber)
+            fresh = bpy.data.materials.new(
+                N.MATERIAL_SLOT.format(slot=slot, width=image.size[0],
+                                       height=image.size[1],
+                                       depth=4) + "_added")
+            fresh[N.PROP_SLOT] = slot
+            fresh[N.PROP_NEW_SLOT] = True
+            fresh[N.PROP_BLEND] = int(material.get(N.PROP_BLEND, 0) or 0)
+            build_scene._shader(fresh, image, fresh[N.PROP_BLEND])
+            renumber[index] = fresh
+        # `materials.clear()` sets every polygon's index back to 0, so which
+        # material each face wore has to be taken first -- otherwise all 116 of
+        # the penguin's faces came back on one slot and read one picture.
+        worn = [poly.material_index for poly in borrowed.polygons]
+        borrowed.materials.clear()
+        order = sorted(renumber)
+        for index in order:
+            borrowed.materials.append(renumber[index])
+        remap = {old: n for n, old in enumerate(order)}
+        for poly, was in zip(borrowed.polygons, worn):
+            poly.material_index = remap.get(was, 0)
+        notes.append(f"added {len(renumber)} picture(s) to the pack as slots "
+                     f"{base}..{base + len(renumber) - 1}, replacing none; the "
+                     f"swatch moves to {base + len(renumber)}")
+        return renumber
+
+    def _finish(self, context, target, borrowed, mesh, source, notes, np):
+        """Stand it on its origin, hand it to the target, and say what happened."""
+        if self.stand_on_origin:
+            co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
+            borrowed.vertices.foreach_get("co", co)
+            co = co.reshape(-1, 3)
+            co -= np.array([(co[:, 0].min() + co[:, 0].max()) / 2,
+                            (co[:, 1].min() + co[:, 1].max()) / 2,
+                            co[:, 2].min()], dtype=np.float32)
+            borrowed.vertices.foreach_set("co", co.ravel())
+            borrowed.update()
+            notes.append("stood it on its own origin, feet at z=0")
+
+        was = target.data
+        old_faces = len(was.polygons)
+        for obj in list(bpy.data.objects):
+            if obj.data is was:
+                obj.data = borrowed
+        borrowed.name = f"{target.name}_borrowed"
+        room = int(mesh.ptr_end - mesh.header_offset)
+        per_face = room / max(old_faces, 1)
+        wanted = per_face * len(borrowed.polygons)
+        budget = (f"{room} bytes owned and roughly {wanted:.0f} wanted"
+                  if wanted <= room * 0.9 else
+                  f"{room} bytes owned against roughly {wanted:.0f} wanted, "
+                  f"which this writer may not fit -- the export measures and "
+                  f"refuses rather than break the pool")
+        self.report({"INFO"}, (
+            f"{source.name} -> {target.name}: {len(borrowed.polygons)} faces "
+            f"replacing {old_faces}; {budget}. " + "; ".join(notes)))
 
     def execute(self, context):
         if not _require_library(self, context):
@@ -311,9 +404,6 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
             holder.shape_key_clear()
             bpy.data.objects.remove(holder)
 
-        # 2. Its art, which does not travel: the slots it names mean other
-        #    pictures here. Fold the texel each corner reads into its colour so
-        #    the shape keeps its look without naming a slot at all (§6.2).
         uv = borrowed.uv_layers.get(N.UV_LAYER)
         colour = borrowed.color_attributes.get(N.COLOUR_ATTRIBUTE)
         if uv is None or colour is None:
@@ -321,6 +411,22 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                 f"'{source.name}' has no {N.UV_LAYER} or {N.COLOUR_ATTRIBUTE}; "
                 f"import it through this add-on so it carries both"))
             return {"CANCELLED"}
+
+        # A carrier's UV table cannot grow (§2.1), so a textured face has
+        # nowhere to put its texels and the art has to be flattened into the
+        # colour. Everywhere else the pictures can simply be *added* to the
+        # pack, which takes nothing from anybody (§10.3 never comes up).
+        carrier = int.from_bytes(model_data[0x38:0x3C], "little") != 0
+        if not carrier and self.bring_textures:
+            added = self._carry_textures(borrowed, collection, pack, notes)
+            if added is None:
+                return {"CANCELLED"}
+            self._finish(context, target, borrowed, mesh, source, notes, np)
+            return {"FINISHED"}
+
+        # 2. Its art, which does not travel here: the slots it names mean other
+        #    pictures in this pack. Fold the texel each corner reads into its
+        #    colour so the shape keeps its look without naming a slot (§6.2).
         pages = {}
         for slot, material in enumerate(borrowed.materials):
             image = _material_image(material)
@@ -419,57 +525,8 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                     if texel[i] > 1 / 255 else 1.0 for i in range(3)
                 ) + (have[3],)
 
-        # 4. Where it stands. A pool mesh carries its own place in the room and a
-        #    record's translation is an offset from it, so a borrowed mesh left
-        #    in its source model's frame lands wherever that frame happens to
-        #    put it -- which for the penguin was outside the room entirely, and
-        #    read on screen as the object simply not being there. Standing it on
-        #    its own origin makes a record's translation the place it goes.
-        if self.stand_on_origin:
-            co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
-            borrowed.vertices.foreach_get("co", co)
-            co = co.reshape(-1, 3)
-            co -= np.array([(co[:, 0].min() + co[:, 0].max()) / 2,
-                            (co[:, 1].min() + co[:, 1].max()) / 2,
-                            co[:, 2].min()], dtype=np.float32)
-            borrowed.vertices.foreach_set("co", co.ravel())
-            borrowed.update()
-            notes.append("stood it on its own origin, feet at z=0")
-
-        was = target.data
-        old_size = tuple(
-            max(v[i] for v in (x.co for x in was.vertices))
-            - min(v[i] for v in (x.co for x in was.vertices))
-            for i in range(3)) if len(was.vertices) else (0.0, 0.0, 0.0)
-        for obj in list(bpy.data.objects):
-            if obj.data is was:
-                obj.data = borrowed
-        borrowed.name = f"{target.name}_borrowed"
-
-        co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
-        borrowed.vertices.foreach_get("co", co)
-        co = co.reshape(-1, 3)
-        new_size = tuple(float(co[:, i].max() - co[:, i].min()) for i in range(3))
-
-        # What the pool mesh owns is the whole budget (§8.3): its blocks may not
-        # leave the run, so a rebuild that wants more is refused at export
-        # rather than written. The shipped mesh's own bytes per triangle is the
-        # only yardstick to hand, and this writer stripes looser than the
-        # authoring tool, so say it as a rough reading and not a promise.
-        room = int(mesh.ptr_end - mesh.header_offset)
-        per_face = room / max(len(was.polygons), 1)
-        wanted = per_face * len(borrowed.polygons)
-        budget = (f"{room} bytes owned and roughly {wanted:.0f} wanted"
-                  if wanted <= room * 0.9 else
-                  f"{room} bytes owned against roughly {wanted:.0f} wanted, "
-                  f"which this writer may not fit -- the export measures and "
-                  f"refuses rather than break the pool")
-        self.report({"INFO"}, (
-            f"{source.name} -> {target.name}: {len(borrowed.polygons)} faces "
-            f"replacing {len(was.polygons)}, "
-            f"{new_size[0]:.1f}x{new_size[1]:.1f}x{new_size[2]:.1f} against "
-            f"{old_size[0]:.1f}x{old_size[1]:.1f}x{old_size[2]:.1f}; {budget}. "
-            + "; ".join(notes)))
+        # 4. Where it stands, and the handover -- shared with the textured path.
+        self._finish(context, target, borrowed, mesh, source, notes, np)
         return {"FINISHED"}
 
 

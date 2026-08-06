@@ -126,16 +126,26 @@ the pool mesh owns is the **whole budget** (§8.3) and this writer stripes loose
 than the authoring tool, so the figure is a rough reading, not a promise; the
 export measures for real and refuses rather than break the pool.
 
-**A borrowed model arrives flat, and the report says why.** Its own pictures do
-not come with it, and two different things stop them. In the seven §8.6 carriers
-— which is all five warp rooms and both demo hubs — the UV table cannot grow, so
-a textured face has nowhere to put its texels at all: 2 of the penguin's 29
-would have found their triple in `warp_room1`'s table. Everywhere else it is
-§10.3 that decides, and the report counts what it allows: `warp_room1`'s
-decorative arm is the sole reader of **no** slot, because the four it samples
-are read by 6, 13, 6 and 7 other meshes, while `polar_polar`'s big arena mesh is
-the sole reader of **14**. Nothing moves those pictures for you yet; repainting
-a slot the mesh already samples is the texture edit that does work.
+**It brings its own pictures, and takes nobody's slot.** *Bring its own
+textures* adds them to the destination pack instead of overwriting anything —
+`crate_jungle/arena` went from 62 textures to 68 with all 61 of its own and all
+62 of its palettes byte-identical, and each added picture matching the
+penguin's to the byte, transparency included. That is possible because §10.4
+closed VRAM placement: it was never in the file, and the loader allocates a rect
+from the free list a texture's size class names.
+
+The one thing that moves is the **swatch's slot number**. Bit 15 of a texture
+entry finds the swatch by it being the pack's *last* texture (§6.2), so a new
+record goes in before it and its number rises. A model whose faces name that
+number directly would then read the newcomer, and 21 of the 393 models with a
+growable table do; the export refuses those rather than repaint them by
+accident.
+
+In the seven §8.6 carriers — all five warp rooms and both demo hubs — this is
+not available, because the UV table cannot grow and a textured face has nowhere
+to put its texels: 2 of the penguin's 29 would have found their triple in
+`warp_room1`'s. There the art is baked into the vertex colours instead, and the
+report says which wall it hit.
 
 Then place it and export. Done from the buttons alone, `warp_room1` with the
 penguin came out **byte for byte identical** to the hand-made version of the

@@ -40,7 +40,7 @@ from . import scenewrite as SW
 from . import texwrite as TW
 from .anim import WEIGHT_ONE, read_animations
 from .mdl import TEXTURE_FLAG_SWATCH, TEXTURE_INDEX_MASK, Mesh, Model, read_model
-from .tex import TexturePack, read_pack
+from .tex import Texture, TexturePack, read_pack
 
 # How far a keyframe vertex may sit from its rest match, in model units. The
 # pool is built from the same corner data the targets index, so anything beyond
@@ -117,6 +117,13 @@ class ImportRequest:
     # when the mesh was rebuilt -- guessing at a pose is not on the table.
     clips: dict[str, ClipPayload] = field(default_factory=dict)
     images: dict[int, np.ndarray] = field(default_factory=dict)  # slot -> RGBA
+    # Slots to *append* rather than repaint, by the number each is to take.
+    # Appending replaces nothing: every slot and palette the pack already had
+    # keeps its number, so a borrowed model can bring its own pictures without
+    # taking anyone else's (§10.3). The numbers are the caller's to state
+    # because it has to have written them into the faces already, and the core
+    # checks them against where the append actually lands.
+    new_textures: dict[int, np.ndarray] = field(default_factory=dict)
     # Slots the source named at all, whether or not it repainted them. The
     # palette-sharing test is over these, not over the images.
     slots: set[int] = field(default_factory=set)
@@ -454,8 +461,20 @@ def signed_volume(corners: np.ndarray) -> float:
     return float(np.einsum("ij,ij->i", p, np.cross(q, r)).sum()) / 6.0
 
 
+def _stored_volume(mesh: Mesh) -> float:
+    """What a shipped mesh encloses, in its own outward corner order (§11.3)."""
+    if not mesh.face_count or not len(mesh.positions):
+        return 0.0
+    points = np.asarray(mesh.positions, dtype=np.float64)
+    faces = []
+    for a, b, c, _ in mesh.indexed_triangles():
+        order = (a, b, c) if not (mesh.vertex_flags[c] & 1) else (a, c, b)
+        faces.append(points[list(order)])
+    return signed_volume(np.array(faces)) if faces else 0.0
+
+
 def warn_if_inside_out(index: int, positions: np.ndarray, target: Mesh | None,
-                       report: Report) -> None:
+                       report: Report, model: Model | None = None) -> None:
     """Say so when an incoming mesh is wound against the one it replaces.
 
     The winding is taken as it arrives and must be: a room shell is seen from
@@ -504,6 +523,28 @@ def warn_if_inside_out(index: int, positions: np.ndarray, target: Mesh | None,
             f"came from instead."
         )
         return
+
+    # The other way the comparison means nothing: a model whose own meshes do
+    # not agree. A character encloses negative throughout, but a level holds
+    # props seen from outside and shells seen from inside, and `crate_jungle`'s
+    # arena is 4 positive against 5 negative -- so which of them the replaced
+    # mesh happens to be says nothing about the replacement.
+    if model is not None:
+        others = [_stored_volume(m)
+                  for m in list(model.meshes) + [
+                      o.mesh for o in model.objects if o.mesh is not None]
+                  if m is not target and m.face_count >= 20]
+        positive = sum(1 for v in others if v > 0)
+        negative = sum(1 for v in others if v < 0)
+        if positive and negative:
+            report.warnings.append(
+                f"mesh {index} winds against the mesh it replaces ({after:+.3f} "
+                f"against {before:+.3f}), but this model's own meshes do not "
+                f"agree either -- {positive} enclose positive and {negative} "
+                f"negative -- so the comparison decides nothing. Check the "
+                f"winding against the model this mesh came from instead."
+            )
+            return
     report.warnings.append(
         f"mesh {index} is wound against the mesh it replaces: it encloses "
         f"{after:+.3f} where the shipped one encloses {before:+.3f}. The "
@@ -906,7 +947,7 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         # instead cost facing: rebuilding `mainmenu/models` against the shipped
         # facing scores 6031/6031 triangles with the soup left alone and
         # 5912/6031 with a flood fill imposed on it.
-        warn_if_inside_out(index, payload.positions, target, report)
+        warn_if_inside_out(index, payload.positions, target, report, model)
         uvs = payload.uvs
         # Only a face with no entry of its own: one carrying a verbatim swatch
         # entry already names the cell it reads, and overwriting that would
@@ -1070,7 +1111,12 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         report.model = AW.write_clips(grown, specs, reclaim=False)
 
     # --- textures ------------------------------------------------------
-    if pack is not None and pack_data is not None and request.images:
+    shipped_pack = pack_data
+    if pack is not None and pack_data is not None and request.new_textures:
+        pack_data, pack = _append_textures(pack_data, pack, model, request, report)
+
+    if pack is not None and pack_data is not None and (
+            request.images or request.new_textures):
         outside = {
             t.palette_index
             for t in pack.textures
@@ -1087,6 +1133,83 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             if not 0 <= slot < len(pack.textures):
                 continue
             patched = write_slot(patched, pack, slot, image, exclusive, report)
-        report.pack = patched if patched != pack_data else None
+        report.pack = patched if patched != shipped_pack else None
 
     return report
+
+
+def _palette_for(rgba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A 16-entry palette and the indices into it, for a picture being added.
+
+    A 4bpp source decodes to at most sixteen distinct RGBA values, so taking
+    the distinct ones **verbatim** reproduces the original exactly -- palette
+    and pixels both. Median cut does not: it clusters on RGB alone, and the
+    penguin's transparent texels carry an RGB of their own, so they were pulled
+    into the nearest colour and came back opaque. Measured against the source
+    afterwards the worst channel was 255 of 255 on three of its six pictures.
+
+    Alpha decides the two encodings the hardware reads specially: a fully
+    transparent texel is `0x0000`, the skip pixel, and a genuinely black opaque
+    one needs the STP bit (`0x8000`) or it would be skipped too.
+    """
+    flat = rgba.reshape(-1, 4)
+    unique, inverse = np.unique(flat, axis=0, return_inverse=True)
+    if len(unique) > 16:
+        palette, indices = _quantise(np.ascontiguousarray(rgba[..., :3]), 16)
+        r, g, b = (palette.astype(np.uint16) >> 3).T
+        values = np.where((b << 10) | (g << 5) | r == 0, 0x8000,
+                          (b << 10) | (g << 5) | r)
+        return values, indices
+    r, g, b = (unique[:, :3].astype(np.uint16) >> 3).T
+    values = (b << 10) | (g << 5) | r
+    values = np.where(unique[:, 3] == 0, 0, np.where(values == 0, 0x8000, values))
+    values = np.concatenate([values, np.zeros(16 - len(values), dtype=values.dtype)])
+    return values, inverse.reshape(rgba.shape[:2]).astype(np.uint8)
+
+
+def _append_textures(pack_data: bytes, pack: TexturePack, model: Model,
+                     request: ImportRequest, report: Report):
+    """Put new pictures on the end of the pack, replacing nothing.
+
+    The record goes before the last one, because the last is where bit 15 of a
+    texture entry sends a face (§6.2) -- so the swatch keeps being the swatch
+    and its *slot number* rises instead. A model whose faces name that number
+    directly would then read the newcomer, and 21 of the 393 models with a
+    growable table do exactly that, so this refuses rather than repaint a
+    quarter of them by accident.
+    """
+    last = len(pack.textures) - 1
+    named = 0
+    for mesh in list(model.meshes) + [
+            o.mesh for o in model.objects if o.mesh is not None]:
+        for face in range(len(mesh.face_colour_index)):
+            entry = mesh.face_texture[face] if face < len(mesh.face_texture) else 0
+            if not entry & TEXTURE_FLAG_SWATCH and (entry & TEXTURE_INDEX_MASK) == last:
+                named += 1
+    if named:
+        raise ValueError(
+            f"{named} face(s) of this model name slot {last} directly, and that "
+            f"is the swatch -- the pack's last texture, which is how bit 15 "
+            f"finds it (§6.2). Appending moves its number on, so those faces "
+            f"would come back reading a different picture. This model cannot "
+            f"take an appended texture without renumbering them first")
+
+    for slot, image in sorted(request.new_textures.items()):
+        want = len(pack.textures) - 1
+        if slot != want:
+            raise ValueError(
+                f"a new texture was numbered {slot} but appending puts it at "
+                f"{want}; the faces naming it would read the wrong picture")
+        values, indices = _palette_for(np.asarray(image))
+        source = Texture(index=slot, vram_width=indices.shape[1] // 4,
+                         height=indices.shape[0], unk01=0, unk02=0, unk03=0,
+                         unk04=0, palette_field=0, unk22=0, flags=0,
+                         data=TW._pack_indices(indices, 4))
+        pack_data, at, palette_index = TW.append_texture(pack_data, source, values)
+        pack = read_pack(pack_data)
+        report.textures_written.append(at)
+        report.warnings.append(
+            f"slot {at} was added to the pack with palette {palette_index}; "
+            f"nothing was replaced and the swatch is now slot "
+            f"{len(pack.textures) - 1}")
+    return pack_data, pack

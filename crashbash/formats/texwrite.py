@@ -1,14 +1,24 @@
-"""Overwrite a texture's pixels or a palette's colours, in place.
+"""Overwrite a texture's pixels or a palette's colours -- or add one.
 
-Only in place. A pack's size, its record layout and the order of its textures
-all stay exactly as they were, because how a pack is placed in VRAM is still
-unknown -- pack header `+0x14` and texture record `+0x04..+0x07`, `+0x0E`,
-`+0x10` are unidentified (docs/FORMAT.md §10). Changing the pixels inside a slot
-touches none of that; adding a texture or resizing one would.
+Most of this writes in place: a pack's size and record layout stay as they were,
+and changing the pixels inside a slot touches nothing structural. A smaller
+image can be dropped into a corner of a larger slot, which is how a 32x16
+texture reaches a pack that only has a 32x32 slot free; the caller then shifts
+the UVs that sample it by the same offset.
 
-A smaller image can be dropped into a corner of a larger slot, which is how a
-32x16 texture reaches a pack that only has a 32x32 slot free. The caller then
-shifts the UVs that sample it by the same offset.
+`append_texture` is the exception, and it is only possible because **VRAM
+placement turned out not to be in the file at all** (§10.4). The pack states no
+position and the loader allocates one: `0x80029560` walks the records, picks a
+free rect off the list its size class names (`0x80028994` buckets, `0x800282F8`
+pops), computes the tpage inline and the CLUT id through `0x800364FC`, which is
+`GetClut` letter for letter. So a pack may hold one more texture than it
+shipped with, and nothing has to be reproduced -- what a replacement must not
+change is a texture's **size class**, since that is what picks the bucket, and
+an appended texture brings its own.
+
+That was written down as unknown for a long time because three scans looked for
+`GetClut` *inlined* rather than called. The negative result was real; the
+conclusion drawn from it was not.
 """
 
 from __future__ import annotations
@@ -79,6 +89,94 @@ def _pack_indices(indices: np.ndarray, bit_depth: int) -> bytes:
         return indices.astype(np.uint8).tobytes()
     flat = indices.astype(np.uint8).reshape(indices.shape[0], -1, 2)
     return ((flat[:, :, 1] << 4) | (flat[:, :, 0] & 0x0F)).astype(np.uint8).tobytes()
+
+
+def append_texture(data: bytes, source: Texture,
+                   colours: list[int] | np.ndarray) -> tuple[bytes, int, int]:
+    """Add a texture and its palette to a pack, replacing nothing.
+
+    Returns the new pack, the slot the texture took and the palette index it
+    was given. Every slot and palette the pack already had keeps its number,
+    **except the swatch**, which moves on by one -- see below.
+
+    Two placements are forced and neither is a choice:
+
+    * The palette goes on the **end of the palette table**, so the indices a
+      model already writes still mean what they meant.
+    * The texture record goes **before the last one**, because the last is where
+      bit 15 of a texture entry sends a face (§6.2, `0x80017FC4`): the swatch is
+      not found by index but by being last, and appending after it would send
+      every untextured triangle in the model to the new picture instead. The
+      swatch's own slot number therefore rises by one, and a caller that has
+      faces naming it by index -- 23,413 faces across 225 models do -- has to
+      renumber them.
+
+    The tail is rebuilt to §10.6: a length that is a multiple of 8, with a
+    further eight zero bytes when the pack has no animation block, which is the
+    empty block itself and holds in 400/400.
+    """
+    out = bytearray(data)
+    texture_count = struct.unpack_from("<h", out, 0x08)[0]
+    palette_count = struct.unpack_from("<h", out, 0x0A)[0]
+    if texture_count < 1:
+        raise ValueError("the pack holds no textures to insert before")
+
+    values = [int(v) & 0xFFFF for v in colours]
+    if len(values) not in (16, 256):
+        raise ValueError(
+            f"a palette holds 16 or 256 colours, not {len(values)} (§10.2)")
+    if source.bit_depth == 4 and source.width % 4:
+        raise ValueError(
+            f"a 4bpp texture is {source.vram_width} VRAM units wide, so its "
+            f"pixel width is a multiple of 4; {source.width} is not")
+
+    palettes = palette_offsets(out)
+    records = texture_offsets(out)
+    palette_end = (palettes[-1][0] + palettes[-1][1] * 2) if palettes else 0x20
+    last_record = records[-1][0]
+
+    # The record, with every field the corpus says is constant set to what it
+    # says. `+0x06`/`+0x07` are the used sub-rectangle, equal to the full size
+    # here; `+0x0E`/`+0x10` are the variant gate, which an added texture has no
+    # siblings for.
+    palette_field = ((palette_count << 1) & 0xFFFE) | (1 if source.bit_depth == 8 else 0)
+    record = struct.pack(
+        "<hhBBBBIhhI",
+        source.vram_width, source.height,
+        0, 0, min(source.vram_width * 2, 255), min(source.height, 255),
+        0, palette_field, 0, 0)
+    pixels = _pack_indices(source.indices(), source.bit_depth)
+    if len(pixels) != source.vram_width * source.height * 2:
+        raise ValueError(
+            f"{source.width}x{source.height} at {source.bit_depth}bpp packs to "
+            f"{len(pixels)} bytes, not the {source.vram_width * source.height * 2} "
+            f"the record states")
+
+    palette_bytes = struct.pack(f"<i{len(values)}H", len(values), *values)
+    # Insert the texture first, so the palette insertion does not move the
+    # offset it was measured at.
+    out[last_record:last_record] = record + pixels
+    out[palette_end:palette_end] = palette_bytes
+
+    struct.pack_into("<h", out, 0x08, texture_count + 1)
+    struct.pack_into("<h", out, 0x0A, palette_count + 1)
+    # `0x0C + value` is the first texture record, which the palette pushed on.
+    struct.pack_into("<I", out, 0x0C,
+                     struct.unpack_from("<I", out, 0x0C)[0] + len(palette_bytes))
+    animation = struct.unpack_from("<I", out, 0x18)[0]
+    if animation:
+        struct.pack_into("<I", out, 0x18,
+                         animation + len(palette_bytes) + len(record) + len(pixels))
+
+    # Everything past the texture walk -- §10.5's animation block and §10.6's
+    # tail -- is left exactly as it was and simply moved on by what was
+    # inserted. Rebuilding it instead cut 32,864 bytes off `crate_jungle/arena`:
+    # its walk ends where `u32@0x18` points, and a flipbook's stored frames live
+    # after that, so "the last structure" is not the last texture.
+    pad = (-len(out)) % 8
+    out.extend(b"\0" * pad)
+    struct.pack_into("<I", out, 0x04, len(out))
+    return bytes(out), texture_count - 1, palette_count
 
 
 def place(data: bytes, index: int, source: Texture, at: tuple[int, int] = (0, 0)) -> bytes:

@@ -100,8 +100,10 @@ class Transplant:
     # a different size. A UV is a texel coordinate, so moving a mesh onto a
     # pack whose matching texture is half as wide leaves every corner sampling
     # twice as far out -- off the texture and into whatever shares its page.
-    # A slot cannot be resized to avoid this: pack VRAM placement is still
-    # unknown (§10.1), so the geometry adapts instead.
+    # A slot cannot be resized to avoid this. Its size is what picks the VRAM
+    # bucket the loader allocates from (§10.4), so the geometry adapts instead
+    # -- or the picture is *added* to the pack at its own size, which
+    # `texwrite.append_texture` does and which costs no existing slot at all.
     #
     # The factor is `(dest - 1) / (source - 1)`, not `dest / source`: a 32x32
     # texture's UVs run 0..31, and halving those gives 0..16, which is one

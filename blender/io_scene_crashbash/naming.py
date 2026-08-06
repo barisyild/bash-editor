@@ -89,6 +89,11 @@ PROP_CLIP_REST = "crashbash_clips_rest"
 
 # On a material: what the face it paints reads.
 PROP_SLOT = "crashbash_slot"        # pack texture slot, for a textured face
+# Set beside PROP_SLOT when that slot does not exist yet and the export is to
+# *append* it rather than repaint one. Appending replaces nothing -- every slot
+# and palette the pack already had keeps its number -- which is the only way a
+# borrowed model brings its own pictures without taking someone else's (§10.3).
+PROP_NEW_SLOT = "crashbash_new_slot"
 PROP_PALETTE = "crashbash_palette"  # palette index, for a swatch face (§6.2)
 # Texture animation, shown and not edited: a slot the pack flips through stored
 # frames, or slides under its own UVs. Nothing in this project writes either

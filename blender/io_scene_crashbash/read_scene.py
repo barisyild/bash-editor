@@ -508,6 +508,21 @@ def build_request(collection, model, clips, pack, materials_pack=None,
         slot = material.get(N.PROP_SLOT)
         if slot is None:
             continue
+        image = next((node.image for node in material.node_tree.nodes
+                      if node.type == "TEX_IMAGE" and node.image is not None),
+                     None) if material.use_nodes else None
+        # A slot the pack does not have yet: the export appends it rather than
+        # repainting anything, so it never joins `slots` -- that set is what
+        # decides whether a palette may be requantised, and an appended texture
+        # brings its own.
+        if material.get(N.PROP_NEW_SLOT):
+            if image is None or tuple(image.size) == (0, 0):
+                request.warnings.append(
+                    f"{material.name} asks for a new slot {int(slot)} and "
+                    f"carries no picture; it was left out")
+                continue
+            request.new_textures[int(slot)] = read_image(image)
+            continue
         request.slots.add(int(slot))
         # Not the swatch image: it has no palette of its own, so what the
         # importer showed is one of the many pictures it can be -- decoded
@@ -516,9 +531,6 @@ def build_request(collection, model, clips, pack, materials_pack=None,
         if pack is not None and 0 <= int(slot) < len(pack.textures) \
                 and pack.textures[int(slot)].is_swatch:
             continue
-        image = next((node.image for node in material.node_tree.nodes
-                      if node.type == "TEX_IMAGE" and node.image is not None),
-                     None) if material.use_nodes else None
         if image is not None and tuple(image.size) != (0, 0):
             request.images[int(slot)] = read_image(image)
 
