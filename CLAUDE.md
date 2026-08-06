@@ -238,6 +238,15 @@ They are not style preferences.
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
   the case, but the call still has to pass the pack.
+- **A rebuild strands the old shared tables where they lie, and for a big model
+  that is most of what an edit costs.** `install_meshes` appends fresh copies
+  and repoints; the originals stay put and unreachable. Putting one 116-triangle
+  penguin into `boss_oxide/arena` grew it 233,202 → 265,966 bytes, and 30,528 of
+  those 32,764 are the shipped colour and UV tables left behind — the edit's own
+  new entries are 176 colours and 60 UVs, under a kilobyte. It is not wrong, and
+  the disc verifies and the tables stay below the boundary, but it is what
+  pushed the DAT past its sector run so `patch_image` had to move the whole
+  73 MB file and the image went from 178 MB to 262 MB.
 - **Install several meshes in one call, and rebuild only what was edited.**
   `install_mesh` appends the colour table, the UV table *and* the vector pool
   on every call, and each earlier copy is then unreachable. Nine meshes through
