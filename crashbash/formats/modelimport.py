@@ -1179,6 +1179,24 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     if check_resident:
         _refuse_if_past_resident(shipped_model, report.model)
 
+    # A pack states its companion model's resident size at `u32@0x14`, in
+    # 400/400 pairs -- the field §10.1 could not identify, and §10.4 shows the
+    # loader carrying it into the texture context at +0x24. So a rebuild that
+    # moves `i32@0x50` has to move it too, or the two disagree about the same
+    # model. `crate_jungle/arena` was built with them disagreeing by 5528 bytes
+    # and Jungle Bash filled the screen with texture garbage.
+    if pack_data is not None:
+        want = struct.unpack_from("<i", report.model, 0x50)[0]
+        base = report.pack if report.pack is not None else pack_data
+        if len(base) >= 0x18 and struct.unpack_from("<I", base, 0x14)[0] != want:
+            patched = bytearray(base)
+            struct.pack_into("<I", patched, 0x14, want & 0xFFFFFFFF)
+            report.pack = bytes(patched)
+            report.warnings.append(
+                f"the pack's u32@0x14 was updated to {want}, which is this "
+                f"model's new i32@0x50; the two state the same thing in 400/400 "
+                f"shipped pairs")
+
     # And say what the edit spent, so a budget that is nearly gone is read
     # before the next edit rather than after it.
     # The limits belong to the model as it shipped and the usage to the model
