@@ -392,13 +392,26 @@ They are not style preferences.
   region grow — but the striping measurement stands and still decides what an
   edit weighs. 494 of the 820 pool meshes across the 73 levels could not be
   rebuilt at all — the rebuild wanted more bytes than the mesh owns, by a median
-  of only **1.093×**. The cause is measurable: against the shipped data this
+  of only **1.093×**. The cause was measurable: against the shipped data this
   writer got **4.56 triangles a strip where the game gets 5.57**, and a strip of
   n triangles costs n + 2 pool entries, so strips are bytes. Seeding and
   continuing **least-connected first** — the standard tristrip heuristic, and
   the one thing this was missing — takes it to **5.16 a strip**, the pool from
   1.058× the shipped size to **1.021×**, and the meshes that fit from 326 to
-  **393 of 820**. What it costs is that a full-corpus rebuild now pushes two
+  **393 of 820**.
+  **That gap is closed and the striper is no longer the lever.** Measured over
+  120 models with the key `build_blocks` actually uses, this writer gets
+  **4.769 triangles a strip against the game's 4.548**, and its pool is **98.5 %
+  of the size** — on `warp_room1` 9868 entries against 9826, 100.4 %. What is
+  left to win is elsewhere: rebuilding *one* mesh of `warp_room1` costs a flat
+  **1028 bytes** whatever the edit, because re-striping rotates every triangle's
+  corners and its colour triples no longer match the runs the shipped table
+  holds, so it spends 257 entries it does not need.
+  **Key a strip by §5.1's flag, never by the texture slot.** One strip may
+  sample several textures — 12 % of 47,139 shipped strips do, some five — and
+  keying by slot takes this writer from 4.769 triangles a strip down to
+  **3.486**, which is worse than the game by as much as the fixed version is
+  better. What it costs is that a full-corpus rebuild now pushes two
   models past the 8192-entry colour limit by 52 and 56 entries: a different face
   order deduplicates the three-consecutive overlap slightly worse. That only
   shows in the sweep, which rebuilds every mesh of every model; a real edit
