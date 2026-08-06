@@ -8,12 +8,22 @@ header states it and reports what is left over.
     .venv/bin/python tools/layout.py game/SCUS_945.70
     .venv/bin/python tools/layout.py game/SCUS_945.70 models/warp_room1/level.mdl
 
-Measured over the shipped archive as this was written: 400 models, **174 with
-under 64 bytes left over** -- which is the 4- and 8-byte alignment padding
-between regions -- and a median of 284. What still goes unnamed is concentrated
-in the seven §8.6 carriers, whose door-preview block runs from `T(0x44)` to EOF
-and is walked through the `T(0x3C)` descriptor rows rather than any length in
-the header.
+Measured over the shipped archive as this was written: **7270 of the 7280 gaps
+the map leaves are entirely zero**, 38,540 bytes of padding a writer reproduces
+by aligning. The runs are 4 bytes (6745 times), 28 (327), 24 (66), 8 (73) and
+20 (7), and they sit where a table meets the next one.
+
+Only **ten gaps hold data**, 8088 bytes over four models, and they are the
+whole of what is not understood:
+
+* `cutscene/gamelogo_text` -- 7520 bytes between the mesh headers and the first
+  mesh's blocks, reading as strip words (§5.1) for a mesh the header does not
+  declare: it states 2 and the reader finds 2. Another 264 bytes past `0x4C`.
+* `cutscene/intro_eurocom` -- 164 bytes after the last named region.
+* three warp rooms -- 20 bytes apiece, inside the §8.6 tail.
+
+So the map is complete enough to lay a model out, and the exceptions are named
+rather than rounded away.
 """
 
 from __future__ import annotations
