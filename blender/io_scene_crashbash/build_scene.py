@@ -575,6 +575,17 @@ def build_mesh(name: str, payload, materials: Materials, notes: list[str],
         uvs[face, :, 0] = (texel[:, 0] + 0.5) / width
         uvs[face, :, 1] = 1.0 - (texel[:, 1] + 0.5) / height
     uv_layer.data.foreach_set("uv", uvs.reshape(-1))
+
+    # §5.1's strip flag, one per face. It cannot be derived on the way back:
+    # the swatch bit and this flag disagree on 33,097 faces of the archive, and
+    # a strip rebuilt with the wrong flag draws flat shaded with no texture --
+    # 758 of `mainmenu/models`' 3498 textured triangles went that way, and on
+    # screen it was Crash's body panels and the bear's arms in flat grey.
+    if payload.untextured is not None:
+        flag = mesh.attributes.new(name=N.STRIP_FLAG_ATTRIBUTE, type="INT",
+                                   domain="FACE")
+        flag.data.foreach_set(
+            "value", np.asarray(payload.untextured, dtype=np.int32).tolist())
     return mesh, mapping
 
 

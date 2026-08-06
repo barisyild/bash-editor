@@ -50,6 +50,22 @@ def group_of(name: str) -> str:
     return "models"
 
 
+def strip_flags(payload) -> Counter:
+    """§5.1's flag per face -- which primitive the strip this triangle is in draws as.
+
+    Measured nowhere until a disc showed it: `payload_bag` covers positions,
+    colours, UVs, the texture entry and corner order, the swatch palette and
+    cell are counted separately, and the blend mode separately again, so a file
+    carrying the flag wrong scored clean everywhere. It is not derivable from
+    the texture entry -- 33,097 faces of the archive carry the swatch bit
+    inside a strip flagged *textured* -- and a strip rebuilt with the wrong
+    flag draws flat shaded with no texture.
+    """
+    if payload.untextured is None:
+        return Counter({None: payload.positions.shape[0]})
+    return Counter(bool(v) for v in payload.untextured)
+
+
 def swatch_bag(payload) -> Counter:
     """(palette, cell) per face that reads the swatch image -- what §6.2 paints."""
     bag: Counter = Counter()
@@ -76,7 +92,7 @@ def main() -> None:
     if args.limit:
         models = models[: args.limit]
 
-    tally: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
+    tally: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0, 0, 0, 0, 0])
     failures: list[str] = []
     for entry in models:
         group = group_of(entry.name)
@@ -126,17 +142,21 @@ def main() -> None:
             wsw, gsw = swatch_bag(before), swatch_bag(after)
             row[3] += sum(wsw.values())
             row[4] += sum((wsw & gsw).values())
-            if want != got:
+            wfl, gfl = strip_flags(before), strip_flags(after)
+            row[6] += sum(wfl.values())
+            row[7] += sum((wfl & gfl).values())
+            if want != got or wfl != gfl:
                 row[5] += 1
 
-    print(f"{'group':<12}{'files':>7}{'triangles':>11}{'same':>11}"
-          f"{'swatch faces':>14}{'same':>10}{'meshes off':>12}")
+    print(f"{'group':<10}{'files':>6}{'triangles':>11}{'same':>11}"
+          f"{'swatch':>9}{'same':>9}{'strip flags':>12}{'same':>10}"
+          f"{'meshes off':>12}")
     for group in GROUPS:
         if group not in tally:
             continue
-        files, tris, same, sw, sw_same, off = tally[group]
-        print(f"{group:<12}{files:>7}{tris:>11}{same:>11}{sw:>14}{sw_same:>10}"
-              f"{off:>12}")
+        files, tris, same, sw, sw_same, off, fl, fl_same = tally[group]
+        print(f"{group:<10}{files:>6}{tris:>11}{same:>11}{sw:>9}{sw_same:>9}"
+              f"{fl:>12}{fl_same:>10}{off:>12}")
 
     if failures:
         print(f"\n{len(failures)} refused or unreadable:")

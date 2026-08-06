@@ -342,6 +342,20 @@ def read_mesh(obj, pack, sizes, problems, warnings):
     # recovered by matching corner positions: the material is where the
     # importer put it, and two faces can share their sorted corners.
     blend = np.zeros(len(triangles), dtype=np.uint8)
+    # §5.1's strip flag, read off the face attribute the importer wrote. It is
+    # a separate fact from the texture entry's bit 15 and cannot be derived
+    # from it (§6.2), so leaving it out did not fall back to something sensible
+    # -- it moved 758 of `mainmenu/models`' 3498 textured triangles into
+    # untextured strips, which draw flat shaded with no texture at all. A face
+    # the artist made carries no value, and 0 is the right default for it:
+    # every mesh in the archive that draws untextured says so through the
+    # swatch bit as well, so the writer still has that to go on.
+    untextured = None
+    layer = mesh.attributes.get(N.STRIP_FLAG_ATTRIBUTE)
+    if layer is not None and layer.domain == "FACE":
+        stored = np.zeros(len(mesh.polygons), dtype=np.int32)
+        layer.data.foreach_get("value", stored)
+        untextured = np.array([bool(stored[t.polygon_index]) for t in triangles])
     outside: dict[int, int] = {}
     for row, triangle in enumerate(triangles):
         polygon = mesh.polygons[triangle.polygon_index]
@@ -379,7 +393,7 @@ def read_mesh(obj, pack, sizes, problems, warnings):
     # position, which cannot tell apart two vertices a clip drives apart.
     return MI.MeshPayload(positions=positions, colours=colours, uvs=uvs,
                           textures=textures, blend=blend, vertices=vertices,
-                          corner_vertices=corners)
+                          corner_vertices=corners, untextured=untextured)
 
 
 def read_clip(obj, clip, warnings):

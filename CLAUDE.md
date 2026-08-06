@@ -468,28 +468,50 @@ They are not style preferences.
   zeros, so the pose it carried was dropped — three of that model's twelve
   clips came back playing something else while every static check passed. This
   is what "the animation plays partially and broken" was.
+- **The Blender front end never carried §5.1's strip flag, and rebuilding every
+  mesh is what finally showed it.** `read_scene` fills a payload's positions,
+  colours, UVs, textures and blend and leaves `untextured` at `None` — the word
+  does not appear in the file. §6.2 is emphatic that the flag is a *separate
+  fact* from the texture entry's bit 15, because **33,097 faces across the
+  archive carry the swatch bit inside a strip flagged textured**, and a strip
+  that comes back with the wrong flag draws as the wrong primitive: flat
+  shaded, no texture. On `mainmenu/models` that is **758 of 3498 triangles**
+  moving out of textured strips, and on screen it is Crash's body panels and
+  gloves, the bear's shoulders and arms and Uka Uka's cheeks drawing flat grey
+  while the textured faces beside them are right.
+  The core is fine — rebuilt through `payload_from_model` the whole archive
+  keeps 258,643 of 258,875 triangles in textured strips, 28 models off by a
+  handful. This is the add-on alone, and it was invisible because the exporter
+  rebuilds only the meshes that changed: until `rebuild_tables` forced all 22
+  through the writer, the affected meshes were copied verbatim.
+  **No comparison in this project sees it.** `payload_bag` covers positions,
+  colours, UVs, the texture entry and corner order; the swatch palette and cell
+  are measured separately; the blend mode is measured separately. The strip
+  flag is measured nowhere, which is why `tools/roundtrip.py` and
+  `tools/native_roundtrip.py` both score clean on files that carry it wrong.
+- **`rebuild_tables` renumbers, and what it is guilty of is still open.** The
+  grey faces above were laid at its door and are not its doing. What it *is*
+  measurably guilty of: every mesh must be re-striped, so `mainmenu/models`
+  goes 1016 strips → **1501**, its pose pool 8067 → **9033**, its animation
+  region 97,608 → **170,448** bytes and the file 276,712 → **359,748** for an
+  edit that changed nothing, where the same save with the switch off is
+  **byte-identical**. And it buys nothing: the rebuilt tables come back a
+  median **+8 colour and +25 UV entries** *bigger* than shipped. Whether an
+  outside consumer holds an index is unsettled — the menu disc cannot answer it
+  while the strip flag is wrong in the same build.
 - **Coverage measures nothing about exclusivity, and here is the measurement
   that proves it useless.** Over the whole archive, **378 of 378 models** have
   no *interior* gap in either shared table: every entry up to the last one any
   mesh reads is read by some mesh, and what is unreached is a trailing run. That
   looks like a licence to renumber and is not one — an outside consumer's index
   lands inside a fully covered range too, which is exactly how the menu came
-  back drawing flat bands of the wrong colour. The seven §8.6 carriers are known
-  to have such a consumer (their door sub-blocks) and they show no interior gap
-  either, which settles it: this test cannot see one.
+  back drawing flat grey faces, twice. The seven §8.6 carriers are known to have
+  such a consumer (their door sub-blocks) and they show no interior gap either,
+  which settles it: this test cannot see one.
   What follows is not "rebuild the tables" but **"never renumber them"** — and
   that costs nothing, because a writer that owns the layout can grow a table in
   place. Pinning, snapping and stranding are consequences of *patching*, not of
   the table's content.
-- **Never reorder or drop the shipped colour table — grow it only at the end.**
-  Rebuilding it from the meshes' own triples looked safe: `mainmenu/models`
-  carries 5216 entries and its 22 meshes reach all 5216. That measurement does
-  not say what it seems to. *Covered by the meshes* is not *reached only by the
-  meshes* — because they cover the whole range, any index held anywhere else
-  lands inside it too, so rewriting the table under it silently repaints
-  whatever that is. On hardware the menu came back drawing flat bands of the
-  wrong colour. The shipped entries stay exactly where they are; new triples
-  chain onto the end.
 - **Rebuild only the meshes the file actually changed.** An untouched mesh
   re-striped comes back with every triangle's corners rotated, so its colour
   triples no longer match the runs the table holds and it spends entries it

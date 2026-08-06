@@ -170,17 +170,18 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
         default=False,
     )
     rebuild_tables: BoolProperty(
-        name="Rebuild the shared tables",
+        name="Rebuild the shared tables (breaks the menu)",
         description=("Build the colour and UV tables from nothing but the "
-                     "meshes in the scene, so the file carries no entry that "
-                     "is not read by one of them. This RENUMBERS every entry, "
-                     "and nothing in the file can see who else holds an index: "
-                     "the menu came back from hardware drawing flat bands of "
-                     "the wrong colour when its table was rebuilt this way. It "
-                     "also costs a little -- median 8 colour and 25 UV entries "
-                     "more than shipped, because re-striping deduplicates the "
-                     "three-consecutive overlap slightly worse"),
-        default=True,
+                     "meshes in the scene, so the file carries no entry no "
+                     "mesh reads. This RENUMBERS every entry and it is known "
+                     "to be wrong on hardware: the menu came back with whole "
+                     "faces flat grey, twice, because it draws from code that "
+                     "holds indices of its own and nothing in the file can see "
+                     "them. It saves nothing either -- the rebuilt tables are "
+                     "a median 8 colour and 25 UV entries BIGGER than shipped, "
+                     "and every mesh is re-striped so every clip is rebuilt "
+                     "with it. Off unless you are investigating this"),
+        default=False,
     )
     animation_only: BoolProperty(
         name="Animation only",

@@ -109,6 +109,14 @@ PROP_SCROLL = "crashbash_scroll"      # texels a second
 COLOUR_ATTRIBUTE = "crashbash_colour"
 UV_LAYER = "crashbash_uv"
 
+# §5.1's strip flag, per face: 1 when the strip this triangle belongs to is
+# flagged untextured. It is a *separate fact* from the texture entry's bit 15
+# (§6.2) and cannot be derived from it -- 33,097 faces across the archive carry
+# the swatch bit inside a strip flagged textured, and a strip that comes back
+# with the wrong flag draws as the wrong primitive: flat shaded, no texture.
+# Nothing in Blender's own model holds it, so it rides as a face attribute.
+STRIP_FLAG_ATTRIBUTE = "crashbash_flat"
+
 # --- names ---------------------------------------------------------------
 
 MATERIAL_SLOT = "tex_{slot:03d}_{width}x{height}_{depth}bpp"
