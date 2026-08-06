@@ -1477,6 +1477,25 @@ def _append_textures(pack_data: bytes, pack: TexturePack, model: Model,
             f"would come back reading a different picture. This model cannot "
             f"take an appended texture without renumbering them first")
 
+    # Appending a picture nothing reads is the shape of one specific mistake:
+    # the caller added the pictures and handed the geometry over still naming
+    # its *source* pack's slots. Those are legal numbers here -- `boss_oxide`
+    # has a slot 0 -- so nothing downstream objects, and the mesh comes back
+    # wearing whatever the destination keeps at 0..4. Two discs went out that
+    # way before this check existed, and both read on screen as a black bird.
+    reads = set()
+    for payload in request.meshes.values():
+        reads.update(int(t) for t in np.asarray(payload.textures).reshape(-1)
+                     if t >= 0)
+    unread = sorted(set(request.new_textures) - reads)
+    if unread and request.meshes:
+        raise ValueError(
+            f"slot(s) {unread} are being added to the pack and no face of the "
+            f"meshes in this import names any of them. A borrowed mesh's "
+            f"texture entries name the pack it came from, and appending here "
+            f"does not renumber them -- repoint the faces at the slots being "
+            f"added, or leave the pictures out")
+
     for slot, image in sorted(request.new_textures.items()):
         want = len(pack.textures) - 1
         if slot != want:

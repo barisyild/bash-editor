@@ -655,6 +655,11 @@ They are not style preferences.
   read on screen as a black bird. Two discs went out that way, both built by a
   probe script of mine rather than through the front end. **Drive the front
   end**: what it does around `import_payload` is not decoration.
+  The core refuses it now, on the one signal that separates the mistake from an
+  intended edit: **a slot is being appended and no face of any staged mesh names
+  it**. Nothing downstream could object before — `boss_oxide` has a slot 0, and
+  the penguin's 16×16 UVs sit comfortably inside a 32×64 one, so even the
+  out-of-range check had nothing to say.
 - **A pinned UV table does not forbid textures, only arbitrary ones.** What a
   §8.6 carrier fixes is the table, and a triple in it is only three texel pairs
   — so an appended slot can be addressed through whatever triples the table
