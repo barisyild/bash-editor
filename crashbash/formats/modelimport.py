@@ -1171,31 +1171,9 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     else:
         report.model = AW.write_clips(grown, specs, reclaim=False)
 
-    # A corpus sweep forces every mesh of every model through the writer, which
-    # grows the tables far past anything a real edit would and so trips this on
-    # 233 of the 400. That is not a writer fault and the sweep is there to
-    # measure the geometry, so it turns the check off deliberately; nothing that
-    # builds a disc should.
-    if check_resident:
-        _refuse_if_past_resident(shipped_model, report.model)
-
-    # A pack states its companion model's resident size at `u32@0x14`, in
-    # 400/400 pairs -- the field §10.1 could not identify, and §10.4 shows the
-    # loader carrying it into the texture context at +0x24. So a rebuild that
-    # moves `i32@0x50` has to move it too, or the two disagree about the same
-    # model. `crate_jungle/arena` was built with them disagreeing by 5528 bytes
-    # and Jungle Bash filled the screen with texture garbage.
-    if pack_data is not None:
-        want = struct.unpack_from("<i", report.model, 0x50)[0]
-        base = report.pack if report.pack is not None else pack_data
-        if len(base) >= 0x18 and struct.unpack_from("<I", base, 0x14)[0] != want:
-            patched = bytearray(base)
-            struct.pack_into("<I", patched, 0x14, want & 0xFFFFFFFF)
-            report.pack = bytes(patched)
-            report.warnings.append(
-                f"the pack's u32@0x14 was updated to {want}, which is this "
-                f"model's new i32@0x50; the two state the same thing in 400/400 "
-                f"shipped pairs")
+    # The resident check runs at the very end, after the pack's own `u32@0x14`
+    # has been brought into step -- checking before that would refuse the thing
+    # the sync is about to fix.
 
     # And say what the edit spent, so a budget that is nearly gone is read
     # before the next edit rather than after it.
@@ -1243,6 +1221,34 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
                 continue
             patched = write_slot(patched, pack, slot, image, exclusive, report)
         report.pack = patched if patched != shipped_pack else None
+
+    # A pack states its companion model's resident size at `u32@0x14`, in
+    # 400/400 pairs -- the field §10.1 could not identify, and §10.4 shows the
+    # loader carrying it into the texture context at +0x24. So a rebuild that
+    # moves `i32@0x50` has to move it too, or the two disagree about the same
+    # model: `crate_jungle/arena` was built with them 5528 bytes apart and
+    # Jungle Bash filled the screen with texture garbage; the same build with
+    # this one field corrected loads.
+    if shipped_pack is not None:
+        want = struct.unpack_from("<i", report.model, 0x50)[0]
+        base = report.pack if report.pack is not None else shipped_pack
+        if len(base) >= 0x18 and struct.unpack_from("<I", base, 0x14)[0] != want:
+            patched = bytearray(base)
+            struct.pack_into("<I", patched, 0x14, want & 0xFFFFFFFF)
+            report.pack = bytes(patched)
+            report.warnings.append(
+                f"the pack's u32@0x14 was updated to {want}, which is this "
+                f"model's new i32@0x50; the two state the same thing in 400/400 "
+                f"shipped pairs")
+
+    # And only now, with the pack in step, is it fair to ask whether anything
+    # runs past what it states. A corpus sweep forces every mesh through the
+    # writer and would trip this on models a real edit never touches, so the
+    # sweeps turn it off; nothing that builds a disc should.
+    if check_resident:
+        _refuse_if_past_resident(
+            shipped_model, report.model,
+            report.pack if report.pack is not None else shipped_pack)
 
     return report
 
@@ -1307,7 +1313,8 @@ class Budget:
 
 
 def budgets(model_data: bytes, model: Model, pack: TexturePack | None = None,
-            mesh: Mesh | None = None, faces: int | None = None) -> list[Budget]:
+            mesh: Mesh | None = None, faces: int | None = None,
+            pack_data: bytes | None = None) -> list[Budget]:
     """Everything this model can run out of, measured against what bounds it.
 
     Each row is a wall this project has hit, and every limit here was paid for:
@@ -1346,16 +1353,20 @@ def budgets(model_data: bytes, model: Model, pack: TexturePack | None = None,
     # whose rebuild *shrank* put its tables at 0x68a4 and runs, while the one
     # that grew put them on 0x8a1c to the byte and filled the screen with
     # garbage. So the honest row is the file against that value.
-    resident = struct.unpack_from("<i", model_data, 0x50)[0]
+    # What the *pack* says this model is, at its `u32@0x14` -- the same number
+    # as `i32@0x50` in 400/400 shipped pairs, and the one that actually binds:
+    # data past it is not there at run time. It is not a ceiling the model is
+    # stuck under, because the writer moves the pack's field with the model's;
+    # what it bounds is a build where the two disagree.
+    stated = (struct.unpack_from("<I", pack_data, 0x14)[0]
+              if pack_data is not None and len(pack_data) >= 0x18
+              else struct.unpack_from("<i", model_data, 0x50)[0])
     region = 0x44 + struct.unpack_from("<i", model_data, 0x44)[0]
     rows.append(Budget(
-        "mesh region", region, resident, unit="bytes",
-        note=("the tables are pinned in this model, so a rebuild does not move "
-              "them and this does not bind"
-              if carrier else
-              "a rebuild lays the shared tables at the end of this region and "
-              "past the limit they draw as garbage; the room here is the clip "
-              "directory's own bytes, so a model with no clips has none")))
+        "resident size", region, None, unit="bytes",
+        note=(f"the pack states {stated} at u32@0x14 and the model {struct.unpack_from('<i', model_data, 0x50)[0]} "
+              f"at i32@0x50; the writer keeps them in step, and data past what "
+              f"they state is not there at run time")))
 
     if pack is not None:
         rows.append(Budget(
@@ -1377,46 +1388,45 @@ def budgets(model_data: bytes, model: Model, pack: TexturePack | None = None,
     return rows
 
 
-def _refuse_if_past_resident(shipped: bytes, built: bytes) -> None:
-    """Stop a rebuild that lays a shared table past the shipped `i32@0x50`.
+def _refuse_if_past_resident(shipped: bytes, built: bytes,
+                             pack_data: bytes | None) -> None:
+    """Stop a rebuild whose data runs past what the *pack* says the model is.
 
-    **This is a rule fitted to observations, not a mechanism.** Say so plainly,
-    because the obvious explanation has been read out of the executable and is
-    wrong: the group loader at `0x800126C0` carves each entry out of the group's
-    sector run and shrinks it with `0x80011498` to `row+4` -- **the file table's
-    byte size, not `i32@0x50`** -- so the whole entry is resident and the tail is
-    in RAM. No caller trims a model to `0x50`; there are four and they are all
-    accounted for (three group loaders, one blob loader).
+    **The boundary is in the pack, not the model**, which is why no reader of
+    `model+0x50` was ever found: `u32@0x14` of the companion pack states the
+    same number in 400/400 pairs, and §10.4's `0x8002A62C` carries it into the
+    texture context at +0x24. `model+0x50` is a mirror of it.
 
-    What the boundary does have is behaviour, and now five builds' worth of it.
-    `crate_jungle/arena` came back with `T(0x20)` moved from 0x58 to 0x8a1c --
-    the shipped `i32@0x50` to the byte -- and Jungle Bash filled the screen with
-    VRAM garbage, which is what every mesh indexing a table it cannot read looks
-    like. The three builds that run on hardware (`intro_eurocom`'s tall M,
-    `warp_room1`'s penguin, `warp_room1`'s three objects) all keep both tables
-    below it. The warp-room probes of §2.1 say the same from their side.
+    Six builds line up on that and on nothing else:
 
-    So this refuses on the measurement while the mechanism is open. Two
-    candidates are still live and a padding-only probe separates them: whether
-    the entry may grow at all, or only where its tables land.
+    | build | tables past the old end | pack `0x14` | on hardware |
+    | --- | --- | --- | --- |
+    | `intro_eurocom` tall M | no | stale | runs |
+    | `warp_room1` penguin, flat and textured | no | stale | runs |
+    | `crate_jungle` penguin | yes | stale | screen of garbage |
+    | the same, `0x14` corrected | yes | agrees | **loads** |
+    | `crate_jungle` one mesh swollen | yes | stale | crash |
+
+    A stale `0x14` on its own is harmless -- three of the builds that run have
+    one, because everything they need still sits below the number it states.
+    What is fatal is data *past* it. So the writer keeps the field in step and
+    this only refuses what that cannot fix.
     """
-    if len(shipped) < 0x54 or len(built) < 0x54:
+    if pack_data is None or len(pack_data) < 0x18 or len(built) < 0x54:
         return
-    resident = struct.unpack_from("<i", shipped, MW.RESIDENT_SIZE)[0]
-    if not 0 < resident <= len(shipped):
+    stated = struct.unpack_from("<I", pack_data, 0x14)[0]
+    if not 0 < stated:
         return
     for offset, name in ((MW.PTR_COLOUR_TABLE, "colour table"),
                          (MW.PTR_UV_TABLE, "UV table")):
-        was = offset + struct.unpack_from("<i", shipped, offset)[0]
         now = offset + struct.unpack_from("<i", built, offset)[0]
-        if was < resident <= now:
+        if now >= stated:
             raise ValueError(
-                f"the rebuild moved the {name} from {was:#x} to {now:#x}, and "
-                f"this model's resident region ends at {resident:#x} -- nothing "
-                f"past that is loaded at run time, so every mesh would read it "
-                f"as whatever happens to be in memory. The tables have to stay "
-                f"below the resident end, which means the edit has to fit the "
-                f"entries the model already has")
+                f"the rebuild put the {name} at {now:#x} and the pack states "
+                f"this model as {stated:#x} bytes (u32@0x14, which every one of "
+                f"the 400 shipped pairs sets to the model's own i32@0x50). Data "
+                f"past that is not there at run time -- `crate_jungle/arena` "
+                f"came back a screen of garbage exactly this way")
 
 
 def _append_textures(pack_data: bytes, pack: TexturePack, model: Model,

@@ -559,10 +559,30 @@ They are not style preferences.
   `crate_jungle/arena` that put `T(0x20)` at `0x8a1c`, the shipped `i32@0x50`
   **to the byte**. Jungle Bash came back as a screen of VRAM garbage, which is
   what every mesh indexing a table it cannot read looks like.
-  `_refuse_if_past_resident` refuses that, and it separates the cases exactly:
-  the three builds that run on hardware (`intro_eurocom`'s tall M,
-  `warp_room1`'s penguin, `warp_room1`'s three objects) all keep both tables
-  below the boundary; the one that crashed is refused naming both.
+  **The boundary is real, and it is stated in the *pack*, at `u32@0x14`.** That
+  field and `model+0x50` hold the same number in **400/400** pairs, §10.4's
+  `0x8002A62C` carries the pack's into the texture context at `+0x24`, and §10.1
+  lists it as unidentified — "not a pointer, not the pixel byte total… differs
+  between structurally identical packs". It is the companion model's resident
+  size, and it is the one that binds. Six builds say so and nothing else fits:
+
+  | build | data past the stated end | pack `0x14` | on hardware |
+  | --- | --- | --- | --- |
+  | `intro_eurocom` tall M | no | stale | runs |
+  | `warp_room1` penguin, flat and textured | no | stale | runs |
+  | `crate_jungle` penguin | yes | stale | screen of garbage |
+  | the same, `0x14` corrected and nothing else | yes | agrees | **loads** |
+  | `crate_jungle`, one mesh swollen | yes | stale | crash |
+
+  A stale `0x14` on its own is harmless — three builds that run carry one,
+  because everything they need still sits below the number it states. What is
+  fatal is data *past* it. `import_payload` therefore moves the pack's field
+  whenever the model's `i32@0x50` moves, and the refusal only stops what that
+  cannot fix.
+  **Growth is not the wall.** `crate_jungle/arena` grew by 6300 bytes of pure
+  padding with nothing inside it moved, and the disc is clean; the same pack
+  grew by six textures on its own and is clean too. Both hypotheses that
+  survived static reading died on those two probes.
   **`i32@0x50` is not a boundary the game keeps — three readings say so.** The
   group loader at `0x800126C0` carves each entry out of the group's sector run
   and shrinks it with `0x80011498` to `row+4`, the **file table's byte size**;

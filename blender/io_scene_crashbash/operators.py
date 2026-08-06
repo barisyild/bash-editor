@@ -380,6 +380,16 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
             if obj.data is was:
                 obj.data = borrowed
         borrowed.name = f"{target.name}_borrowed"
+        # How much of the level is going away. `crate_jungle/arena`'s 0x5001 is
+        # the biggest mesh in its pool and also 642 of the level's 1108
+        # triangles, so borrowing over it built a disc that loads with half the
+        # map missing -- which is the trade working exactly as stated, and worth
+        # saying before it is seen.
+        share = old_faces / max(self._level_faces, 1)
+        if share > 0.25:
+            notes.append(f"this mesh is {share * 100:.0f}% of everything the "
+                         f"level draws, so that much of it goes away")
+
         room = int(mesh.ptr_end - mesh.header_offset)
         per_face = room / max(old_faces, 1)
         wanted = per_face * len(borrowed.polygons)
@@ -436,6 +446,9 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
             self.report({"ERROR"}, "the active object is not a mesh of this model")
             return {"CANCELLED"}
 
+        self._level_faces = sum(
+            len(o.mesh.face_colour_index) for o in model.objects
+            if o.mesh is not None) or 1
         borrowed = source.data.copy()
         notes = []
 
