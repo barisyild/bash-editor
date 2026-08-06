@@ -1599,6 +1599,14 @@ The resolver turns the record into an address:
 | +0x04 | i32 | byte offset of a **mesh header**, inside the model named at +0x08 | **confirmed** |
 | +0x08 | i32 ptr | self-relative **from +0x04**, landing on `T(0x3C) + 4 + 16*j + 4` — the chunk descriptor *j* of §8.1, whose +0x08 is the runtime pointer slot the resolver reads. Record 0's slot is the model's own base (written at 0x8001DEE0), so `j == 0` means "a mesh in this file". | **confirmed** |
 
+**`+0x04` is the one field in this format that is not self-relative**, and a writer that
+moves the pool has to move every record with it. Nothing warns when that is missed: the
+pool is a packed run of similar headers, so a stale offset lands on a neighbour or falls
+short of `T(0x2C)` and the walk above drops the entry without a word. Growing a shared
+table ahead of the pool cost every level in the archive its meshes while a check that
+compared only the meshes it could resolve reported 15 models failing — count them before
+comparing them. `modelwrite._repoint_objects` is what maps them.
+
 That it is a mesh header is settled by the caller: the draw routine dispatches the two id
 namespaces down separate paths that meet on the same load.
 

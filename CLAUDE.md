@@ -125,6 +125,18 @@ They are not style preferences.
   authoring tool's, so even a reshape with the same triangle count can want more
   room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
   owned).
+  **The relaid layout removes the fit constraint, and that has not been to a
+  console.** It leaves no hole: the mesh's region grows where it stands, the
+  pool meshes after it slide on, `_repoint_objects` moves every object record
+  with them, and unchanged neighbours keep their exact spacing (1745/1745 pairs
+  measured). All **1964 pool meshes across the 70 level models rebuild**, none
+  refused, where `_write_in_place` refused the ones that did not fit — the glTF
+  round trip went from 49,326 level triangles to **98,960**, and 32 of its 63
+  level refusals disappeared. But what black-screened `warp_room1` was a
+  *pool built wrong*, and no static check distinguished that build from a good
+  one either. Sliding the run is a different construction from holing it and it
+  is only ever been checked inside the file. Until a disc built this way runs,
+  treat it as unproven.
 - **A shot's emitter names its mesh by *id*, and its position is in the
   parent's frame.** The reader reports a resolved index and a world position;
   writing either straight back is wrong. `mesh_index` has to go back as
@@ -238,19 +250,52 @@ They are not style preferences.
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
   the case, but the call still has to pass the pack.
-- **A level edit strands the old shared tables, and pinning them costs nothing
-  instead.** `install_meshes` appends fresh copies and repoints; the originals
-  stay put and unreachable, and `_geometry_region` cannot reclaim them for any
-  model with an object pool — a pool mesh's blocks live in the same span and are
-  not in `model.meshes`, so rewriting the region would drop them. Putting one
-  116-triangle penguin into `boss_oxide/arena` grew it 233,202 → **265,966**
-  bytes, of which **30,528 are the shipped tables left behind**; the edit's own
-  new entries are 176 colours and 60 UVs, under a kilobyte. That growth is what
-  pushed the DAT past its sector run, so `patch_image` moved the whole 73 MB
-  file and the image went 178 MB → 262 MB.
-  The same edit with `pin_tables=True` comes to **233,198 bytes — four smaller
-  than the original**, and the image stays 178 MB with nothing moved.
-  **What that costs is the colours, and it is not small.** A pinned rebuild maps
+- **Own the layout and a table grows where it stands, so nothing is stranded.**
+  `modelwrite.relayout` re-emits a model region by region — header, mesh
+  headers, each mesh's blocks and attachment, the three shared tables, each
+  object-pool mesh, the tail — and recomputes every pointer from where the
+  region lands. Hand it `replace` and a region is written from new bytes, so a
+  longer colour table simply occupies more of the space it already had and the
+  regions after it move on. That is the whole of the fix: `mdlwrite` appended a
+  fresh copy and repointed the header, which left the shipped table in the file
+  reachable by nothing.
+  Measured over the archive: both tables grown by 64 entries each, every
+  shipped entry still at its own index, **378 of 378 models** for a median
+  **372 bytes**; a plain relayout that rebuilds nothing comes back saying the
+  same thing in **400 of 400**. One mesh edited in each of 356 models costs
+  **663,092 bytes less** than appending — 154 models smaller, 202 identical,
+  **none larger** — and an edit that used to grow 180 of them by 1,023,718
+  bytes now grows 109 by 376,738. `boss_oxide/arena` is **+2044 against
+  +32,764**, which is the 30,528 stranded bytes gone; `boss_bear/arena` saves
+  47,104. `mdlwrite._install_relaid` is the path, and it falls back to the old
+  one when it cannot own the file.
+- **A plan built only from what the header names silently drops data, and no
+  round trip can see it.** Ten gaps across four models hold bytes nothing here
+  resolves — `gamelogo_text`'s **7520** of strip words for a mesh its header
+  does not declare, most of all. The reader does not read them, so a relaid
+  `gamelogo_text` came back **6768 bytes below the file the disc shipped** with
+  every check passing. `plan` now carries any gap that is not entirely zero,
+  and 400/400 models keep every non-zero byte; the 38,540 bytes that *are* zero
+  are padding and alignment reproduces them.
+- **An object record's `+4` is the one field in this format that is not
+  self-relative.** `0x8001DD20` adds it to the load-time base named through
+  `+8`, so it is a plain offset from the start of that file, and reference 0 is
+  this model — those are the object-pool meshes. Move the pool and every record
+  has to move with it. **Nothing warns when this is missed**: the pool is a
+  packed run of similar headers, so a stale offset still reads *a* mesh or falls
+  short of the pool and `_read_objects` drops the entry without a word. Growing
+  a table ahead of the pool was costing every level in the archive its meshes
+  while the check reported 15 failures, because a comparison that skips a mesh
+  the reader returned `None` for calls that model clean. **Count the meshes
+  before comparing them.**
+- **A §8.6 carrier still pins, and that is a hardware fact rather than a
+  shortcoming of the writer.** New colours mean a longer colour table, a longer
+  colour table moves `T(0x24)`, and repointing `0x24` — three bytes, a
+  byte-identical copy — is exactly what scrambles every textured surface in
+  those seven rooms. The two tables are adjacent, so there is no layout that
+  grows one without moving the other's pointer. `_install_relaid` refuses a
+  carrier for that reason and the pinned path below still applies to it.
+  **What pinning costs is the colours, and it is not small.** A pinned rebuild maps
   each face onto an existing *triple* of consecutive entries, not onto three
   nearest colours, and `boss_oxide/arena`'s 5562 entries do not happen to hold
   the penguin's: measured corner by corner, worst **91 of 255** and **23 % of
@@ -289,8 +334,10 @@ They are not style preferences.
   is a size lever, not only a legality one. The same 648-triangle mesh went 495
   strips → 1638 pool → 747,672 bytes, and 161 strips → 970 pool: of the 532 KB
   that first build added, **516 KB was animation**.
-- **The pool span is the wall a level edit actually hits, and the striper is
-  most of it.** 494 of the 820 pool meshes across the 73 levels could not be
+- **The pool span *was* the wall a level edit hits, and the striper was most of
+  it.** The wall is gone in the file — the relaid layout lets a pool mesh's
+  region grow — but the striping measurement stands and still decides what an
+  edit weighs. 494 of the 820 pool meshes across the 73 levels could not be
   rebuilt at all — the rebuild wanted more bytes than the mesh owns, by a median
   of only **1.093×**. The cause is measurable: against the shipped data this
   writer got **4.56 triangles a strip where the game gets 5.57**, and a strip of

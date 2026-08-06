@@ -122,6 +122,54 @@ crashed while one honouring it booted.
    no valid volume exists.
 3. `write_clips` — the blobs go back on, after the boundary.
 
+### The file is laid out again rather than squeezed into
+
+Step 2 used to work by *appending*: a fresh copy of each shared table at the
+end of the geometry, the header repointed at it, and the shipped table left
+behind reachable by nothing. That is what made an edit expensive — one
+116-triangle mesh into `boss_oxide/arena` grew it 233,202 → 265,966 bytes, of
+which **30,528 were the tables stranded** against under a kilobyte of genuinely
+new entries — and it is what `pin_tables` existed to avoid paying.
+
+`install_meshes` now hands the whole file to `modelwrite.relayout`, which
+re-emits it region by region — header, mesh headers, every mesh's blocks and
+attachment, the three shared tables, each object-pool mesh, the tail — and
+recomputes every pointer from where its region lands. A table that grew is
+simply longer where it already stood; nothing is copied and nothing is
+stranded. The same edit costs **2044 bytes**.
+
+Three things had to be true for that to work, and each was learned by getting
+it wrong:
+
+* **A numbered mesh's header does not travel with its blocks.** The header is
+  in the table at `0x58` and the blocks are elsewhere, so a table growing
+  between them moves the two by different amounts and the self-relative
+  pointers stop meeting. An object-pool mesh is the opposite case — header and
+  blocks are one region — which is why only 15 models reported a mesh changing.
+* **An object record's `+4` is a plain file offset, not a self-relative one**
+  (§8.3). Move the pool and every record must move with it. Nothing warns: a
+  stale offset lands on a neighbouring header or short of the pool, and the
+  entry is dropped in silence. Every level in the archive was losing its
+  meshes while the check said 15 models failed, because a comparison that skips
+  a mesh the reader could not resolve calls that model clean.
+* **A plan built only from what the header names drops data.** Ten gaps across
+  four models hold bytes nothing here resolves, `gamelogo_text`'s 7520 most of
+  all, and no round trip through this project's reader can notice them going
+  missing — the relaid file came back 6768 bytes *below* the shipped one. Any
+  gap that is not entirely zero is carried verbatim.
+
+Measured over the archive: a plain relayout that rebuilds nothing says the same
+thing in **400 of 400** models; both tables grown by 64 entries with every
+shipped entry at its own index works in **378 of 378** for a median 372 bytes;
+and one mesh edited in each of 356 models costs **663,092 bytes less** than
+appending, 154 models smaller, 202 identical, none larger.
+
+A **§8.6 carrier** is the exception and still pins. New colours mean a longer
+colour table, a longer colour table moves `T(0x24)`, and repointing `0x24` is
+the measured-but-unexplained change that scrambles every textured surface in
+those seven rooms (§2.1). The two tables are adjacent, so no layout grows one
+without moving the other's pointer.
+
 ## 5. Animation
 
 - **Author in the built mesh's pool order.** Striping reorders and shares

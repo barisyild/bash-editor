@@ -25,6 +25,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from . import modelwrite as MOW
 from .mdl import (
     COLOUR_INDEX_MASK,
     MESH_HEADER_SIZE,
@@ -1294,6 +1295,12 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
             f"{grew} entries of {MAX_COLOURS}; the shipped entries are "
             f"unchanged and the new ones chained onto the end")
 
+    if not pin_tables:
+        relaid = _install_relaid(dest_data, dest, prepared, per_mesh,
+                                 bytes(colours), bytes(uvs), notes)
+        if relaid is not None:
+            return relaid
+
     layout = None if pin_tables else _geometry_region(dest_data, dest)
     if layout is not None:
         return _rewrite_region(dest_data, dest, layout, prepared, per_mesh,
@@ -1365,6 +1372,85 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                        target.unk13, target.unk14, geo, strips, uvi, tex, ci,
                        end, attach,
                        geo + blocks["normals"] if blocks["normals"] else 0)
+    return bytes(out)
+
+
+def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
+                    per_mesh: dict, colours: bytes, uvs: bytes,
+                    notes: list[str] | None) -> bytes | None:
+    """Install by laying the model out again, rather than by appending to it.
+
+    Everything above this function decides *what* each mesh and each table
+    should contain. This decides where it all goes, and it decides it for the
+    whole file: `modelwrite.relayout` re-emits every region in file order and
+    recomputes every pointer from where the region lands, so a table that grew
+    is simply longer where it already stood and the regions after it move on.
+
+    That is what ends the stranding. Appending a fresh table and repointing the
+    header leaves the shipped one in the file, reachable by nothing:
+    `boss_oxide/arena` grew 233,202 -> 265,966 bytes for one 116-triangle mesh
+    and 30,528 of those bytes were the tables left behind. It is also what ends
+    the pinning, because pinning existed only to avoid paying that.
+
+    Returns `None` when the layout writer cannot own this file -- a §8.6 carrier
+    whose §8.6 block must keep its offset, or a mesh whose region merged with a
+    neighbour's and so has no identity to replace -- and the caller falls back
+    to the path that was there before.
+    """
+    if struct.unpack_from("<i", dest_data, 0x38)[0]:
+        return None  # a §8.6 carrier: its block may not move (§2.1)
+
+    dest_colour, dest_uv, _ = MOW.table_bounds(dest_data)
+    replace_map: dict[int, bytes] = {dest_colour: colours, dest_uv: uvs}
+    pooled = {id(o.mesh) for o in dest.objects if o.mesh is not None}
+    inner: dict[int, tuple[int, list[int], int]] = {}
+
+    for index, (target, blocks) in prepared.items():
+        low = min(target.ptr_bounds, target.ptr_strips, target.ptr_uv_index,
+                  target.ptr_texture, target.ptr_colour_index)
+        start = min(low, target.header_offset) if id(target) in pooled else low
+        colour_index, uv_index = per_mesh[index]
+        # The order the shipped meshes use, and the one `_write_in_place`
+        # already relies on. A pool mesh's own header sits in front of its
+        # blocks and is part of the region, so it is carried across and
+        # patched afterwards like any other.
+        blob = bytearray(dest_data[start:low])
+        offsets = []
+        for block in (blocks["strips"], blocks["geometry"], uv_index,
+                      blocks["texture"], colour_index):
+            if len(blob) % 4:
+                blob.extend(b"\x00" * (4 - len(blob) % 4))
+            offsets.append(len(blob))
+            blob.extend(block)
+        if start in replace_map:
+            return None
+        replace_map[start] = bytes(blob)
+        inner[index] = (start, offsets, len(blob))
+
+    landed: dict[int, int] = {}
+    out = bytearray(MOW.relayout(dest_data, dest, replace_map, landed))
+    if any(start not in landed for start, _, _ in inner.values()):
+        # A pool mesh whose span overlaps its neighbour's is not a region of
+        # its own -- 96 of the archive's 1971 -- so there is nothing to replace.
+        return None
+
+    for index, (target, blocks) in prepared.items():
+        start, offsets, length = inner[index]
+        at = landed[start]
+        strips, geometry, uv_index, texture, colour_index = (
+            at + off for off in offsets)
+        header = (landed[start] if id(target) in pooled
+                  else landed[MESH_HEADER_START]
+                  + (target.header_offset - MESH_HEADER_START))
+        _finish_header(out, header, blocks["faces"], target.format,
+                       target.unk13, target.unk14, geometry, strips, uv_index,
+                       texture, colour_index, at + length,
+                       landed.get(target.ptr_attachment, 0),
+                       geometry + blocks["normals"] if blocks["normals"] else 0)
+
+    if notes is not None:
+        notes.append(f"model relaid from its own regions: {len(dest_data)} -> "
+                     f"{len(out)} bytes, nothing stranded")
     return bytes(out)
 
 
