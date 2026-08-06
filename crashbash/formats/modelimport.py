@@ -397,6 +397,62 @@ def pinned_swatch_cell(model_data: bytes, model: Model, target: Mesh,
     return best
 
 
+def pinned_uv_triples(model_data: bytes, model: Model, width: int, height: int
+                      ) -> np.ndarray:
+    """The UV triples a pinned model already holds that fit a `width x height`
+    picture, as an (N, 6) array of texel coordinates.
+
+    A pinned table cannot grow (§2.1), which reads as "a borrowed model cannot
+    bring its own textures". It is not quite that. A triple is only three texel
+    pairs, and an appended slot is addressed through whatever triples the table
+    happens to hold -- so what a carrier really forbids is *arbitrary* UVs, not
+    textured faces. `warp_room1` holds 2665 distinct triples, **82** of them
+    entirely inside 0..15, and 48 of those cover real area rather than painting
+    one texel; several are the full-quad corners a two-triangle face wants.
+
+    Snapping is lossy and the loss is worth stating: over the penguin's 29
+    textured faces the nearest available triple is at worst 21 texels away,
+    summed over all six coordinates of the face.
+    """
+    runs = _uv_runs(model_data, model)
+    inside = [r for r in runs
+              if max(r[0], r[2], r[4]) < width and max(r[1], r[3], r[5]) < height]
+
+    # Only the ones **closed under rotation**. Re-striping presents a triangle's
+    # corners starting wherever the strip enters it, and the writer stores the
+    # UVs in that order -- so a triple that is in the table one way round and
+    # not the others is a face refused after the fact. `warp_room1` has 82
+    # inside a 16x16 picture and 23 that survive the rotation, 12 of them
+    # covering area rather than painting a single texel.
+    # And under reversal too, because a strip presents consecutive triangles
+    # wound opposite ways and §11.3's outward order is `(a, c, b)` for half of
+    # them, UVs reversed alongside. Rotation alone left 2 of the penguin's 116
+    # faces refused; all six permutations leaves none, out of 17 triples.
+    def permutations(r):
+        a, b, c = (r[0], r[1]), (r[2], r[3]), (r[4], r[5])
+        return (a + b + c, b + c + a, c + a + b,
+                a + c + b, c + b + a, b + a + c)
+
+    closed = [r for r in inside if all(x in runs for x in permutations(r))]
+    if not closed:
+        return np.zeros((0, 6), dtype=np.int32)
+    return np.array(sorted(closed), dtype=np.int32)
+
+
+def snap_to_triples(uvs: np.ndarray, available: np.ndarray) -> np.ndarray:
+    """Each face's three (u, v) moved to the nearest triple the table holds.
+
+    Nearest by the sum over all six coordinates, which keeps a face's shape as
+    close as the table allows rather than getting one corner exactly right and
+    the other two anywhere.
+    """
+    if not len(available):
+        return uvs
+    flat = np.asarray(uvs, dtype=np.int32).reshape(len(uvs), 6)
+    cost = np.abs(flat[:, None, :] - available[None, :, :]).sum(axis=2)
+    return available[cost.argmin(axis=1)].reshape(len(uvs), 3, 2).astype(uvs.dtype)
+
+
 def _uv_runs(model_data: bytes, model: Model) -> set[tuple[int, ...]]:
     """Every three-in-a-row the model's UV table already holds.
 

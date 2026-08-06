@@ -141,11 +141,17 @@ number directly would then read the newcomer, and 21 of the 393 models with a
 growable table do; the export refuses those rather than repaint them by
 accident.
 
-In the seven §8.6 carriers — all five warp rooms and both demo hubs — this is
-not available, because the UV table cannot grow and a textured face has nowhere
-to put its texels: 2 of the penguin's 29 would have found their triple in
-`warp_room1`'s. There the art is baked into the vertex colours instead, and the
-report says which wall it hit.
+**The seven §8.6 carriers can take textures too, at a cost worth reading.** Their
+UV table cannot grow, which reads as "no textured face" — but a triple is only
+three texel pairs, and an appended slot is addressed through whatever triples the
+table happens to hold. So the faces are **snapped onto the ones it has**.
+`warp_room1` holds 2665, of which 82 fall inside a 16×16 picture and **17
+survive** the writer rotating and reversing a triangle's corners; snapping the
+penguin's 116 faces onto those moves the worst by 33 texels over its six
+coordinates. On screen that is a penguin with its own art and a smeared face —
+better than flat, worse than the exact thing, and the number is in the report so
+the choice is yours. Bake to vertex colours instead by turning *Bring its own
+textures* off.
 
 Then place it and export. Done from the buttons alone, `warp_room1` with the
 penguin came out **byte for byte identical** to the hand-made version of the

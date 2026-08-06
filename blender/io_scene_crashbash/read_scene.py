@@ -480,6 +480,21 @@ def build_request(collection, model, clips, pack, materials_pack=None,
 
     sizes = _sizes(pack)
     found = _objects(collection)
+    # A slot being *appended* is not in the pack yet, so `_sizes` has nothing
+    # for it and its UVs would be addressed against `UNKNOWN_SIZE`. The picture
+    # the material carries is its size, and getting this wrong is not a small
+    # error: the penguin's faces were snapped onto a pinned table's triples in
+    # 16x16 texels and read back through 256x256, so 115 of its 116 came out
+    # holding a triple the table does not have.
+    for obj in found.values():
+        for material in obj.data.materials:
+            if material is None or not material.get(N.PROP_NEW_SLOT):
+                continue
+            image = next((node.image for node in material.node_tree.nodes
+                          if node.type == "TEX_IMAGE" and node.image is not None),
+                         None) if material.use_nodes else None
+            if image is not None and tuple(image.size) != (0, 0):
+                sizes[("slot", int(material[N.PROP_SLOT]))] = tuple(image.size)
     known = {mesh.index for mesh in model.meshes}
     known |= {o.mesh.index for o in model.objects if o.mesh is not None}
     for index, obj in sorted(found.items()):

@@ -316,6 +316,51 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                      f"swatch moves to {base + len(renumber)}")
         return renumber
 
+    def _snap_uvs(self, borrowed, model_data, model, uv, notes) -> bool:
+        """Move every face's UVs onto a triple the pinned table already holds."""
+        import numpy as np
+        from crashbash.formats import modelimport as MI
+
+        from . import build_scene
+
+        sizes = {tuple(image.size) for image in
+                 (_material_image(m) for m in borrowed.materials) if image}
+        if len(sizes) != 1:
+            self.report({"ERROR"}, (
+                f"the borrowed pictures are {len(sizes)} different sizes, and a "
+                f"pinned table's triples have to fit one of them"))
+            return False
+        width, height = sizes.pop()
+        available = MI.pinned_uv_triples(model_data, model, width, height)
+        if not len(available):
+            self.report({"ERROR"}, (
+                f"this model's pinned UV table holds no triple inside a "
+                f"{width}x{height} picture, so a textured face cannot address "
+                f"one here"))
+            return False
+
+        # Out of Blender's V and into texel space, snap, and back again -- the
+        # same conversion the importer uses, flip included.
+        faces = len(borrowed.polygons)
+        texels = np.empty((faces, 3, 2), dtype=np.int32)
+        for n, poly in enumerate(borrowed.polygons):
+            for k, loop in enumerate(poly.loop_indices):
+                u, v = uv.data[loop].uv
+                texels[n, k, 0] = min(max(int(round(u * (width - 1))), 0), width - 1)
+                texels[n, k, 1] = min(max(int(round((1.0 - v) * (height - 1))), 0),
+                                      height - 1)
+        snapped = MI.snap_to_triples(texels, available)
+        moved = int(np.abs(snapped - texels).sum(axis=(1, 2)).max())
+        for n, poly in enumerate(borrowed.polygons):
+            for k, loop in enumerate(poly.loop_indices):
+                uv.data[loop].uv = (
+                    (snapped[n, k, 0] + 0.5) / width,
+                    1.0 - (snapped[n, k, 1] + 0.5) / height)
+        notes.append(f"snapped every face onto one of the {len(available)} UV "
+                     f"triples this pinned table holds, the worst moving "
+                     f"{moved} texels over its six coordinates")
+        return True
+
     def _finish(self, context, target, borrowed, mesh, source, notes, np):
         """Stand it on its origin, hand it to the target, and say what happened."""
         if self.stand_on_origin:
@@ -417,10 +462,17 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
         # colour. Everywhere else the pictures can simply be *added* to the
         # pack, which takes nothing from anybody (§10.3 never comes up).
         carrier = int.from_bytes(model_data[0x38:0x3C], "little") != 0
-        if not carrier and self.bring_textures:
+        if self.bring_textures:
             added = self._carry_textures(borrowed, collection, pack, notes)
             if added is None:
                 return {"CANCELLED"}
+            if carrier:
+                # The table cannot grow, so the faces have to address the new
+                # slot through triples it already holds. That is a real loss and
+                # it is stated: `warp_room1` offers 48 usable ones.
+                kept = self._snap_uvs(borrowed, model_data, model, uv, notes)
+                if not kept:
+                    return {"CANCELLED"}
             self._finish(context, target, borrowed, mesh, source, notes, np)
             return {"FINISHED"}
 
