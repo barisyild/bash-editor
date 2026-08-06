@@ -76,6 +76,11 @@ def table_bounds(data: bytes) -> tuple[int, int, int]:
     return resolve(0x20), resolve(0x24), resolve(0x28)
 
 
+def table_start_of_objects(data: bytes) -> int:
+    """`T(0x1C)` -- where the object table begins (§8.3)."""
+    return 0x1C + struct.unpack_from("<i", data, 0x1C)[0]
+
+
 def plan(data: bytes, model: Model) -> list[tuple[int, int]]:
     """The regions to emit, as `(start, end)` in the order they are written.
 

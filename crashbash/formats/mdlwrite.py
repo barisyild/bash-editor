@@ -29,6 +29,7 @@ from . import modelwrite as MOW
 from .mdl import (
     COLOUR_INDEX_MASK,
     MESH_HEADER_SIZE,
+    OBJECT_STRIDE,
     PTR_COLOUR_TABLE,
     PTR_UV_TABLE,
     STRIP_FLAG_UNTEXTURED,
@@ -1142,7 +1143,8 @@ def _refuse_carrier(data: bytes, what: str) -> None:
 def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                    pin_tables: bool = False,
                    notes: list[str] | None = None,
-                   plans: dict[int, "np.ndarray"] | None = None) -> bytes:
+                   plans: dict[int, "np.ndarray"] | None = None,
+                   rebuild_tables: bool = False) -> bytes:
     """Install several meshes in one pass, sharing one copy of the tables.
 
     `install_mesh` appends a colour table, a UV table and the vector pool on
@@ -1183,8 +1185,29 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         prepared[index] = (target, blocks)
 
     dest_colour, dest_uv, dest_uv_len = _table_bounds(dest_data, dest)
-    colours = bytearray(dest_data[dest_colour:dest_uv])
-    uvs = bytearray(dest_data[dest_uv : dest_uv + dest_uv_len])
+    if rebuild_tables:
+        # Both tables built from nothing but the meshes being installed, so the
+        # file carries no entry that is not read by one of them.
+        #
+        # **This renumbers, and renumbering is the one thing measured to be
+        # unsafe.** An entry's index is its whole identity, and nothing here can
+        # see who else holds one: over the archive 378 of 378 models have no
+        # interior gap in either table, so an outside consumer's index lands
+        # inside a fully covered range and looks exactly like a mesh's own. The
+        # menu came back from hardware drawing flat bands of the wrong colour
+        # when its table was rebuilt this way. Every mesh of the model has to be
+        # staged, or an unstaged one keeps indices into a table that no longer
+        # means what it meant.
+        absent = sorted(set(mesh_index(dest)) - set(meshes))
+        if absent:
+            raise ValueError(
+                f"rebuilding the shared tables renumbers every entry, so every "
+                f"mesh has to be installed alongside -- {len(absent)} are not: "
+                f"{absent[:8]}{' ...' if len(absent) > 8 else ''}")
+        colours, uvs = bytearray(), bytearray()
+    else:
+        colours = bytearray(dest_data[dest_colour:dest_uv])
+        uvs = bytearray(dest_data[dest_uv : dest_uv + dest_uv_len])
 
     triples: dict[bytes, int] = {}
     for at in range(0, len(colours) - 2 * COLOUR_ENTRY_SIZE, COLOUR_ENTRY_SIZE):
@@ -1292,8 +1315,13 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         grew = len(colours) // COLOUR_ENTRY_SIZE
         notes.append(
             f"colour table {(dest_uv - dest_colour) // COLOUR_ENTRY_SIZE} -> "
-            f"{grew} entries of {MAX_COLOURS}; the shipped entries are "
-            f"unchanged and the new ones chained onto the end")
+            f"{grew} entries of {MAX_COLOURS}; "
+            + ("built from the staged meshes alone, so **every entry is "
+               "renumbered** and anything outside this model holding an index "
+               "now names a different colour"
+               if rebuild_tables else
+               "the shipped entries are unchanged and the new ones chained "
+               "onto the end"))
 
     if not pin_tables:
         relaid = _install_relaid(dest_data, dest, prepared, per_mesh,
@@ -1375,6 +1403,27 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     return bytes(out)
 
 
+def _aim_object(out: bytearray, dest: Model, dest_data: bytes, target: Mesh,
+                header: int, carried) -> bool:
+    """Point the object record that names this pool mesh at its new header.
+
+    `relayout` moves every record already, but it can only resolve a *region's
+    start* inside a region it was handed new bytes for -- so all five of
+    `balls_crash/crystalarena`'s meshes that share one region collapsed onto
+    the first, and four of them came back drawing the wrong texture slot.
+    Here the exact header is known, so it is written directly.
+    """
+    table = MOW.table_start_of_objects(dest_data)
+    at = carried(table)
+    if at is None:
+        return False
+    for index, obj in enumerate(dest.objects):
+        if obj.reference == 0 and obj.offset == target.header_offset:
+            struct.pack_into("<i", out, at + OBJECT_STRIDE * index + 4, header)
+            return True
+    return True   # nothing names it: a pool mesh no object record reaches
+
+
 def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
                     per_mesh: dict, colours: bytes, uvs: bytes,
                     notes: list[str] | None) -> bytes | None:
@@ -1416,47 +1465,90 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
                 return start
         return None
 
-    for index, (target, blocks) in prepared.items():
-        low = min(target.ptr_bounds, target.ptr_strips, target.ptr_uv_index,
-                  target.ptr_texture, target.ptr_colour_index)
-        start = min(low, target.header_offset) if id(target) in pooled else low
-        colour_index, uv_index = per_mesh[index]
-        # The order the shipped meshes use, and the one `_write_in_place`
-        # already relies on. A pool mesh's own header sits in front of its
-        # blocks and is part of the region, so it is carried across and
-        # patched afterwards like any other.
-        blob = bytearray(dest_data[start:low])
-        offsets = []
-        for block in (blocks["strips"], blocks["geometry"], uv_index,
-                      blocks["texture"], colour_index):
-            if len(blob) % 4:
-                blob.extend(b"\x00" * (4 - len(blob) % 4))
-            offsets.append(len(blob))
-            blob.extend(block)
-        end = len(blob)
-        # §8.4's attachment block, when it lies inside the span this rebuild is
-        # overwriting: it is the mesh's collision volume and nothing in a
-        # payload carries it, so it is copied along here rather than lost. It
-        # goes after `ptr_end`, which is where the shipped meshes keep it.
-        attach = 0
-        if target.ptr_attachment and region_of(target.ptr_attachment) == start:
-            keep = _attachment_bytes(dest_data, target)
-            if not keep:
-                return None
-            if len(blob) % 4:
-                blob.extend(b"\x00" * (4 - len(blob) % 4))
-            attach = len(blob)
-            blob.extend(keep)
-        if start in replace_map:
+    # Grouped by the region each mesh lives in, because two pool meshes can
+    # share one: 96 of the archive's 1971 have a span that overlaps a
+    # neighbour's, and `plan` merges those. Writing them one at a time claimed
+    # the same region twice and had to refuse; laid out together they simply
+    # follow each other inside it, which is what the shipped file does anyway.
+    def anchor(mesh: Mesh) -> int:
+        low = min(mesh.ptr_bounds, mesh.ptr_strips, mesh.ptr_uv_index,
+                  mesh.ptr_texture, mesh.ptr_colour_index)
+        return min(low, mesh.header_offset) if id(mesh) in pooled else low
+
+    # Every mesh that lives in a region, staged or not. A region is rewritten
+    # whole, so a mesh sharing one with a rebuild has to be rebuilt alongside
+    # or its blocks are gone: `balls_crash/crystalarena` packs five pool meshes
+    # onto *one* set of blocks, five headers over the same strips, bounds, UVs
+    # and colours with only `ptr_texture` four bytes apart each time.
+    tenants: dict[int, list[int]] = {}
+    for mesh in list(dest.meshes) + [o.mesh for o in dest.objects
+                                     if o.mesh is not None]:
+        region = region_of(anchor(mesh))
+        if region is not None:
+            tenants.setdefault(region, []).append(mesh.index)
+
+    groups: dict[int, list[int]] = {}
+    for index, (target, _) in prepared.items():
+        region = region_of(anchor(target))
+        if region is None:
             return None
-        replace_map[start] = bytes(blob)
-        inner[index] = (start, offsets, end, attach)
+        groups.setdefault(region, []).append(index)
+    for region, members in groups.items():
+        if set(tenants.get(region, ())) - set(members):
+            return None
+
+    for region, members in groups.items():
+        blob = bytearray()
+        members.sort(key=lambda i: prepared[i][0].header_offset)
+        for index in members:
+            target, blocks = prepared[index]
+            low = min(target.ptr_bounds, target.ptr_strips, target.ptr_uv_index,
+                      target.ptr_texture, target.ptr_colour_index)
+            start = anchor(target)
+            colour_index, uv_index = per_mesh[index]
+            # A pool mesh's own header sits in front of its blocks and is part
+            # of the region, so it is carried across and patched afterwards.
+            # The block order is the one the shipped meshes use and the one
+            # `_write_in_place` already relies on.
+            head = len(blob)
+            if id(target) in pooled:
+                # Its own header only. Copying `start:low` instead swept up
+                # every header sharing the region -- five of them, in
+                # `balls_crash/crystalarena` -- and duplicated them all.
+                blob.extend(dest_data[target.header_offset:
+                                      target.header_offset + MESH_HEADER_SIZE])
+            offsets = []
+            for block in (blocks["strips"], blocks["geometry"], uv_index,
+                          blocks["texture"], colour_index):
+                if len(blob) % 4:
+                    blob.extend(b"\x00" * (4 - len(blob) % 4))
+                offsets.append(len(blob))
+                blob.extend(block)
+            end = len(blob)
+            # §8.4's attachment block, when it lies inside the span this
+            # rebuild is overwriting: it is the mesh's collision volume and
+            # nothing in a payload carries it, so it is copied along here
+            # rather than lost. It goes after `ptr_end`, where the shipped
+            # meshes keep it.
+            attach = 0
+            if target.ptr_attachment and region_of(target.ptr_attachment) == region:
+                keep = _attachment_bytes(dest_data, target)
+                if not keep:
+                    return None
+                if len(blob) % 4:
+                    blob.extend(b"\x00" * (4 - len(blob) % 4))
+                attach = len(blob)
+                blob.extend(keep)
+            inner[index] = (region, offsets, end, attach, head)
+            if len(blob) % 4:
+                blob.extend(b"\x00" * (4 - len(blob) % 4))
+        if region in replace_map:
+            return None
+        replace_map[region] = bytes(blob)
 
     landed: dict[int, int] = {}
     out = bytearray(MOW.relayout(dest_data, dest, replace_map, landed))
-    if any(start not in landed for start, _, _, _ in inner.values()):
-        # A pool mesh whose span overlaps its neighbour's is not a region of
-        # its own -- 96 of the archive's 1971 -- so there is nothing to replace.
+    if any(start not in landed for start, _, _, _, _ in inner.values()):
         return None
 
     def carried(offset: int) -> int | None:
@@ -1477,11 +1569,11 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
         return landed[start] + (offset - start)
 
     for index, (target, blocks) in prepared.items():
-        start, offsets, length, attach = inner[index]
+        start, offsets, length, attach, head = inner[index]
         at = landed[start]
         strips, geometry, uv_index, texture, colour_index = (
             at + off for off in offsets)
-        header = (landed[start] if id(target) in pooled
+        header = (at + head if id(target) in pooled
                   else landed[MESH_HEADER_START]
                   + (target.header_offset - MESH_HEADER_START))
         attachment = 0
@@ -1493,6 +1585,9 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
                        target.unk13, target.unk14, geometry, strips, uv_index,
                        texture, colour_index, at + length, attachment,
                        geometry + blocks["normals"] if blocks["normals"] else 0)
+        if id(target) in pooled and not _aim_object(out, dest, dest_data,
+                                                   target, header, carried):
+            return None
 
     if notes is not None:
         notes.append(f"model relaid from its own regions: {len(dest_data)} -> "

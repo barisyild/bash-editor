@@ -169,6 +169,19 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
                      "91 of 255 off at worst against 0 without it"),
         default=False,
     )
+    rebuild_tables: BoolProperty(
+        name="Rebuild the shared tables",
+        description=("Build the colour and UV tables from nothing but the "
+                     "meshes in the scene, so the file carries no entry that "
+                     "is not read by one of them. This RENUMBERS every entry, "
+                     "and nothing in the file can see who else holds an index: "
+                     "the menu came back from hardware drawing flat bands of "
+                     "the wrong colour when its table was rebuilt this way. It "
+                     "also costs a little -- median 8 colour and 25 UV entries "
+                     "more than shipped, because re-striping deduplicates the "
+                     "three-consecutive overlap slightly worse"),
+        default=True,
+    )
     animation_only: BoolProperty(
         name="Animation only",
         description=("Rebuild the clips and leave every mesh byte-identical. "
@@ -213,6 +226,7 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
             report = MI.import_payload(
                 model_data, pack_data, request,
                 animation_only=self.animation_only,
+                rebuild_tables=self.rebuild_tables and not self.animation_only,
                 pin_tables=True if self.pin_tables else None)
         except Exception as exc:  # noqa: BLE001
             self.report({"ERROR"}, f"nothing was written. {exc}")

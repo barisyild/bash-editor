@@ -861,6 +861,7 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
                    animation_only: bool = False,
                    reference: dict[int, Counter] | None = None,
                    rebuild_all: bool = False,
+                   rebuild_tables: bool = False,
                    check_resident: bool = True) -> Report:
     """Rebuild `model_data`'s meshes and clips from `request`.
 
@@ -981,7 +982,10 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     # for nothing -- but the verification tools do: with untouched meshes left
     # alone, a round trip of the shipped corpus rebuilds nothing and compares
     # nothing, which is a check that passes by doing no work.
-    if rebuild_all:
+    if rebuild_all or rebuild_tables:
+        # Rebuilding the tables renumbers them, so no mesh may be left holding
+        # an index into the old numbering -- every one goes through the writer
+        # whether the source changed it or not.
         reference = {}
     elif reference is None:
         reference = reference_bags(model_data, model, pack, request.meshes, clips)
@@ -1057,7 +1061,8 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     plans: dict[int, np.ndarray] = {}
     if staged:
         trimmed = MW.install_meshes(trimmed, staged, pin_tables=pin_tables,
-                                    notes=report.warnings, plans=plans)
+                                    notes=report.warnings, plans=plans,
+                                    rebuild_tables=rebuild_tables)
     grown = trimmed
     rebuilt_model = read_model(grown)
 
