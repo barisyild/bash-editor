@@ -230,7 +230,8 @@ def _mesh_blocks(mesh: Mesh) -> tuple[int, int, int]:
 
 
 def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
-                 identity: np.ndarray | None = None
+                 identity: np.ndarray | None = None,
+                 prefer: np.ndarray | None = None
                  ) -> list[list[tuple[int, tuple[int, int, int]]]]:
     """Chain triangles into strips along shared edges.
 
@@ -246,6 +247,16 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
 
     `keys` groups triangles that may share a strip -- the texture each samples,
     since one strip is drawn with one texture.
+
+    `prefer` is the texture entry each triangle names, used only to break a
+    tie. It must not be a *key*: one strip may sample several textures -- 12 %
+    of the archive's 47,139 strips do -- so grouping by slot fragments them and
+    takes this writer from 4.769 triangles a strip down to 3.486. But the run
+    list that records the slot is run-length coded (§6.2), so a strip that
+    wanders between textures costs bytes there instead: on `warp_room1` the
+    rebuilt blocks came to 988 more than shipped, of which the pool explains
+    only 336. Preferring a follower that keeps the same entry costs no strip
+    length and shortens the run list.
 
     `identity` says which corners are the *same vertex*, when the caller knows.
     Two corners at one position need not be: 49 of the archive's 357 animated
@@ -323,8 +334,12 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
             key = (int(keys[seed]), wanted[0], wanted[1])
             candidates = [f for f in directed.get(key, ())
                           if not used[f] and f not in taken]
+            here = None if prefer is None else int(prefer[strip[-1][0]])
             following = (min(candidates,
-                             key=lambda f: (free_degree(f, used, taken), f))
+                             key=lambda f: (free_degree(f, used, taken),
+                                            0 if here is not None
+                                            and int(prefer[f]) == here else 1,
+                                            f))
                          if candidates else None)
             if following is None:
                 return strip
@@ -612,7 +627,19 @@ def build_blocks(mesh: NewMesh) -> dict:
         plain_face = np.asarray(mesh.textures, dtype=np.int64) < 0
     else:
         plain_face = np.ones(faces, dtype=bool)
-    runs = build_strips(mesh.positions, plain_face, mesh.corner_vertices)
+    runs = build_strips(mesh.positions, plain_face, mesh.corner_vertices,
+                        None if mesh.textures is None
+                        else np.asarray(mesh.textures, dtype=np.int64))
+    # The order the strips are written in is free -- the pool, the colours and
+    # the UVs all follow it -- and the texture run list does not restart at a
+    # strip boundary (§6.2), so strips that sample the same slot merge their
+    # runs when they are adjacent. On `warp_room1` the rebuilt run lists came
+    # to 2188 bytes against the 1528 shipped, the largest single item in a
+    # rebuild that was 988 bytes over; sorting costs nothing anywhere else.
+    if mesh.textures is not None and runs:
+        entry = np.asarray(mesh.textures, dtype=np.int64)
+        runs.sort(key=lambda run: (bool(plain_face[run[0][0]]),
+                                   int(entry[run[0][0]])))
     strips = bytearray()
     for run in runs:
         plain = bool(plain_face[run[0][0]])
