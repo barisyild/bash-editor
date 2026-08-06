@@ -855,8 +855,15 @@ others cannot:
 ```bash
 .venv/bin/python tools/roundtrip.py game/SCUS_945.70          # the glTF path
 .venv/bin/python tools/native_roundtrip.py game/SCUS_945.70   # the import core
-Blender --background --factory-startup --python blender/roundtrip.py -- game/SCUS_945.70 120
+Blender --background --python blender/roundtrip.py -- game/SCUS_945.70 400
 ```
+
+Where they stand, all three over the whole archive: the glTF path carries
+**424,990 triangles with the worst corner at 0.0000** and 205 scenes identical;
+the core carries **351,876** with every swatch face and every strip flag, no
+mesh off; and Blender carries **378 of 378 models**, its only refusals the 22
+font entries, which hold no meshes at all. A relayout that rebuilds nothing
+reproduces **400 of 400**.
 
 **Compare triangles canonically under rotation and not under reversal.**
 Reversing a triangle turns it inside out and the console culls it (§11.3), so a
