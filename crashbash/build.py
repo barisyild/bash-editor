@@ -82,6 +82,43 @@ def read_groups(exe: bytes, table_offset: int, entry_count: int) -> list[Group]:
     return groups
 
 
+# The game's own allocator is set up at 0x80011BF8, which takes a byte count,
+# rounds it to words and lays a free list over it. Its ceiling is built as
+# `lui $a2, 0x801F` + `ori $a2, 0x F000` -- 0x801FF000, four kilobytes below the
+# top of a retail console's 2 MB -- at three sites, and the heap runs from
+# 0x80078C90 to there: 1,598,320 bytes.
+HEAP_CEILING_LUI = 0x3C060000        # lui $a2, imm
+HEAP_CEILING_ORI = 0x34C6F000        # ori $a2, $a2, 0xF000
+HEAP_CEILING_HI = 0x801F             # what the shipped EXE names
+
+
+def retarget_heap(exe: bytearray, megabytes: int) -> list[int]:
+    """Move the allocator's ceiling to the top of `megabytes` of main RAM.
+
+    Returns the file offsets patched. **This leaves retail hardware behind**: a
+    PlayStation has 2 MB and a disc built for more only runs on an 8 MB
+    development unit or an emulator configured for one. It also does nothing
+    for VRAM, which is a separate megabyte on the GPU.
+
+    A fourth site builds 0x801F0000 with no `ori` and its use is not traced, so
+    it is left alone; a ceiling left low only means that path allocates less.
+    """
+    if not 2 <= megabytes <= 8 or megabytes & (megabytes - 1):
+        raise ValueError(f"main RAM is 2, 4 or 8 MB, not {megabytes}")
+    top = 0x80000000 + megabytes * 0x100000 - 0x1000
+    hi = (top >> 16) & 0xFFFF
+    patched: list[int] = []
+    for at in range(0, len(exe) - 8, 4):
+        word, following = struct.unpack_from("<2I", exe, at)
+        if (word & 0xFFFF0000) != HEAP_CEILING_LUI or following != HEAP_CEILING_ORI:
+            continue
+        if (word & 0xFFFF) != HEAP_CEILING_HI:
+            continue
+        struct.pack_into("<I", exe, at, HEAP_CEILING_LUI | hi)
+        patched.append(at)
+    return patched
+
+
 def build(
     archive: BashArchive,
     output: str | Path,

@@ -169,6 +169,17 @@ def cmd_build(archive: BashArchive, args) -> int:
     for warning in report.warnings:
         print(f"  warning: {warning}")
 
+    if args.ram:
+        exe_path = out / archive.exe_path.name
+        exe = bytearray(exe_path.read_bytes())
+        sites = build.retarget_heap(exe, args.ram)
+        exe_path.write_bytes(bytes(exe))
+        print(f"  heap ceiling moved to the top of {args.ram} MB at "
+              f"{len(sites)} site(s): "
+              f"{', '.join(f'{s + 0x800:#x}' for s in sites)} in the file")
+        print("  this disc needs a development unit or an emulator set to "
+              f"{args.ram} MB; a retail console has 2")
+
     matched, problems = build.verify(archive, out / archive.exe_path.name, staged)
     print(f"  verified {matched}/{report.entries} entries byte-identical")
     for problem in problems[:5]:
@@ -316,6 +327,16 @@ def main(argv: list[str] | None = None) -> int:
         "--original",
         help="build: an original disc image to patch instead of mastering the "
         "tree, which keeps the licence area and the XA streams a folder loses",
+    )
+    parser.add_argument(
+        "--ram",
+        type=int,
+        metavar="MB",
+        help="build: move the allocator's ceiling to the top of this much main "
+        "RAM (2, 4 or 8). The shipped heap is 1,598,320 bytes below "
+        "0x801FF000. LEAVES RETAIL HARDWARE BEHIND -- a PlayStation has 2 MB, "
+        "so anything more needs a development unit or an emulator set to one, "
+        "and it does nothing for VRAM",
     )
     parser.add_argument(
         "--replace",
