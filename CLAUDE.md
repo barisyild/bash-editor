@@ -232,6 +232,19 @@ They are not style preferences.
   `build_clips` zeroes each key as it makes it. A model brought in to be
   borrowed rather than animated should still have its keys cleared, which
   *Borrow Selected Mesh* does.
+- **A mesh no scene node names is not a spare slot — the shot is not the whole
+  of what draws.** `scene.mesh_indices` says `intro_eurocom` draws 26 of its 28
+  meshes, and 10 and 11 look free. They are not: mesh 10 is a **13127 x 13346 x
+  13115 dome**, 424 swatch faces of dark blue, and mesh 11 is an 11775-unit grey
+  shell. They are the backdrop, and §9.11.8's untraced path is what draws them.
+  Borrowing a model into mesh 10 took the sky away: the intro came back with
+  the *previous* screen showing through it and the letters drawing over
+  whatever was left in the framebuffer. Four discs were needed to find that,
+  because the file is right in every way this project can check — the other 27
+  meshes come back with 1164 of 1164 triangles and 958 of 958 swatch faces
+  identical.
+  So `scene.mesh_indices` bounds what the shot draws and nothing more. Before
+  taking a slot, look at what is in it.
 - **A mesh in the file is not a mesh on screen.** A level draws what its
   placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
   counts 160-byte records and `+0x20` points at them, each record naming an
