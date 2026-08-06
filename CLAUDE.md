@@ -406,6 +406,19 @@ They are not style preferences.
   zeros, so the pose it carried was dropped — three of that model's twelve
   clips came back playing something else while every static check passed. This
   is what "the animation plays partially and broken" was.
+- **Coverage measures nothing about exclusivity, and here is the measurement
+  that proves it useless.** Over the whole archive, **378 of 378 models** have
+  no *interior* gap in either shared table: every entry up to the last one any
+  mesh reads is read by some mesh, and what is unreached is a trailing run. That
+  looks like a licence to renumber and is not one — an outside consumer's index
+  lands inside a fully covered range too, which is exactly how the menu came
+  back drawing flat bands of the wrong colour. The seven §8.6 carriers are known
+  to have such a consumer (their door sub-blocks) and they show no interior gap
+  either, which settles it: this test cannot see one.
+  What follows is not "rebuild the tables" but **"never renumber them"** — and
+  that costs nothing, because a writer that owns the layout can grow a table in
+  place. Pinning, snapping and stranding are consequences of *patching*, not of
+  the table's content.
 - **Never reorder or drop the shipped colour table — grow it only at the end.**
   Rebuilding it from the meshes' own triples looked safe: `mainmenu/models`
   carries 5216 entries and its 22 meshes reach all 5216. That measurement does
