@@ -1289,10 +1289,25 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     # Every mesh's colours at once, so the chain can share across meshes as well
     # as inside one. Doing it per face in face order left `mainmenu/models`
     # wanting 8370 entries against the 8192 a 13-bit index can address.
+    # §8.6's door previews are meshes of this model reading these same tables,
+    # so their triples join the same packing pass. Left to chain on afterwards
+    # they cost `warp_room1` 4252 bytes more than it has below its block.
+    previews = ([] if pin_tables else
+                preview_runs(dest_data, dest_data[dest_colour:dest_uv],
+                             dest_data[dest_uv:dest_uv + dest_uv_len]))
     if not pin_tables:
-        packed = _pack_appends([t for row in wanted.values() for t in row],
+        packed = _pack_appends([t for row in wanted.values() for t in row]
+                               + [triple for triple, _ in previews],
                                colours, triples, COLOUR_ENTRY_SIZE)
         triples.update(packed)
+        for _, run in previews:
+            if run not in uv_runs:
+                at = _append_run(uvs, run, UV_ENTRY_SIZE)
+                uv_runs[run] = at
+                start = max(0, (at - 2) * UV_ENTRY_SIZE)
+                for k in range(start, len(uvs) - 2 * UV_ENTRY_SIZE, UV_ENTRY_SIZE):
+                    uv_runs.setdefault(bytes(uvs[k:k + 3 * UV_ENTRY_SIZE]),
+                                       k // UV_ENTRY_SIZE)
 
     for index, row in wanted.items():
         indices = []
@@ -1331,9 +1346,20 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
                "onto the end"))
 
     if not pin_tables:
+        # §8.6's door previews are meshes of this model and read these same
+        # tables, so they are renumbered onto them before anything is written.
+        preview = _remap_previews(
+            dest_data, colours, uvs, triples, uv_runs,
+            dest_data[dest_colour:dest_uv],
+            dest_data[dest_uv:dest_uv + dest_uv_len])
+        if preview is not None and notes is not None:
+            notes.append(
+                f"{len(preview_meshes(dest_data))} §8.6 door-preview meshes "
+                f"renumbered onto the rebuilt tables; they index them like any "
+                f"other mesh and are read when a door is opened")
         relaid = _install_relaid(dest_data, dest, prepared, per_mesh,
                                  bytes(colours), bytes(uvs), notes,
-                                 relayout_carrier)
+                                 relayout_carrier, preview)
         if relaid is not None:
             return relaid
 
@@ -1411,6 +1437,116 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
     return bytes(out)
 
 
+def preview_meshes(data: bytes) -> list[int]:
+    """Header offsets of the §8.6 door-preview sub-blocks, if this is a carrier.
+
+    They are meshes of this model -- the signature §8.6 records is a mesh
+    header field for field: 0x34 bytes, `i32@+0x00 == 0`, `i32@+0x04 == 0`,
+    `u16@+0x0A == 4`, `i32@+0x14 == 32` (the strip list immediately after the
+    header), four ascending block offsets. They sit on 2048-byte boundaries
+    inside the block, and they index the model's own colour and UV tables to
+    the last triple: `warp_room1`'s five are 1156 triangles reaching colour
+    4513 of 4516 and UV 2767 of 2770.
+    """
+    if not struct.unpack_from("<i", data, 0x38)[0]:
+        return []
+    at = _resolve(data, PTR_CLIP_TABLE)
+    found = []
+    while at + MESH_HEADER_SIZE <= len(data):
+        zero_a, zero_b = struct.unpack_from("<2i", data, at)
+        fmt = struct.unpack_from("<H", data, at + FIELD_FORMAT)[0]
+        strips = struct.unpack_from("<i", data, at + FIELD_STRIPS)[0]
+        if zero_a == 0 and zero_b == 0 and fmt == 4 and strips == 32:
+            found.append(at)
+        at += SECTOR
+    return found
+
+
+def preview_runs(data: bytes, old_colours: bytes,
+                 old_uvs: bytes) -> list[tuple[bytes, bytes]]:
+    """The colour triple and UV run every §8.6 preview triangle names.
+
+    Gathered before the table is packed so these deduplicate against the
+    model's own faces rather than chaining onto the end of them: appended
+    afterwards, `warp_room1` wanted 4252 bytes more than it has below the
+    block, and the door images are pictures of the very rooms whose colours
+    are already there.
+    """
+    out: list[tuple[bytes, bytes]] = []
+    for head in preview_meshes(data):
+        faces = struct.unpack_from("<h", data, head + FIELD_FACE_COUNT)[0]
+        uv_at = head + FIELD_UV_INDEX + struct.unpack_from(
+            "<i", data, head + FIELD_UV_INDEX)[0]
+        colour_at = head + FIELD_COLOUR_INDEX + struct.unpack_from(
+            "<i", data, head + FIELD_COLOUR_INDEX)[0]
+        if not 0 < faces < 4096:
+            return []
+        for face in range(faces):
+            index = (struct.unpack_from("<H", data, colour_at + 2 * face)[0]
+                     & COLOUR_INDEX_MASK)
+            triple = old_colours[index * COLOUR_ENTRY_SIZE:
+                                 (index + 3) * COLOUR_ENTRY_SIZE]
+            index = struct.unpack_from("<H", data, uv_at + 2 * face)[0]
+            run = old_uvs[index * UV_ENTRY_SIZE:(index + 3) * UV_ENTRY_SIZE]
+            if len(triple) < 3 * COLOUR_ENTRY_SIZE or len(run) < 3 * UV_ENTRY_SIZE:
+                return []
+            out.append((triple, run))
+    return out
+
+
+def _remap_previews(dest_data: bytes, colours: bytearray, uvs: bytearray,
+                    triples: dict, uv_runs: dict,
+                    old_colours: bytes, old_uvs: bytes) -> tuple[int, bytes] | None:
+    """Renumber the §8.6 preview meshes onto the table being written.
+
+    They read the shared tables like any other mesh, so a table that renumbers
+    under them repaints every triangle they draw -- and because they are
+    streamed in when a door is opened, that is exactly when it shows: the room
+    is perfect until the preview, and then every textured surface in the level
+    is garbage. Two discs said so, and a third ruled memory out.
+    """
+    heads = preview_meshes(dest_data)
+    if not heads:
+        return None
+    block = _resolve(dest_data, PTR_CLIP_TABLE)
+    out = bytearray(dest_data[block:])
+    for head in heads:
+        faces = struct.unpack_from("<h", dest_data, head + FIELD_FACE_COUNT)[0]
+        uv_at = head + FIELD_UV_INDEX + struct.unpack_from(
+            "<i", dest_data, head + FIELD_UV_INDEX)[0]
+        colour_at = head + FIELD_COLOUR_INDEX + struct.unpack_from(
+            "<i", dest_data, head + FIELD_COLOUR_INDEX)[0]
+        if not 0 < faces < 4096:
+            return None
+        for face in range(faces):
+            at = colour_at + 2 * face
+            value = struct.unpack_from("<H", dest_data, at)[0]
+            index, blend = value & COLOUR_INDEX_MASK, value & ~COLOUR_INDEX_MASK
+            triple = old_colours[index * COLOUR_ENTRY_SIZE:
+                                 (index + 3) * COLOUR_ENTRY_SIZE]
+            if len(triple) < 3 * COLOUR_ENTRY_SIZE:
+                return None
+            found = triples.get(triple)
+            if found is None:
+                found = _append_run(colours, triple, COLOUR_ENTRY_SIZE)
+                triples[triple] = found
+            if found + 3 > MAX_COLOURS:
+                return None
+            struct.pack_into("<H", out, at - block, (found | blend) & 0xFFFF)
+
+            at = uv_at + 2 * face
+            index = struct.unpack_from("<H", dest_data, at)[0]
+            run = old_uvs[index * UV_ENTRY_SIZE:(index + 3) * UV_ENTRY_SIZE]
+            if len(run) < 3 * UV_ENTRY_SIZE:
+                return None
+            found = uv_runs.get(run)
+            if found is None:
+                found = _append_run(uvs, run, UV_ENTRY_SIZE)
+                uv_runs[run] = found
+            struct.pack_into("<H", out, at - block, found & 0xFFFF)
+    return block, bytes(out)
+
+
 def _aim_object(out: bytearray, dest: Model, dest_data: bytes, target: Mesh,
                 header: int, carried) -> bool:
     """Point the object record that names this pool mesh at its new header.
@@ -1435,7 +1571,8 @@ def _aim_object(out: bytearray, dest: Model, dest_data: bytes, target: Mesh,
 def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
                     per_mesh: dict, colours: bytes, uvs: bytes,
                     notes: list[str] | None,
-                    relayout_carrier: bool = False) -> bytes | None:
+                    relayout_carrier: bool = False,
+                    preview: tuple[int, bytes] | None = None) -> bytes | None:
     """Install by laying the model out again, rather than by appending to it.
 
     Everything above this function decides *what* each mesh and each table
@@ -1459,7 +1596,8 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
     neighbour's and so has no identity to replace -- and the caller falls back
     to the path that was there before.
     """
-    if struct.unpack_from("<i", dest_data, 0x38)[0] and not relayout_carrier:
+    if (struct.unpack_from("<i", dest_data, 0x38)[0]
+            and preview is None and not relayout_carrier):
         # A §8.6 carrier. Its door-preview block *can* move now -- `relayout`
         # lands it on the sector grid and moves §8.1's descriptor rows with it,
         # 14 of 14 measured -- but what that costs on hardware is unproven, and
@@ -1469,6 +1607,8 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
 
     dest_colour, dest_uv, _ = MOW.table_bounds(dest_data)
     replace_map: dict[int, bytes] = {dest_colour: colours, dest_uv: uvs}
+    if preview is not None:
+        replace_map[preview[0]] = preview[1]
     pooled = {id(o.mesh) for o in dest.objects if o.mesh is not None}
     regions = MOW.plan(dest_data, dest)
     inner: dict[int, tuple[int, list[int], int, int]] = {}
