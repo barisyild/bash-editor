@@ -1195,18 +1195,11 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
     # bytes the edit cost, against 4 bytes for the same edit with the tables
     # pinned. Say the number rather than let it be found on the disc.
     if staged and not pin_tables and len(report.model) > len(shipped_model):
-        _, uv_at, uv_length = MW._table_bounds(shipped_model, model)
-        colour_at, _, _ = MW._table_bounds(shipped_model, model)
-        stranded = (uv_at - colour_at) + uv_length
         grew = len(report.model) - len(shipped_model)
-        if stranded > grew // 2:
-            report.warnings.append(
-                f"the rebuild grew the model by {grew} bytes, of which "
-                f"{stranded} are the shipped colour and UV tables left where "
-                f"they lie -- this model has an object pool, so the region "
-                f"cannot be reclaimed. Pinning the tables instead costs "
-                f"nothing, at the price of colours mapped to entries the model "
-                f"already has and UVs it already holds")
+        report.warnings.append(
+            f"the rebuild grew the model by {grew} bytes; nothing is stranded "
+            f"-- the layout is laid down again region by region, so a table "
+            f"that grew is longer where it already stood")
 
     # And say what the edit spent, so a budget that is nearly gone is read
     # before the next edit rather than after it.

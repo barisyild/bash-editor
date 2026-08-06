@@ -200,7 +200,8 @@ def plan(data: bytes, model: Model) -> list[tuple[int, int]]:
 
 def relayout(data: bytes, model: Model | None = None,
              replace: dict[int, bytes] | None = None,
-             landed: dict[int, int] | None = None) -> bytes:
+             landed: dict[int, int] | None = None,
+             move_block: bool = False) -> bytes:
     """Re-emit a model with every region in place and every pointer recomputed.
 
     With no `replace`, each region's bytes are copied verbatim and what is
@@ -237,7 +238,12 @@ def relayout(data: bytes, model: Model | None = None,
     # The slack goes *before* the region that runs up to the block, never
     # between them: §8.5's `+0x14` block ends exactly at `T(0x44)` in 73 of 73
     # levels, and padding into that gap instead crashed the room outright.
-    abuts = next((s for s, e in regions if e == carrier), None) if carrier else None
+    # `move_block` lets it slide instead, on the sector grid, with §8.1's rows
+    # following. That is only safe once the preview meshes inside it have been
+    # renumbered onto the table being written -- which is the caller's job, and
+    # why this is not the default.
+    abuts = (next((s for s, e in regions if e == carrier), None)
+             if carrier and not move_block else None)
 
     for start, end in regions:
         if start == abuts:

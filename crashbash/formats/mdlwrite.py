@@ -1253,6 +1253,22 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
         uv_runs.setdefault(bytes(uvs[at : at + 3 * UV_ENTRY_SIZE]),
                            at // UV_ENTRY_SIZE)
 
+    # The UV table gets the same batch packing the colour table gets, and for
+    # the same reason: an index names three *consecutive* entries, so chaining
+    # a triple onto one that already ends with its first two costs one entry
+    # instead of three. Appending face by face and only then backfilling took
+    # `warp_room1`'s rebuilt table 674 bytes past what shipped, where the
+    # colour table -- which has always been packed this way -- lands within 120.
+    if not pin_tables:
+        batch: list[bytes] = []
+        for index, (target, blocks) in prepared.items():
+            if not blocks["textured"]:
+                continue
+            source = blocks["uvs"]
+            batch += [bytes(source[f * 6:f * 6 + 6])
+                      for f in range(blocks["faces"])]
+        uv_runs.update(_pack_appends(batch, uvs, uv_runs, UV_ENTRY_SIZE))
+
     per_mesh = {}
     wanted: dict[int, list[bytes]] = {}
     for index, (target, blocks) in prepared.items():
@@ -1724,7 +1740,8 @@ def _install_relaid(dest_data: bytes, dest: Model, prepared: dict,
         replace_map[region] = bytes(blob)
 
     landed: dict[int, int] = {}
-    out = bytearray(MOW.relayout(dest_data, dest, replace_map, landed))
+    out = bytearray(MOW.relayout(dest_data, dest, replace_map, landed,
+                                 move_block=preview is not None))
     if any(start not in landed for start, _, _, _, _ in inner.values()):
         return None
 
