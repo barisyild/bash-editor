@@ -264,6 +264,20 @@ They are not style preferences.
   is a size lever, not only a legality one. The same 648-triangle mesh went 495
   strips → 1638 pool → 747,672 bytes, and 161 strips → 970 pool: of the 532 KB
   that first build added, **516 KB was animation**.
+- **The pool span is the wall a level edit actually hits, and the striper is
+  most of it.** 494 of the 820 pool meshes across the 73 levels could not be
+  rebuilt at all — the rebuild wanted more bytes than the mesh owns, by a median
+  of only **1.093×**. The cause is measurable: against the shipped data this
+  writer got **4.56 triangles a strip where the game gets 5.57**, and a strip of
+  n triangles costs n + 2 pool entries, so strips are bytes. Seeding and
+  continuing **least-connected first** — the standard tristrip heuristic, and
+  the one thing this was missing — takes it to **5.16 a strip**, the pool from
+  1.058× the shipped size to **1.021×**, and the meshes that fit from 326 to
+  **393 of 820**. What it costs is that a full-corpus rebuild now pushes two
+  models past the 8192-entry colour limit by 52 and 56 entries: a different face
+  order deduplicates the three-consecutive overlap slightly worse. That only
+  shows in the sweep, which rebuilds every mesh of every model; a real edit
+  rebuilds one.
 - **`build_strips` is order-sensitive — chain before handing over.** It seeds a
   strip with a face's corners as they stand and continues along the edge its
   second and third corners make, taking the lowest-numbered unused face that

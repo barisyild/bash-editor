@@ -287,6 +287,24 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
                     return (a, b, next(i for i in range(3) if i not in (a, b)))
         raise ValueError(f"face {face} does not carry the edge it was chosen for")
 
+    # How many faces each one can still chain to. Strips are grown from the
+    # least-connected face and continued into the least-connected follower,
+    # which is the standard tristrip heuristic and the one thing this writer was
+    # missing: taking the lowest-numbered follower instead strands the corners
+    # of a surface, and a stranded face is a strip of one costing three pool
+    # entries for one triangle.
+    neighbours: list[set[int]] = [set() for _ in range(faces)]
+    for holders in directed.values():
+        for face in holders:
+            a, b, c = (int(v) for v in welded[face])
+            for u, v in ((b, a), (c, b), (a, c)):
+                for other in directed.get((int(keys[face]), u, v), ()):
+                    if other != face:
+                        neighbours[face].add(other)
+
+    def free_degree(face: int, used: np.ndarray, taken: set[int]) -> int:
+        return sum(1 for n in neighbours[face] if not used[n] and n not in taken)
+
     def walk(seed: int, rotation: tuple[int, int, int], used: np.ndarray
              ) -> list[tuple[int, tuple[int, int, int]]]:
         """The strip that grows from this seed presented this way round."""
@@ -301,8 +319,11 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
             # when it is odd, so the edge the next face must carry flips with it.
             wanted = tail if step % 2 == 0 else (tail[1], tail[0])
             key = (int(keys[seed]), wanted[0], wanted[1])
-            following = next((f for f in directed.get(key, ())
-                              if not used[f] and f not in taken), None)
+            candidates = [f for f in directed.get(key, ())
+                          if not used[f] and f not in taken]
+            following = (min(candidates,
+                             key=lambda f: (free_degree(f, used, taken), f))
+                         if candidates else None)
             if following is None:
                 return strip
             # Found by the directed edge, but ordered by the strip's own: the
@@ -331,12 +352,27 @@ def build_strips(positions: np.ndarray, keys: np.ndarray | None = None,
     rotations = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
     used = np.zeros(faces, dtype=bool)
     strips: list[list[tuple[int, tuple[int, int, int]]]] = []
-    for seed in range(faces):
-        if used[seed]:
-            continue
+    # Seeded least-connected first, for the same reason the follower is chosen
+    # that way: a face with one neighbour left has to be taken now or it becomes
+    # a strip of one, while a face in the middle of a sheet will still have a
+    # chain to join later. Face-index order instead left this writer at 4.56
+    # triangles a strip against the game's own 5.57.
+    #
+    # The degree has to be counted *now*, not once at the start: what makes a
+    # face urgent is how many neighbours it has left, and every strip laid down
+    # strands a few more. Sorting once by the initial degree got 4.94; asking
+    # again each round gets further.
+    remaining = np.array([len(n) for n in neighbours], dtype=np.int64)
+    for _ in range(faces):
+        free = np.flatnonzero(~used)
+        if not len(free):
+            break
+        seed = int(free[np.argmin(remaining[free])])
         best = max((walk(seed, rotation, used) for rotation in rotations), key=len)
         for face, _ in best:
             used[face] = True
+            for other in neighbours[face]:
+                remaining[other] -= 1
         strips.append(best)
     return strips
 
