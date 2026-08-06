@@ -249,11 +249,20 @@ They are not style preferences.
   pushed the DAT past its sector run, so `patch_image` moved the whole 73 MB
   file and the image went 178 MB → 262 MB.
   The same edit with `pin_tables=True` comes to **233,198 bytes — four smaller
-  than the original**, and the image stays 178 MB with nothing moved. What it
-  costs is that colours map to entries the model already has and every UV must
-  be a triple it already holds, which `pinned_uv_triples` and `snap_to_triples`
-  supply. So for a level this is usually the right setting, and the export says
-  the number when it is not used.
+  than the original**, and the image stays 178 MB with nothing moved.
+  **What that costs is the colours, and it is not small.** A pinned rebuild maps
+  each face onto an existing *triple* of consecutive entries, not onto three
+  nearest colours, and `boss_oxide/arena`'s 5562 entries do not happen to hold
+  the penguin's: measured corner by corner, worst **91 of 255** and **23 % of
+  corners off by more than 32**, which drew as a black penguin with a grey
+  chest. The same edit unpinned is **0 of 255** on all 348 corners. So pinning
+  is for an edit whose colours the model already has — a reshape, a move — and
+  a borrowed model wants the tables rewritten and the 32 KB.
+  **Compare a rebuilt mesh corner by corner, matched on position.** Face order
+  changes with re-striping and corner order changes with it, so the first two
+  readings of this said "worst 255 of 255" for *both* builds and hid which one
+  was wrong. Matching each corner by its position and taking the best colour
+  that corner carries in the source is what separated them.
 - **Install several meshes in one call, and rebuild only what was edited.**
   `install_mesh` appends the colour table, the UV table *and* the vector pool
   on every call, and each earlier copy is then unreachable. Nine meshes through
