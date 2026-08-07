@@ -74,6 +74,11 @@ class MeshPayload:
     # swatch bit while sitting in a strip flagged textured. `None` derives it
     # from the entry, which is what a source with no strips of its own gets.
     untextured: np.ndarray | None = None
+    # (T,) bool: bit 1 of the vertex flag the triangle ends on, which the draw
+    # reads as **skip the backface test** -- a double-sided face (§4.2). `None`
+    # leaves the writer to recover it by matching corner positions, like
+    # `blend`; a front end that can state it should, or a reshaped face loses it.
+    double_sided: np.ndarray | None = None
     # (V, 3) per source vertex: the per-vertex normals at mesh +0x28 (§4.3), in
     # GTE 1/4096 fixed point. 300 of the archive's 5989 meshes carry them, and
     # while no reader for the field has been found in the executable, searched
@@ -288,6 +293,7 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
     corner_vertices = np.zeros((faces, 3), dtype=np.int64)
     blend = np.zeros(faces, dtype=np.uint8)
     untextured = np.zeros(faces, dtype=bool)
+    double_sided = np.zeros(faces, dtype=bool)
     for row, (a, b, c, face) in enumerate(triangles):
         # Outward order, not strip order. Consecutive triangles in a strip wind
         # opposite ways and bit 0 of the third corner's vertex flag says which
@@ -297,6 +303,10 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
         # *culled* rather than drawn -- and nothing on a static render shows it.
         # 62 of `chars/crate/coco`'s 511 triangles arrive that way.
         flipped = bool(mesh.vertex_flags[c] & 1)
+        # Bit 1 of the same record, and the same triangle: set, the backface
+        # test is skipped altogether and the face draws from either side (§4.2).
+        # It travels with the geometry because reshaping loses it otherwise.
+        double_sided[row] = bool(mesh.vertex_flags[c] & 2)
         order = (a, c, b) if flipped else (a, b, c)
         # Corner k takes colour k and UV k -- the game writes vertex i, i+1, i+2
         # and UV 0, 1, 2 in step -- so reversing the corners reverses these too.
@@ -355,7 +365,8 @@ def payload_from_model(model_data: bytes, model: Model, pack: TexturePack | None
                    / GTE_SCALE_SMALL)[first]
     return MeshPayload(positions=positions, colours=colours, uvs=uvs,
                        textures=textures, blend=blend, normals=normals,
-                       untextured=untextured, vertices=points[first],
+                       untextured=untextured, double_sided=double_sided,
+                       vertices=points[first],
                        corner_vertices=groups[corner_vertices])
 
 
@@ -1122,6 +1133,7 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             blend=payload.blend,
             normals=payload.normals,
             untextured=payload.untextured,
+            double_sided=payload.double_sided,
         )
     # Refuse before anything is written. Each of these is something the source
     # asks for and the file cannot give, and every one of them used to be

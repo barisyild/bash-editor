@@ -29,6 +29,8 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from crashbash.archive import BashArchive  # noqa: E402
@@ -66,6 +68,31 @@ def strip_flags(payload) -> Counter:
     return Counter(bool(v) for v in payload.untextured)
 
 
+def facing_bag(payload) -> Counter:
+    """Each face, canonically, with bit 1 of the vertex flag it ends on.
+
+    Set, the draw skips the backface test altogether and the triangle is
+    double-sided (§4.2, `0x80019498`). 15,623 of the archive's pool entries
+    carry it and the writer used to drop every one: on a console that is a flat
+    card visible from the front and culled from behind -- Aku Aku's feathers --
+    and it is invisible to everything else here, because positions, colours,
+    UVs, texture entries, blend and strip flags are all still identical.
+
+    Keyed per face rather than counted, because re-striping permutes face order
+    and a bare count cannot tell a permutation from a fix.
+    """
+    bag: Counter = Counter()
+    if payload.double_sided is None:
+        return Counter({None: payload.positions.shape[0]})
+    points = np.clip(np.round(payload.positions), -32768, 32767).astype(np.int64)
+    for face in range(points.shape[0]):
+        corners = [tuple(int(v) for v in points[face, k]) for k in range(3)]
+        start = min(range(3), key=lambda k: corners[k])
+        bag[(tuple(corners[(start + k) % 3] for k in range(3)),
+             bool(payload.double_sided[face]))] += 1
+    return bag
+
+
 def swatch_bag(payload) -> Counter:
     """(palette, cell) per face that reads the swatch image -- what §6.2 paints."""
     bag: Counter = Counter()
@@ -92,7 +119,7 @@ def main() -> None:
     if args.limit:
         models = models[: args.limit]
 
-    tally: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0, 0, 0, 0, 0])
+    tally: dict[str, list[int]] = defaultdict(lambda: [0] * 10)
     failures: list[str] = []
     for entry in models:
         group = group_of(entry.name)
@@ -145,18 +172,21 @@ def main() -> None:
             wfl, gfl = strip_flags(before), strip_flags(after)
             row[6] += sum(wfl.values())
             row[7] += sum((wfl & gfl).values())
-            if want != got or wfl != gfl:
+            wfa, gfa = facing_bag(before), facing_bag(after)
+            row[8] += sum(wfa.values())
+            row[9] += sum((wfa & gfa).values())
+            if want != got or wfl != gfl or wfa != gfa:
                 row[5] += 1
 
     print(f"{'group':<10}{'files':>6}{'triangles':>11}{'same':>11}"
           f"{'swatch':>9}{'same':>9}{'strip flags':>12}{'same':>10}"
-          f"{'meshes off':>12}")
+          f"{'two-sided':>11}{'same':>9}{'meshes off':>12}")
     for group in GROUPS:
         if group not in tally:
             continue
-        files, tris, same, sw, sw_same, off, fl, fl_same = tally[group]
+        files, tris, same, sw, sw_same, off, fl, fl_same, fa, fa_same = tally[group]
         print(f"{group:<10}{files:>6}{tris:>11}{same:>11}{sw:>9}{sw_same:>9}"
-              f"{fl:>12}{fl_same:>10}{off:>12}")
+              f"{fl:>12}{fl_same:>10}{fa:>11}{fa_same:>9}{off:>12}")
 
     if failures:
         print(f"\n{len(failures)} refused or unreadable:")

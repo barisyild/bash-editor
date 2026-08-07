@@ -431,6 +431,15 @@ class NewMesh:
     # the swatch bit inside a strip flagged textured. `None` derives it from
     # the entry, which is right for a mesh that has no strips of its own yet.
     untextured: np.ndarray | None = None
+    # (T,) bool: bit 1 of the vertex flag on the corner each triangle ends at,
+    # which `0x80019498` reads as **skip the backface test** -- a double-sided
+    # triangle (§4.2). 15,623 of the archive's vertices carry it, and it is what
+    # a flat card painted on both faces needs: Aku Aku's four feathers are 12
+    # such vertices. Dropped, they draw from the front and are culled from
+    # behind, which is a fault no static comparison can see and which only shows
+    # from certain angles. `None` means "recover it from the mesh being
+    # replaced", exactly as `blend` does.
+    double_sided: np.ndarray | None = None
 
 
 def _attachment_bytes(data: bytes, mesh: Mesh) -> bytes:
@@ -503,6 +512,46 @@ def _restore_swatches(target: Mesh, mesh: "NewMesh") -> "NewMesh":
         if was is not None and was & TEXTURE_FLAG_SWATCH:
             textures[face] = -(was & 0xFFFF)   # negative marks "verbatim entry"
     return replace(mesh, textures=textures)
+
+
+def _restore_double_sided(target: Mesh, mesh: "NewMesh") -> "NewMesh":
+    """Give each incoming face the backface-test bit the triangle it replaces had.
+
+    Bit 1 of a vertex flag says the triangle ending there is drawn with no
+    backface test (§4.2), and like `blend` it is a fact no interchange format
+    carries, so a front end that cannot state it gets it back by matching corner
+    positions -- exact wherever the triangle still exists, single-sided for
+    anything new or reshaped.
+
+    Without this every double-sided surface came back one-sided. It cannot be
+    seen in a comparison of positions, colours, UVs, texture entries, blend or
+    strip flags -- `intro_logo` matched on all six for 2993 of 2993 faces -- and
+    on a console it shows only from the angle that culls the face: Aku Aku's
+    feathers, present from the front, gone from behind.
+    """
+    if mesh.double_sided is not None or not target.vertex_flags:
+        return mesh
+    if not target.positions:
+        return mesh
+    scale = 1.0 / 0.00390625  # 1 / GTE_SCALE_SMALL, back to raw int16
+    original = np.round(np.asarray(target.positions, dtype=np.float64) * scale)
+    flags = target.vertex_flags
+    by_key: dict[tuple, bool] = {}
+    for a, b, c, _ in target.indexed_triangles():
+        if max(a, b, c) >= len(original) or c >= len(flags):
+            continue
+        key = tuple(sorted(tuple(int(v) for v in original[i]) for i in (a, b, c)))
+        # The triangle's own record is the one it *ends* at, which is `c`.
+        by_key.setdefault(key, bool(int(flags[c]) & 2))
+
+    if not any(by_key.values()):
+        return mesh
+    both = np.zeros(mesh.positions.shape[0], dtype=bool)
+    for face in range(both.shape[0]):
+        key = tuple(sorted(tuple(int(v) for v in corner)
+                           for corner in mesh.positions[face]))
+        both[face] = by_key.get(key, False)
+    return replace(mesh, double_sided=both)
 
 
 def _restore_blend(target: Mesh, mesh: "NewMesh") -> "NewMesh":
@@ -699,6 +748,23 @@ def build_blocks(mesh: NewMesh) -> dict:
     for run in runs:
         winding += [0 if k < 2 else k % 2 for k in range(len(run) + 2)]
     vertices[:, 3] = np.array(winding[: points.shape[0]], dtype="<i2")
+    # Bit 1 rides on the same record and belongs to the same triangle: set, the
+    # GTE's backface test is skipped entirely (§4.2, `0x80019498`), which is how
+    # a flat card is painted on both faces. `order` names the face each pool
+    # entry ends, so the flag simply follows it. Dropping this drew Aku Aku's
+    # feathers from the front and culled them from behind -- and every static
+    # measure of that model, this project's included, said it was identical.
+    if mesh.double_sided is not None:
+        both = np.asarray(mesh.double_sided, dtype=bool)
+        # Laid out exactly as the winding is: a run's first two entries end no
+        # triangle, and entry k after them ends face k of the run. Marking the
+        # seed's other two as well is harmless -- they are never read as a third
+        # corner -- but it is not what the file says, and 150 shipped entries
+        # came back as 246.
+        flag: list[int] = []
+        for run in runs:
+            flag += [0, 0] + [2 if both[face] else 0 for face, _ in run]
+        vertices[:, 3] |= np.array(flag[: points.shape[0]], dtype="<i2")
     # int64 throughout: squaring an int16 span overflows well before a model does.
     low = points.min(axis=0).astype(np.int64)
     high = points.max(axis=0).astype(np.int64)
@@ -951,6 +1017,7 @@ def install_mesh(dest_data: bytes, dest_index: int, mesh: NewMesh,
     if not mesh.swatch:
         mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
     mesh = _restore_swatches(target, mesh)
+    mesh = _restore_double_sided(target, mesh)
     blocks = build_blocks(mesh)
     faces = blocks["faces"]
 
@@ -1249,6 +1316,7 @@ def install_meshes(dest_data: bytes, meshes: dict[int, "NewMesh"],
             mesh = replace(mesh, swatch=_swatch_entry(dest_data, target))
         mesh = _restore_swatches(target, mesh)
         mesh = _restore_blend(target, mesh)
+        mesh = _restore_double_sided(target, mesh)
         blocks = build_blocks(mesh)
         if plans is not None:
             plans[index] = blocks["order"]

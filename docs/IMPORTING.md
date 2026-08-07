@@ -441,9 +441,24 @@ against the shipped one:
 | bounds, to within a unit (§4.1) | 5827 | 5825 |
 | per-vertex normals (§4.3) | 300 | 300 |
 | semi-transparency, colour index bits 13–15 (§6.3) | 1949 | 1948 |
+| two-sidedness, vertex flag bit 1 (§4.2) | 15,623 entries | 15,623 |
 | attachment block (§8.4) | 776 | 776 |
 
-Two of those were losses until this was measured. The **blend mode** is the
+**Two-sidedness was the last of these to be found, and it took a console.** Bit 1
+of the vertex flag a triangle ends on tells the draw to skip the backface test
+altogether — `0x80019498` branches on it before NCLIP is run — which is what a
+flat card painted on both faces needs. The writer emitted only bit 0, so every
+one of the archive's 15,623 such entries came back one-sided: visible from the
+front, culled from behind. Aku Aku's four feathers in `intro_logo` are 12 of
+them, and they vanished off a build that matched the shipped model on positions,
+colours, UVs, texture entries, blend *and* strip flags for 2993 of 2993 faces.
+Nothing in a payload carried the bit, so nothing could compare it; and a preview
+agrees with the broken file, because Blender culls a one-sided face exactly as
+the console does. `NewMesh.double_sided` states it per face and
+`_restore_double_sided` recovers it by corner position, exactly as the blend
+mode is handled. `tools/native_roundtrip.py` measures it per face now.
+
+Two others were losses until they were measured. The **blend mode** is the
 serious one: 42,969 of the archive's 363,251 triangles carry it, and a rebuild
 that wrote only the table index drew every one of them opaque — no comparison of
 positions or colours notices, and the round trip scored full marks throughout.

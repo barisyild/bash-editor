@@ -427,6 +427,19 @@ They are not style preferences.
   triangles inside out, and the console *culls* those rather than drawing them.
   A comparison over sorted corners cannot see it — that is reflection-blind and
   scored 45,300/45,300 while it was happening.
+- **A triangle's two-sidedness is bit 1 of the vertex flag it ends on, and the
+  writer used to drop it.** `0x80019498` tests it before NCLIP is run: set, the
+  backface test is skipped altogether (§4.2), which is what a flat card painted
+  on both faces needs. 15,623 of the archive's pool entries carry it, and a
+  rebuild that emits only bit 0 turns every one of them one-sided — visible from
+  the front, culled from behind. Aku Aku's four feathers in `intro_logo` are 12
+  such entries, and they vanished off a build that matched the shipped model on
+  positions, colours, UVs, texture entries, blend and strip flags for 2993 of
+  2993 faces. `NewMesh.double_sided` states it per face; `None` means
+  `_restore_double_sided` recovers it by corner position, which is what a front
+  end with nowhere to put it needs. Lay it out as the winding is laid out — a
+  run's first two entries end no triangle, and marking them too came back with
+  246 entries where the file has 150.
 - **A triangle's semi-transparency is in the colour index, not the colour.**
   Bits 13–15 of the `u16` are the GPU's blend: bit 15 turns it on and 13–14
   pick the ABR mode (§6.3), and 42,969 of the archive's 363,251 triangles carry
@@ -1045,17 +1058,27 @@ no static render can show draw-time flags. For those the emulator is the only
 honest renderer, and the user runs it — so state plainly what has and has not
 been checked on screen.
 
-**Something that disappears from one angle is single-sided geometry, and the
-shipped model answers it in a minute.** `intro_logo`'s Aku Aku came back off the
-console with no feathers and a black slab where his mask is, on a build whose
-every measure was clean; the tell was the user noticing it only happened from
-certain perspectives. Imported straight from the archive and viewed in Blender
-with **backface culling on** — which is what the console does — the shipped mesh
-shows four feathers from the front and exactly that black slab from the back.
-The feathers are flat cards with one face each. Nothing was wrong. Check this
-before suspecting the writer: a rebuild that matches on position, UVs, texture
-entry, blend and strip flag under §11.3's reversal-sensitive key cannot have
-changed what a face is facing.
+**Something that disappears from one angle is a facing fact, and the vertex
+flag's bit 1 is the one nothing here was measuring.** `intro_logo`'s Aku Aku
+came back off the console with no feathers, on a build where positions, colours,
+UVs, texture entries, blend and strip flags all matched the shipped model for
+**2993 of 2993 faces** under §11.3's reversal-sensitive key — and the pack, the
+headers and the clip matched too. Bit 1 of the vertex flag the triangle ends on
+means **skip the backface test**: `0x80019498` branches on it before NCLIP is
+even run (§4.2). The writer emitted only bit 0, so every double-sided face in
+the archive came back one-sided — 15,623 pool entries — and a flat card painted
+on both faces draws from the front and is culled from behind. That is the whole
+of the feathers.
+Two things made it survive this long. It is invisible to every static
+comparison, because nothing in a payload carried it; and a preview *agrees* with
+the broken file, since Blender culls a one-sided face exactly as the console
+does, so looking at the shipped mesh with backface culling on shows the same
+black slab and reads as "that is just how it is". What settled it was the user
+saying it only happened from certain perspectives, which is a sentence about
+draw-time state and therefore about a flag.
+`native_roundtrip` now carries a **two-sided** column, keyed per face rather
+than counted — a bare count cannot tell a permutation from a fix — and the whole
+corpus reproduces it: 350,876 of 350,876.
 
 **A cutscene takes something that was not in it.**
 `out/crashbash-eurocom-addprop.bin` runs: `intro_eurocom` with a **29th mesh**
