@@ -35,6 +35,7 @@ import numpy as np
 from ..binreader import GTE_SCALE_SMALL
 from . import animwrite as AW
 from . import mdlwrite as MW
+from . import modelwrite as MOW
 from . import placewrite as PW
 from . import scenewrite as SW
 from . import texwrite as TW
@@ -146,6 +147,11 @@ class ImportRequest:
     # shot draws 26. Each index here gets a prop node copied from one the file
     # already has, which is what makes a model *added* rather than swapped in.
     new_props: list[int] = field(default_factory=list)
+    # Meshes the model does not have yet. A cutscene has no spare slot to
+    # borrow into -- `intro_eurocom` looks like it has two and both are its
+    # backdrop -- so adding a model means adding a slot, not taking one. Each
+    # payload here gets a slot of its own and a prop node to draw it.
+    new_meshes: list["MeshPayload"] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     # Reasons to refuse. Collected rather than raised one at a time so an
     # artist sees every problem in the file at once.
@@ -945,6 +951,27 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         if report.placements_written:
             model = read_model(model_data)
             clips = read_animations(model_data, model)
+
+    for payload in request.new_meshes:
+        # The slot first, then the geometry into it, then the node that draws
+        # it. Each step is one this module already does; what was missing was
+        # a slot to aim them at.
+        # The node first, then the slot: `append_mesh` puts the new blocks at
+        # the end of the file, so anything appended after them would be cut off
+        # from the region that carries the shot when the blocks claim one of
+        # their own.
+        index = len(model.meshes)
+        model_data = SW.append_prop(model_data, model, clips, index)
+        model = read_model(model_data)
+        clips = read_animations(model_data, model)
+        model_data = MOW.append_mesh(model_data, model)
+        model = read_model(model_data)
+        clips = read_animations(model_data, model)
+        request.meshes[index] = payload
+        report.warnings.append(
+            f"mesh {index} is new: the model now has {len(model.meshes)} where "
+            f"it shipped {len(model.meshes) - 1}, copied from mesh 0 and then "
+            f"filled")
 
     for mesh_index in request.new_props:
         # Before the geometry, because this grows the shot's own region and

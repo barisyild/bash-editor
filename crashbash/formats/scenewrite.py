@@ -457,7 +457,10 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
         raise ValueError("this model has no shot with a prop to copy")
     if not 0 <= template < len(scene.props):
         raise ValueError(f"prop {template} is not one of the {len(scene.props)}")
-    if not 0 <= mesh_index < len(model.meshes):
+    # `len(model.meshes)` is allowed: a slot about to be added by `append_mesh`
+    # is named here first, so the node lands in front of the new mesh's blocks
+    # and the region that carries the shot stays one piece.
+    if not 0 <= mesh_index <= len(model.meshes):
         raise ValueError(f"mesh {mesh_index} is not one this model holds")
 
     root = SC._root_offset(model_data, root_index)

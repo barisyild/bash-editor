@@ -136,18 +136,27 @@ def plan(data: bytes, model: Model) -> list[tuple[int, int]]:
     tail = min((resolve(field) for field in (0x1C, 0x18, 0x3C, 0x44)
                 if 0 < resolve(field) <= len(data)), default=len(data))
     tail = max(tail, resolve(0x08))
+    # A mesh whose blocks were appended past everything else -- which is what
+    # `append_mesh` does, since a new slot has nowhere else to go -- would
+    # otherwise be swallowed by this run and lose the region of its own that
+    # `install_meshes` needs to fill it.
+    beyond = [min(mesh.ptr_bounds, mesh.ptr_strips, mesh.ptr_uv_index,
+                  mesh.ptr_texture, mesh.ptr_colour_index)
+              for mesh in model.meshes]
+    after = [low for low in beyond if tail < low < len(data)]
+    tail_end = min(after) if after else len(data)
     # A §8.6 carrier's door-preview block is streamed from disc a sub-block at
     # a time through §8.1's descriptor rows, which state plain file offsets, so
     # it is emitted as a region of its own: it has to stay sector-aligned and
     # its rows have to move with it. Splitting it out is what lets a carrier be
     # laid out at all instead of pinned.
     block = resolve(0x44) if struct.unpack_from("<i", data, 0x38)[0] else 0
-    if tail < len(data):
-        if 0 < tail < block < len(data):
+    if tail < tail_end:
+        if 0 < tail < block < tail_end:
             spans.append((tail, block))
-            spans.append((block, len(data)))
+            spans.append((block, tail_end))
         else:
-            spans.append((tail, len(data)))
+            spans.append((tail, tail_end))
 
     # Whatever the pool holds between its meshes is emitted as regions of its
     # own rather than left to alignment. §8.3's run puts the next header exactly
@@ -374,3 +383,78 @@ def _repoint_objects(data: bytes, out: bytearray, model: Model, moved) -> None:
             continue
         struct.pack_into("<i", out, at + OBJECT_STRIDE * index + 4,
                          moved(obj.offset))
+
+
+MESH_COUNT = 0x54
+
+
+def append_mesh(data: bytes, model: Model | None = None,
+                template: int = 0) -> bytes:
+    """Add a mesh slot to the model, copied from one it already has.
+
+    A cutscene has no spare slots to borrow into -- `intro_eurocom` looks like
+    it has two and both are its backdrop -- so putting a model *into* one takes
+    something away. This adds a slot instead.
+
+    The header table at 0x58 grows like any other region, which is the whole of
+    why this is possible now: everything after it simply lands further on and
+    every pointer is recomputed. The new mesh's blocks are copied from
+    `template` so the slot is valid the moment it exists, and `install_meshes`
+    fills it with real geometry afterwards.
+    """
+    model = model or read_model(data)
+    if not model.meshes:
+        raise ValueError("this model has no mesh to copy a slot from")
+    if not 0 <= template < len(model.meshes):
+        raise ValueError(f"mesh {template} is not one of the "
+                         f"{len(model.meshes)} this model holds")
+    source = model.meshes[template]
+    low = min(source.ptr_bounds, source.ptr_strips, source.ptr_uv_index,
+              source.ptr_texture, source.ptr_colour_index)
+    blocks = data[low:source.ptr_end]
+
+    regions = plan(data, model)
+    headers = MESH_HEADER_START
+    table = next((r for r in regions if r[0] == headers), None)
+    tail = max(regions, key=lambda r: r[0])
+    if table is None or tail[0] <= headers:
+        raise ValueError("this model's header table is not a region of its own")
+
+    grown = bytearray(data[table[0]:table[1]])
+    grown.extend(b"\x00" * MESH_HEADER_SIZE)
+    extended = bytearray(data[tail[0]:tail[1]])
+    if len(extended) % 4:
+        extended.extend(b"\x00" * (4 - len(extended) % 4))
+    at_in_tail = len(extended)
+    extended.extend(blocks)
+
+    landed: dict[int, int] = {}
+    out = bytearray(relayout(data, model,
+                             {table[0]: bytes(grown), tail[0]: bytes(extended)},
+                             landed))
+    struct.pack_into("<i", out, MESH_COUNT, len(model.meshes) + 1)
+
+    # The new header, written where the grown table now sits and aimed at the
+    # blocks where the extended tail now holds them.
+    header = landed[headers] + MESH_HEADER_SIZE * len(model.meshes)
+    base = landed[tail[0]] + at_in_tail
+    struct.pack_into("<2h", out, header + 0x08,
+                     source.face_count_header, source.format)
+    struct.pack_into("<2h", out, header + 0x0C, source.unk13, source.unk14)
+    for field, was in ((0x10, source.ptr_bounds), (0x14, source.ptr_strips),
+                       (0x18, source.ptr_uv_index), (0x1C, source.ptr_texture),
+                       (0x20, source.ptr_colour_index), (0x24, source.ptr_end)):
+        at = header + field
+        struct.pack_into("<i", out, at, base + (was - low) - at)
+
+    # The slot has to be inside the image the game loads, and for a model with
+    # no clips `i32@0x50` and `T(0x44)` state that end together (§2.1).
+    clips_at = 0x44 + struct.unpack_from("<i", out, 0x44)[0]
+    resident = struct.unpack_from("<i", out, RESIDENT_SIZE)[0]
+    if clips_at == resident == len(out):
+        return bytes(out)
+    if resident < len(out):
+        struct.pack_into("<i", out, RESIDENT_SIZE, len(out))
+        if clips_at == resident:
+            struct.pack_into("<i", out, 0x44, len(out) - 0x44)
+    return bytes(out)
