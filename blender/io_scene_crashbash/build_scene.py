@@ -86,6 +86,38 @@ def placement_record(matrix) -> tuple[tuple[float, ...], tuple[float, float, flo
     return tuple(float(v) for v in rot.reshape(-1)), tuple(float(v) for v in at)
 
 
+def track_key(matrix) -> dict:
+    """A Blender 4x4 as a track key's position, quaternion and scale.
+
+    The mirror of `_orientation` and of how a key is read: through the same
+    basis change `placement_record` uses, then split into a rotation and the
+    three scale factors it was carrying. The quaternion goes out **x, y, z, w**,
+    which is the file's order (§9.11) and not Blender's.
+
+    This is what places a prop. Nothing else does -- a node's keys are read
+    every tick and the geometry is drawn in whatever frame they name -- so an
+    added mesh states its transform here rather than in its vertices, where the
+    node's own would be applied on top of it.
+    """
+    from mathutils import Matrix  # noqa: PLC0415
+
+    rotation, position = placement_record(matrix)
+    columns = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    # Column norms are the scale; what is left is the rotation alone. A column
+    # of zero length is a flattened axis, and normalising it would divide by
+    # zero -- keep the axis and let the scale say it is flat.
+    scale = np.linalg.norm(columns, axis=0)
+    turn = columns / np.where(scale > 1e-9, scale, 1.0)
+    quaternion = Matrix([[float(v) for v in row]
+                         for row in turn]).to_quaternion()
+    return {
+        "position": [float(v) for v in position],
+        "rotation": [float(quaternion.x), float(quaternion.y),
+                     float(quaternion.z), float(quaternion.w)],
+        "scale": [float(v) for v in scale],
+    }
+
+
 # --- images and materials -------------------------------------------------
 
 

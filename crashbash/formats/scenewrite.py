@@ -461,7 +461,8 @@ def prop_span(model_data: bytes, node: int) -> int:
 
 
 def append_prop(model_data: bytes, model, clips, mesh_index: int,
-                template: int = 0, root_index: int = 0) -> bytes:
+                template: int = 0, root_index: int = 0,
+                placement: dict | None = None) -> bytes:
     """Add a prop node that draws `mesh_index`, copied from an existing one.
 
     A cutscene draws through §9.11's nodes, so putting geometry in a mesh slot
@@ -471,8 +472,20 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
 
     The record is copied from a prop the file already has rather than authored,
     for the same reason `placewrite.spare_records` copies one: the shape is the
-    file's to state. Only the mesh id changes; the keys come across as they are
-    and the artist moves them afterwards.
+    file's to state. What travels unchanged is the *timing* -- each key's tick
+    and duration -- because that is the shape being borrowed.
+
+    **`placement` is what stops it being a copy of where the template stands.**
+    Without it the newcomer inherits the template's position, quaternion and
+    scale, and a prop is placed by its keys and nothing else: Cortex added to
+    `intro_logo` took prop 0's key verbatim -- (-2.6, -2.6, -85.3), a 0.85-axis
+    quaternion and scale 0.24 -- and drew up at the ceiling, tilted onto his
+    side, at whatever size that scale made him. Baking the artist's transform
+    into the vertices instead does not help: the node still applies its own on
+    top, and the model frame permutes the axes, so what was set as height in
+    Blender came back as depth. Given `{"position", "rotation", "scale"}` in the
+    model's own frame -- rotation as x, y, z, w -- every copied key is written
+    with it, so the prop stands where it was put, facing where it was faced.
 
     **The id has to be written into every key as well as into the node.** A prop
     does not draw what `node+0x14` names -- 0x8001EDAC reloads the id from the
@@ -516,10 +529,21 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
     tail.extend(model_data[node:node + span])
     ident = SC.MESH_NAMESPACE | (mesh_index + 1)
     struct.pack_into("<i", tail, node_at + NODE_COMMAND_ID, ident)
+    position_at, rotation_at, scale_at = KEY_LAYOUT[PROP_STRIDE]
     for key in range((span - PROP_KEYS) // PROP_STRIDE):
-        struct.pack_into("<i", tail,
-                         node_at + PROP_KEYS + PROP_STRIDE * key + PROP_KEY_ID,
-                         ident)
+        at = node_at + PROP_KEYS + PROP_STRIDE * key
+        struct.pack_into("<i", tail, at + PROP_KEY_ID, ident)
+        if placement is None:
+            continue
+        for field, offset, one in (("position", position_at,
+                                    1.0 / GTE_SCALE_SMALL),
+                                   ("rotation", rotation_at, QUATERNION_ONE),
+                                   ("scale", scale_at, QUATERNION_ONE)):
+            values = placement.get(field)
+            if values is None:
+                continue
+            for axis, value in enumerate(values):
+                _put_i32(tail, at + offset + 4 * axis, _fixed(value, one))
 
     align(tail)
     root_at = len(tail)

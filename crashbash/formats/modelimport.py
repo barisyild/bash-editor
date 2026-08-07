@@ -152,6 +152,14 @@ class ImportRequest:
     # backdrop -- so adding a model means adding a slot, not taking one. Each
     # payload here gets a slot of its own and a prop node to draw it.
     new_meshes: list["MeshPayload"] = field(default_factory=list)
+    # Where each of those stands, one entry per `new_meshes` entry and `None`
+    # for "wherever the template prop stands". A prop is placed by its keys
+    # (§9.11.11) and by nothing else, so a node copied from a template and left
+    # alone puts the newcomer exactly where the template already is, at the
+    # template's facing and size -- which is how Cortex arrived at `intro_logo`'s
+    # ceiling, on his side. Each entry is `{"position", "rotation", "scale"}` in
+    # the model's own frame, rotation as x, y, z, w.
+    new_mesh_placements: list[dict | None] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     # Reasons to refuse. Collected rather than raised one at a time so an
     # artist sees every problem in the file at once.
@@ -967,7 +975,7 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         model = read_model(model_data)
         stripped = True
 
-    for payload in request.new_meshes:
+    for order, payload in enumerate(request.new_meshes):
         # The slot first, then the geometry into it, then the node that draws
         # it. Each step is one this module already does; what was missing was
         # a slot to aim them at.
@@ -979,7 +987,10 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         # directory at `T(0x44)` survives, so it still describes every clip, and
         # re-reading it here would hand back blob starts the strip has cut.
         index = len(model.meshes)
-        model_data = SW.append_prop(model_data, model, clips, index)
+        placement = (request.new_mesh_placements[order]
+                     if order < len(request.new_mesh_placements) else None)
+        model_data = SW.append_prop(model_data, model, clips, index,
+                                    placement=placement)
         model = read_model(model_data)
         model_data = MOW.append_mesh(model_data, model)
         model = read_model(model_data)

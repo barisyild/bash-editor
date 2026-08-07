@@ -962,14 +962,19 @@ is the file itself and holds for both.
   clip over its **drawn triangles at 8.8 precision** (`pose / GTE_SCALE_SMALL`,
   as `blender/roundtrip.py` does); comparing model units rounds a frozen clip
   and a live one closer together, not further apart.
-- **An added mesh is placed by its object transform; every other mesh is not.**
-  The importer stands each mesh at the origin and what draws it — a node's keys
-  in a cutscene, a placement record in a level — puts it where it goes, so
-  reading an object's transform would move it twice. A mesh being *added* has
-  no such record until the file is written, so the object is the only statement
-  of where it goes, and `read_mesh(place=True)` bakes it in. Without that the
-  panel's "move it to place it" is a lie: the object moves and nothing in the
-  file changes.
+- **An added mesh's transform belongs in its node's keys, never in its
+  vertices.** A prop is placed by the key covering the tick and by nothing
+  else, so a node copied from a template puts the newcomer exactly where the
+  template stands, at its facing and its size — and geometry moved in Blender
+  to compensate gets that transform applied *on top* of it. Cortex added to
+  `intro_logo` with the transform baked in came back **up at the ceiling, on
+  his side**: prop 0's key is (−2.6, −2.6, −85.3) with a 0.85-axis quaternion
+  and scale 0.24, and the model frame permutes the axes besides, so the height
+  set in Blender arrived as depth. `build_scene.track_key` decomposes the
+  object's matrix through the same basis change a key is read with, and
+  `append_prop(placement=...)` writes it into every copied key. What still
+  travels from the template is the *timing* — tick and duration — which is the
+  shape being borrowed.
 - **The gesture is the destination active, the newcomer merely selected.**
   `_target` reads the model from whatever the *active* object belongs to, so
   *Add Selected Mesh* follows *Borrow Selected Mesh* exactly — select what is
@@ -1055,6 +1060,20 @@ Adding a mesh forces the whole-model rebuild (44,764 → 83,280 bytes, colours
 confirmed on.
 So texture *appending* is now confirmed on two discs and in two packs, a level's
 and a cutscene's.
+
+**And a cutscene that has a clip, which is the harder half.**
+`out/crashbash-logo-cortex.bin` runs: the same borrowed Cortex added to
+`intro_logo` as its 11th mesh, standing beside the logo at four times a letter's
+height, with the room's own 199-frame clip still playing. That is the first disc
+built by the **relaid** path for an added mesh — a new slot that is a header
+over the template's blocks, with `_repoint_roots` and `_shift_roots` carrying
+the scene root across the move. Every disc before it took the appending path and
+survived only because `intro_eurocom` has **zero clips**, so its tail never
+moved; `intro_logo` built that way came back with no shot at all.
+Read back before building: 10 of 10 shipped meshes identical, the clip 199/199
+frames drawing identically with its pose pool unchanged at 639, textures 55 →
+62 with the swatch at 61, `props` 9 → 10 and the new node's 2 of 2 keys naming
+`0x200b`. On screen Cortex is there and the intro plays.
 
 **The Blender path has reached hardware.** `out/crashbash-eurocom-burst.bin`
 runs: the intro's first emitter edited in Blender and exported through the

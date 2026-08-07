@@ -180,14 +180,24 @@ to **26** with the swatch correctly at 25, and all 28 shipped meshes returning
 identical — position, colours, UVs and texture entry, canonically under rotation
 and *not* under reversal, so the facing is intact too.
 
-Two things are worth knowing before pressing it. The node is **copied from a
-prop the shot already has**, so the newcomer follows that prop's track until you
-move it; and its keys are what name the mesh, which is a fact that cost two
-discs (`docs/FORMAT.md` §9.11.11) — a node whose keys still name the template
-draws the template, standing exactly where the template already stands, and
-reads as nothing having been added at all. Also, unlike every other mesh, an
-added one is **placed by its object transform**: nothing in the file points at it
-yet, so where you put it in Blender is the only statement of where it goes.
+**Move the object to place it, and the transform goes into the node's keys.**
+That is where a prop is placed from — the key covering the tick, read every tick
+— so position, rotation and scale all travel, and the geometry stays in its own
+frame. Only the *timing* comes from the template, because the node is copied
+from a prop the shot already has.
+
+Getting that wrong is visible and was: with the transform baked into the
+vertices instead, the node still applied its own on top, and Cortex arrived at
+the ceiling of the intro's temple lying on his side — `intro_logo`'s prop 0 sits
+at (−2.6, −2.6, −85.3) with a 0.85-axis quaternion and scale 0.24, and the model
+frame permutes the axes besides, so the height set in Blender came back as
+depth. Placed through the keys he stands on the floor at a drawn height of 0.60,
+which is exactly what the shot's own character-sized prop measures.
+
+The other thing worth knowing is that a prop's **keys are what name the mesh**,
+a fact that cost two discs (`docs/FORMAT.md` §9.11.11): a node whose keys still
+name the template draws the template, standing exactly where the template
+already stands, and reads as nothing having been added at all.
 
 Adding a mesh makes the export rebuild the model whole — every mesh through the
 writer, both tables renumbered from entry 0. `intro_eurocom` went 44,764 to

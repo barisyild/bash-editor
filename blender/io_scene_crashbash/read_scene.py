@@ -332,15 +332,14 @@ def _shipped_outside(model, pack, sizes, index) -> dict[int, int]:
     return out
 
 
-def read_mesh(obj, pack, sizes, problems, warnings, shipped=None, place=False):
+def read_mesh(obj, pack, sizes, problems, warnings, shipped=None):
     """One Blender object as a `MeshPayload`.
 
-    `place` bakes the object's own transform into the geometry. A mesh the model
-    already holds is placed by whatever draws it -- a node's keys in a cutscene,
-    a placement record in a level -- and the importer stands every one of them
-    at the origin, so reading its transform would move it twice. A mesh being
-    *added* has no such record to move until the file is written, so where the
-    artist put the object is the only statement of where it goes.
+    Geometry only, in the mesh's own frame. Every mesh in this format is placed
+    by whatever draws it -- a node's keys in a cutscene, a placement record in a
+    level -- and the importer stands them all at the origin, so an object's
+    transform is never read here. A mesh being *added* is no exception: its
+    transform becomes its new node's keys, through `build_scene.track_key`.
     """
     from crashbash.formats import modelimport as MI
 
@@ -359,11 +358,7 @@ def read_mesh(obj, pack, sizes, problems, warnings, shipped=None, place=False):
 
     points = np.empty(len(mesh.vertices) * 3, dtype=np.float64)
     mesh.vertices.foreach_get("co", points)
-    points = points.reshape(-1, 3)
-    if place:
-        matrix = np.asarray(obj.matrix_world, dtype=np.float64)
-        points = points @ matrix[:3, :3].T + matrix[:3, 3]
-    vertices = to_model(points)
+    vertices = to_model(points.reshape(-1, 3))
 
     # Back to the file's corner order: the importer reversed it so Blender's
     # front face would be the console's, and that comes off again here.
@@ -599,14 +594,19 @@ def build_request(collection, model, clips, pack, materials_pack=None,
             request.meshes[index] = payload
 
     # `_shipped_outside` answers for a mesh the model already holds, and these
-    # replace nothing, so there is no shipped face to compare against. Their
-    # transform is baked in: nothing places them yet, so the object is the
-    # placement.
+    # replace nothing, so there is no shipped face to compare against.
+    #
+    # The transform goes to the *node*, not into the vertices. A prop is placed
+    # by its keys and by nothing else, so geometry moved in Blender would have
+    # the node's own placement applied on top of it -- which is how Cortex
+    # arrived at `intro_logo`'s ceiling, tilted, wearing the template prop's
+    # quaternion and its 0.24 scale.
     for obj in fresh_meshes:
-        payload = read_mesh(obj, pack, sizes, request.problems, request.warnings,
-                            place=True)
+        payload = read_mesh(obj, pack, sizes, request.problems, request.warnings)
         if payload is not None:
             request.new_meshes.append(payload)
+            request.new_mesh_placements.append(
+                build_scene.track_key(obj.matrix_world))
 
     for clip in clips:
         obj = found.get(clip.mesh_index)
