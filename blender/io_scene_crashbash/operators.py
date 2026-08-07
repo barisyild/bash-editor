@@ -255,6 +255,106 @@ class CRASHBASH_OT_export(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+def _carry_textures(operator, borrowed, pack, notes):
+    """Give every borrowed material a slot of its own, appended to the pack.
+
+    The numbers have to be decided here, because they go into the faces:
+    appending puts a record before the last one, so the first newcomer takes the
+    swatch's old number and each one after it the next. The export checks that
+    against where the append actually lands.
+
+    A swatch face travels too. It reads one texel of the source pack's swatch
+    image through a palette the *model* names, and all 87 of the penguin's read
+    one palette -- so a copy of that image, decoded through that palette, is an
+    ordinary picture and the face an ordinary textured face reading the same
+    cell.
+
+    Shared by *Borrow Selected Mesh* and *Add Selected Mesh*: a mesh that
+    replaces a slot and a mesh that takes a new one need their art carried
+    identically, and a rule kept in one operator is a rule the other lacks.
+    """
+    from . import build_scene
+
+    base = len(pack.textures) - 1
+    renumber = {}
+    for index, material in enumerate(borrowed.materials):
+        image = _material_image(material)
+        if image is None or tuple(image.size) == (0, 0):
+            operator.report({"ERROR"}, (
+                f"'{material.name if material else index}' carries no "
+                f"picture to add; import the source through this add-on"))
+            return None
+        slot = base + len(renumber)
+        fresh = bpy.data.materials.new(
+            N.MATERIAL_SLOT.format(slot=slot, width=image.size[0],
+                                   height=image.size[1],
+                                   depth=4) + "_added")
+        fresh[N.PROP_SLOT] = slot
+        fresh[N.PROP_NEW_SLOT] = True
+        fresh[N.PROP_BLEND] = int(material.get(N.PROP_BLEND, 0) or 0)
+        build_scene._shader(fresh, image, fresh[N.PROP_BLEND])
+        renumber[index] = fresh
+    # `materials.clear()` sets every polygon's index back to 0, so which
+    # material each face wore has to be taken first -- otherwise all 116 of
+    # the penguin's faces came back on one slot and read one picture.
+    worn = [poly.material_index for poly in borrowed.polygons]
+    borrowed.materials.clear()
+    order = sorted(renumber)
+    for index in order:
+        borrowed.materials.append(renumber[index])
+    remap = {old: n for n, old in enumerate(order)}
+    for poly, was in zip(borrowed.polygons, worn):
+        poly.material_index = remap.get(was, 0)
+    notes.append(f"added {len(renumber)} picture(s) to the pack as slots "
+                 f"{base}..{base + len(renumber) - 1}, replacing none; the "
+                 f"swatch moves to {base + len(renumber)}")
+    return renumber
+
+
+def _stand_on_origin(borrowed, notes) -> None:
+    """Centre the geometry in plan with its feet at zero.
+
+    A node's keys place the mesh as an offset from where it is authored, so a
+    borrowed model left at its source's origin lands wherever that model put it
+    rather than where the shot asks for it.
+    """
+    import numpy as np
+
+    co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
+    borrowed.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    co -= np.array([(co[:, 0].min() + co[:, 0].max()) / 2,
+                    (co[:, 1].min() + co[:, 1].max()) / 2,
+                    co[:, 2].min()], dtype=np.float32)
+    borrowed.vertices.foreach_set("co", co.ravel())
+    borrowed.update()
+    notes.append("stood it on its own origin, feet at z=0")
+
+
+def _borrowed_copy(operator, source, notes):
+    """The selected mesh's data, cleared of what must not travel with it.
+
+    Blender sums every shape key that is on, and a borrowed mesh is wanted for
+    its shape rather than its animation -- the penguin's 34 keys drew a fan of
+    shards over the whole room while the exported file was already right. The
+    UV layer and colour attribute are what say the mesh came in through this
+    add-on, and without them there is nothing to paint it from.
+    """
+    borrowed = source.data.copy()
+    if borrowed.shape_keys:
+        notes.append(f"cleared {len(borrowed.shape_keys.key_blocks)} shape keys")
+        holder = bpy.data.objects.new("_crashbash_borrow", borrowed)
+        holder.shape_key_clear()
+        bpy.data.objects.remove(holder)
+    if (borrowed.uv_layers.get(N.UV_LAYER) is None
+            or borrowed.color_attributes.get(N.COLOUR_ATTRIBUTE) is None):
+        operator.report({"ERROR"}, (
+            f"'{source.name}' has no {N.UV_LAYER} or {N.COLOUR_ATTRIBUTE}; "
+            f"import it through this add-on so it carries both"))
+        return None
+    return borrowed
+
+
 class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
     """Put the selected mesh into the active object's slot, painted for its pack
 
@@ -293,60 +393,6 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
             return False
         return any(o is not obj and o.type == "MESH"
                    for o in context.selected_objects)
-
-    def _carry_textures(self, borrowed, collection, pack, notes):
-        """Give every borrowed material a slot of its own, appended to the pack.
-
-        The numbers have to be decided here, because they go into the faces:
-        appending puts a record before the last one, so the first newcomer
-        takes the swatch's old number and each one after it the next. The
-        export checks that against where the append actually lands.
-
-        `_carry_textures` is called from `execute`, which imports the library
-        itself; the shader builder is the add-on's own.
-
-        A swatch face travels too. It reads one texel of the source pack's
-        swatch image through a palette the *model* names, and all 87 of the
-        penguin's read one palette -- so a copy of that image, decoded through
-        that palette, is an ordinary picture and the face an ordinary textured
-        face reading the same cell.
-        """
-        from . import build_scene
-
-        base = len(pack.textures) - 1
-        renumber = {}
-        for index, material in enumerate(borrowed.materials):
-            image = _material_image(material)
-            if image is None or tuple(image.size) == (0, 0):
-                self.report({"ERROR"}, (
-                    f"'{material.name if material else index}' carries no "
-                    f"picture to add; import the source through this add-on"))
-                return None
-            slot = base + len(renumber)
-            fresh = bpy.data.materials.new(
-                N.MATERIAL_SLOT.format(slot=slot, width=image.size[0],
-                                       height=image.size[1],
-                                       depth=4) + "_added")
-            fresh[N.PROP_SLOT] = slot
-            fresh[N.PROP_NEW_SLOT] = True
-            fresh[N.PROP_BLEND] = int(material.get(N.PROP_BLEND, 0) or 0)
-            build_scene._shader(fresh, image, fresh[N.PROP_BLEND])
-            renumber[index] = fresh
-        # `materials.clear()` sets every polygon's index back to 0, so which
-        # material each face wore has to be taken first -- otherwise all 116 of
-        # the penguin's faces came back on one slot and read one picture.
-        worn = [poly.material_index for poly in borrowed.polygons]
-        borrowed.materials.clear()
-        order = sorted(renumber)
-        for index in order:
-            borrowed.materials.append(renumber[index])
-        remap = {old: n for n, old in enumerate(order)}
-        for poly, was in zip(borrowed.polygons, worn):
-            poly.material_index = remap.get(was, 0)
-        notes.append(f"added {len(renumber)} picture(s) to the pack as slots "
-                     f"{base}..{base + len(renumber) - 1}, replacing none; the "
-                     f"swatch moves to {base + len(renumber)}")
-        return renumber
 
     def _snap_uvs(self, borrowed, model_data, model, uv, notes) -> bool:
         """Move every face's UVs onto a triple the pinned table already holds."""
@@ -393,18 +439,10 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                      f"{moved} texels over its six coordinates")
         return True
 
-    def _finish(self, context, target, borrowed, mesh, source, notes, np):
+    def _finish(self, context, target, borrowed, mesh, source, notes):
         """Stand it on its origin, hand it to the target, and say what happened."""
         if self.stand_on_origin:
-            co = np.empty(len(borrowed.vertices) * 3, dtype=np.float32)
-            borrowed.vertices.foreach_get("co", co)
-            co = co.reshape(-1, 3)
-            co -= np.array([(co[:, 0].min() + co[:, 0].max()) / 2,
-                            (co[:, 1].min() + co[:, 1].max()) / 2,
-                            co[:, 2].min()], dtype=np.float32)
-            borrowed.vertices.foreach_set("co", co.ravel())
-            borrowed.update()
-            notes.append("stood it on its own origin, feet at z=0")
+            _stand_on_origin(borrowed, notes)
 
         was = target.data
         old_faces = len(was.polygons)
@@ -481,26 +519,12 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
         self._level_faces = sum(
             len(o.mesh.face_colour_index) for o in model.objects
             if o.mesh is not None) or 1
-        borrowed = source.data.copy()
         notes = []
-
-        # 1. The clips it brought. Blender sums every shape key that is on, and
-        #    a borrowed mesh is wanted for its shape, not its animation -- the
-        #    penguin's 34 keys drew a fan of shards over the whole room while
-        #    the exported file was already right.
-        if borrowed.shape_keys:
-            notes.append(f"cleared {len(borrowed.shape_keys.key_blocks)} shape keys")
-            holder = bpy.data.objects.new("_crashbash_borrow", borrowed)
-            holder.shape_key_clear()
-            bpy.data.objects.remove(holder)
-
+        borrowed = _borrowed_copy(self, source, notes)
+        if borrowed is None:
+            return {"CANCELLED"}
         uv = borrowed.uv_layers.get(N.UV_LAYER)
         colour = borrowed.color_attributes.get(N.COLOUR_ATTRIBUTE)
-        if uv is None or colour is None:
-            self.report({"ERROR"}, (
-                f"'{source.name}' has no {N.UV_LAYER} or {N.COLOUR_ATTRIBUTE}; "
-                f"import it through this add-on so it carries both"))
-            return {"CANCELLED"}
 
         # A carrier's UV table cannot grow (§2.1), so a textured face has
         # nowhere to put its texels and the art has to be flattened into the
@@ -508,7 +532,7 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
         # pack, which takes nothing from anybody (§10.3 never comes up).
         carrier = int.from_bytes(model_data[0x38:0x3C], "little") != 0
         if self.bring_textures:
-            added = self._carry_textures(borrowed, collection, pack, notes)
+            added = _carry_textures(self, borrowed, pack, notes)
             if added is None:
                 return {"CANCELLED"}
             if carrier:
@@ -518,7 +542,7 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                 kept = self._snap_uvs(borrowed, model_data, model, uv, notes)
                 if not kept:
                     return {"CANCELLED"}
-            self._finish(context, target, borrowed, mesh, source, notes, np)
+            self._finish(context, target, borrowed, mesh, source, notes)
             return {"FINISHED"}
 
         # 2. Its art, which does not travel here: the slots it names mean other
@@ -623,7 +647,7 @@ class CRASHBASH_OT_borrow_mesh(bpy.types.Operator):
                 ) + (have[3],)
 
         # 4. Where it stands, and the handover -- shared with the textured path.
-        self._finish(context, target, borrowed, mesh, source, notes, np)
+        self._finish(context, target, borrowed, mesh, source, notes)
         return {"FINISHED"}
 
 
@@ -723,6 +747,109 @@ def _texel_at(material, u: float, v: float):
     x = min(max(int(round(u * (image.size[0] - 1))), 0), image.size[0] - 1)
     y = min(max(int(round(v * (image.size[1] - 1))), 0), image.size[1] - 1)
     return page[y, x][:3]
+
+
+class CRASHBASH_OT_add_mesh(bpy.types.Operator):
+    """Bring the selected mesh into this model as a new one, drawn by a new node
+
+    *Borrow Selected Mesh* puts a model into a slot that already exists, and
+    whatever was in that slot goes away. This takes no slot: the model gains a
+    mesh it did not have and a prop node to draw it, so nothing it already
+    draws is lost. The mesh's own pictures are appended to the pack, which
+    takes nobody else's (§10.3 never comes up).
+    """
+
+    bl_idname = "crashbash.add_mesh"
+    bl_label = "Add Selected Mesh"
+    bl_options = {"REGISTER", "UNDO"}
+    # Same gesture as borrowing -- select what is coming in, then shift-select
+    # any mesh of the model it joins -- because the model is read from whatever
+    # the *active* object belongs to. With the newcomer active instead, a second
+    # imported model resolves as the destination and the edit lands in it.
+
+    bring_textures: bpy.props.BoolProperty(
+        name="Bring its own textures",
+        description=("Add the borrowed model's pictures to this pack as new "
+                     "slots, taking none of the ones already there"),
+        default=True,
+    )
+    stand_on_origin: bpy.props.BoolProperty(
+        name="Stand on its own origin",
+        description=("Move the geometry so it is centred in plan with its feet "
+                     "at zero. A node's keys place the mesh as an offset from "
+                     "where it is authored, so without this it lands wherever "
+                     "its source model put it"),
+        default=True,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        if obj is None or obj.type != "MESH":
+            return False
+        if obj.get(N.PROP_MESH) is None and obj.get(N.PROP_OBJECT) is None:
+            return False
+        return any(o is not obj and o.type == "MESH"
+                   for o in context.selected_objects)
+
+    def execute(self, context):
+        if not _require_library(self, context):
+            return {"CANCELLED"}
+        from crashbash.formats.anim import read_animations
+        from crashbash.formats.mdl import read_model
+        from crashbash.formats.tex import read_pack
+        from crashbash import scene as SC
+
+        source = next(o for o in context.selected_objects
+                      if o is not context.active_object and o.type == "MESH")
+        collection = _target(context)
+        try:
+            model_data, pack_data = _source_bytes(collection)
+            model = read_model(model_data)
+            pack = read_pack(pack_data) if pack_data else None
+            shot = SC.read_scene(model_data, model,
+                                 read_animations(model_data, model))
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"{exc}")
+            return {"CANCELLED"}
+        if pack is None:
+            self.report({"ERROR"}, (
+                "this model has no texture pack beside it, and an added mesh "
+                "has to name slots in one"))
+            return {"CANCELLED"}
+        # The node is copied from one the shot already has, so there has to be
+        # one to copy: a model with no prop states no key layout to follow.
+        if shot is None or not shot.props:
+            self.report({"ERROR"}, (
+                "this model has no shot with a prop to copy, so there is no "
+                "node shape to follow; a level grows by placement instead"))
+            return {"CANCELLED"}
+
+        notes = []
+        added = _borrowed_copy(self, source, notes)
+        if added is None:
+            return {"CANCELLED"}
+        if self.bring_textures and _carry_textures(
+                self, added, pack, notes) is None:
+            return {"CANCELLED"}
+        if self.stand_on_origin:
+            _stand_on_origin(added, notes)
+
+        index = len(model.meshes)
+        added.name = f"{collection.name}_mesh{index:02d}_added"
+        obj = bpy.data.objects.new(added.name, added)
+        obj[N.PROP_ON_STAGE] = True
+        collection.objects.link(obj)
+        for other in context.selected_objects:
+            other.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+
+        self.report({"INFO"}, (
+            f"{source.name} joins {collection.name} as mesh {index}, with a "
+            f"prop node of its own; {len(added.polygons)} faces. "
+            + "; ".join(notes)))
+        return {"FINISHED"}
 
 
 class CRASHBASH_OT_put_on_stage(bpy.types.Operator):
@@ -950,6 +1077,8 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
                                f"(carried through, not edited)")
             box.operator(CRASHBASH_OT_borrow_mesh.bl_idname, icon="LINK_BLEND")
             box.label(text="select the mesh to borrow, then this one")
+            box.operator(CRASHBASH_OT_add_mesh.bl_idname, icon="ADD")
+            box.label(text="or add it, taking nobody's slot")
             if obj.get(N.PROP_ON_STAGE):
                 box.label(text="on stage: the shot gets a node for this mesh",
                           icon="CHECKMARK")
@@ -961,6 +1090,15 @@ class VIEW3D_PT_crashbash(bpy.types.Panel):
                 text=f"object pool id {obj[N.PROP_OBJECT]:04X}; a rebuild has "
                      f"to fit the span it owns",
                 icon="MESH_CUBE")
+        # A mesh added rather than borrowed: it names no slot of this model's,
+        # and the shot gets a node for it on export.
+        if (obj is not None and obj.type == "MESH"
+                and obj.get(N.PROP_MESH) is None
+                and obj.get(N.PROP_ON_STAGE)):
+            box = layout.box()
+            box.label(text="joining as a new mesh, drawn by a new node",
+                      icon="CHECKMARK")
+            box.label(text=f"{len(obj.data.polygons)} faces; move it to place it")
         if obj is not None and obj.get(N.PROP_PLACEMENT) is not None:
             box = layout.box()
             box.label(text=f"placement {obj[N.PROP_PLACEMENT]} places "
@@ -1005,6 +1143,7 @@ CLASSES = (
     CRASHBASH_OT_import,
     CRASHBASH_OT_export,
     CRASHBASH_OT_borrow_mesh,
+    CRASHBASH_OT_add_mesh,
     CRASHBASH_OT_add_placement,
     CRASHBASH_OT_put_on_stage,
     CRASHBASH_OT_bake_particles,

@@ -1119,11 +1119,20 @@ def _split_at_clip_table(data: bytes) -> tuple[bytearray, bytes, int]:
 def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> int:
     """Put the tail back after the inserted geometry and move what named it.
 
-    Only two fields name anything past the insertion point: `0x44`, which is
-    self-relative and now has further to reach, and `0x50`, which is a plain
-    length from the file's base. Every pointer *inside* the tail is self-relative
-    within it and survives the shift untouched, and `write_clips` recomputes each
-    descriptor's mesh pointer afterwards from the header's own offset.
+    Every pointer *inside* the tail is self-relative within it and survives the
+    shift untouched, and `write_clips` recomputes each descriptor's mesh pointer
+    afterwards from the header's own offset. What does not survive is a field of
+    the *header* naming something in the tail: the header does not move and its
+    target does. `0x50` is a plain length from the file's base and is stated
+    below; every self-relative header field is shifted here.
+
+    That used to read "only `0x44` and `0x50`", and it was true until a scene
+    node could be added. `scenewrite.append_prop` re-emits the root at the end
+    of the file -- inside the tail -- so `0x4C` names it from the header too.
+    Left behind, `intro_logo`'s root entry still resolved to a plausible offset
+    with nothing unmapped and nothing outside the file, and what sat there read
+    a child count of 2,691,088: the shot was gone. Only reading the scene back
+    saw it, and every cutscene with a clip was in that state.
 
     **The insertion is padded to a whole sector when `0x50` was sector-aligned.**
     Eight shipped models have `i32@0x50` a multiple of 0x800, and seven of them
@@ -1133,16 +1142,53 @@ def _rejoin_tail(out: bytearray, tail: bytes, cut: int, boundary: int) -> int:
     reader cannot start from. Rebuilding one mesh of `warp_room1` -- changing no
     geometry at all -- crashed the game until this padding was added.
     """
+    inserted_fields = tuple(f for f in MOW.HEADER_FIELDS if f != RESIDENT_SIZE)
     resident = struct.unpack_from("<i", out, RESIDENT_SIZE)[0]
     if resident % SECTOR == 0 and resident >= cut:
         out.extend(b"\x00" * (-(boundary - cut) % SECTOR))
         boundary = len(out)
     inserted = boundary - cut
     out.extend(tail)
-    struct.pack_into("<i", out, PTR_CLIP_TABLE, boundary - PTR_CLIP_TABLE)
+    for field in inserted_fields:
+        raw = struct.unpack_from("<i", out, field)[0]
+        if raw and field + raw >= cut:
+            struct.pack_into("<i", out, field, raw + inserted)
+    _shift_roots(out, cut, inserted)
     if resident >= cut:
         struct.pack_into("<i", out, RESIDENT_SIZE, resident + inserted)
     return boundary
+
+
+def _shift_roots(out: bytearray, cut: int, inserted: int) -> None:
+    """Reach each scene root again from an array the insertion did not move.
+
+    The array at `T(0x4C)` and the roots it names need not be on the same side
+    of the cut, and for `intro_logo` they are not: the array sits 8 bytes below
+    `T(0x44)` and the root `scenewrite.append_prop` re-emitted sits past it, in
+    the tail. So the array keeps its offset while every root it names slides on,
+    and each entry -- self-relative from its own slot -- is left naming the byte
+    the root used to start at.
+
+    Nothing downstream objects. `intro_logo`'s entry still resolved inside the
+    file, and the child count at what it named read 2,691,088; the shot had
+    simply ceased to exist. `modelwrite._repoint_roots` is the same repair on
+    the relaid path, which is the one a model without an added mesh takes.
+    """
+    try:
+        count = struct.unpack_from("<i", out, 0x48)[0]
+        base = 0x4C + struct.unpack_from("<i", out, 0x4C)[0]
+    except struct.error:
+        return
+    if not (0 < count < 4096 and 0 <= base and base + 4 * count <= len(out)):
+        return
+    for index in range(count):
+        slot = base + 4 * index
+        raw = struct.unpack_from("<i", out, slot)[0]
+        root = slot + raw
+        # Both sides moved together, or neither did: nothing to do. Only a root
+        # in the tail reached from a slot in front of it has come apart.
+        if root >= cut > slot:
+            struct.pack_into("<i", out, slot, raw + inserted)
 
 
 def _refuse_carrier(data: bytes, what: str) -> None:

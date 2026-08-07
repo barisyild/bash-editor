@@ -160,6 +160,40 @@ Then place it and export. Done from the buttons alone, `warp_room1` with the
 penguin came out **byte for byte identical** to the hand-made version of the
 same edit — the one that runs.
 
+**Add Selected Mesh** is the other half, and it takes nothing away. Borrowing
+spends a slot: whatever stood there is gone. This one gives the model a mesh it
+did not have and a **prop node to draw it**, so everything already on screen
+stays. Same gesture — select what is coming in, shift-select any mesh of the
+model it joins — and the report says where it landed:
+
+```
+cortex_mesh00 joins intro_eurocom as mesh 28, with a prop node of its own; 266
+faces. cleared 28 shape keys; added 7 picture(s) to the pack as slots 18..24,
+replacing none; the swatch moves to 25; stood it on its own origin, feet at z=0
+```
+
+**That disc runs.** The Eurocom intro plays with Cortex standing in it, at the
+scale of the logo's own letters, and the letters drop around him as they always
+did. Read back out of the built image, 990 of 992 entries are byte-identical and
+the two that differ are the model and its pack: 28 meshes to **29**, 19 textures
+to **26** with the swatch correctly at 25, and all 28 shipped meshes returning
+identical — position, colours, UVs and texture entry, canonically under rotation
+and *not* under reversal, so the facing is intact too.
+
+Two things are worth knowing before pressing it. The node is **copied from a
+prop the shot already has**, so the newcomer follows that prop's track until you
+move it; and its keys are what name the mesh, which is a fact that cost two
+discs (`docs/FORMAT.md` §9.11.11) — a node whose keys still name the template
+draws the template, standing exactly where the template already stands, and
+reads as nothing having been added at all. Also, unlike every other mesh, an
+added one is **placed by its object transform**: nothing in the file points at it
+yet, so where you put it in Blender is the only statement of where it goes.
+
+Adding a mesh makes the export rebuild the model whole — every mesh through the
+writer, both tables renumbered from entry 0. `intro_eurocom` went 44,764 to
+83,280 bytes for Cortex, and that layout is the one confirmed on hardware for
+this model already.
+
 ## Watching a cutscene
 
 **Bake Shot Preview** in the sidebar plays the shot (§9.11): every actor and

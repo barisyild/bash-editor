@@ -332,8 +332,16 @@ def _shipped_outside(model, pack, sizes, index) -> dict[int, int]:
     return out
 
 
-def read_mesh(obj, pack, sizes, problems, warnings, shipped=None):
-    """One Blender object as a `MeshPayload`."""
+def read_mesh(obj, pack, sizes, problems, warnings, shipped=None, place=False):
+    """One Blender object as a `MeshPayload`.
+
+    `place` bakes the object's own transform into the geometry. A mesh the model
+    already holds is placed by whatever draws it -- a node's keys in a cutscene,
+    a placement record in a level -- and the importer stands every one of them
+    at the origin, so reading its transform would move it twice. A mesh being
+    *added* has no such record to move until the file is written, so where the
+    artist put the object is the only statement of where it goes.
+    """
     from crashbash.formats import modelimport as MI
 
     where = obj.name
@@ -351,7 +359,11 @@ def read_mesh(obj, pack, sizes, problems, warnings, shipped=None):
 
     points = np.empty(len(mesh.vertices) * 3, dtype=np.float64)
     mesh.vertices.foreach_get("co", points)
-    vertices = to_model(points.reshape(-1, 3))
+    points = points.reshape(-1, 3)
+    if place:
+        matrix = np.asarray(obj.matrix_world, dtype=np.float64)
+        points = points @ matrix[:3, :3].T + matrix[:3, 3]
+    vertices = to_model(points)
 
     # Back to the file's corner order: the importer reversed it so Blender's
     # front face would be the console's, and that comes off again here.
@@ -547,6 +559,14 @@ def build_request(collection, model, clips, pack, materials_pack=None,
     request.new_props = sorted(
         int(obj[N.PROP_MESH]) for obj in collection.all_objects
         if obj.get(N.PROP_ON_STAGE) and obj.get(N.PROP_MESH) is not None)
+    # And one that names no mesh of this model at all is a mesh being *added*.
+    # The core takes it from there -- it appends the node first and the slot
+    # after, because the new blocks go at the end and a node appended behind
+    # them would be cut off from the region carrying the shot.
+    fresh_meshes = [obj for obj in collection.all_objects
+                    if obj.type == "MESH" and obj.get(N.PROP_ON_STAGE)
+                    and obj.get(N.PROP_MESH) is None
+                    and obj.get(N.PROP_PLACEMENT) is None]
 
     sizes = _sizes(pack)
     found = _objects(collection)
@@ -556,7 +576,7 @@ def build_request(collection, model, clips, pack, materials_pack=None,
     # error: the penguin's faces were snapped onto a pinned table's triples in
     # 16x16 texels and read back through 256x256, so 115 of its 116 came out
     # holding a triple the table does not have.
-    for obj in found.values():
+    for obj in list(found.values()) + fresh_meshes:
         for material in obj.data.materials:
             if material is None or not material.get(N.PROP_NEW_SLOT):
                 continue
@@ -578,6 +598,16 @@ def build_request(collection, model, clips, pack, materials_pack=None,
         if payload is not None:
             request.meshes[index] = payload
 
+    # `_shipped_outside` answers for a mesh the model already holds, and these
+    # replace nothing, so there is no shipped face to compare against. Their
+    # transform is baked in: nothing places them yet, so the object is the
+    # placement.
+    for obj in fresh_meshes:
+        payload = read_mesh(obj, pack, sizes, request.problems, request.warnings,
+                            place=True)
+        if payload is not None:
+            request.new_meshes.append(payload)
+
     for clip in clips:
         obj = found.get(clip.mesh_index)
         if obj is None:
@@ -589,8 +619,8 @@ def build_request(collection, model, clips, pack, materials_pack=None,
     # Every slot the collection names, and the picture behind each one. The
     # writer compares against what the pack already holds and reports the slots
     # it left alone, so handing over an untouched image costs nothing.
-    for material in {m for obj in found.values() for m in obj.data.materials
-                     if m is not None}:
+    for material in {m for obj in list(found.values()) + fresh_meshes
+                     for m in obj.data.materials if m is not None}:
         slot = material.get(N.PROP_SLOT)
         if slot is None:
             continue

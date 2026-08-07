@@ -327,6 +327,7 @@ def relayout(data: bytes, model: Model | None = None,
                 struct.pack_into("<i", out, at + field,
                                  moved(target) - (at + field))
     _repoint_objects(data, out, model, moved)
+    _repoint_roots(data, out, moved)
     _repoint_chunks(data, out, moved)
     struct.pack_into("<i", out, RESIDENT_SIZE,
                      moved(min(struct.unpack_from("<i", data, RESIDENT_SIZE)[0],
@@ -385,6 +386,38 @@ def _repoint_objects(data: bytes, out: bytearray, model: Model, moved) -> None:
                          moved(obj.offset))
 
 
+def _repoint_roots(data: bytes, out: bytearray, moved) -> None:
+    """Move each scene root's entry to where that root landed.
+
+    `HEADER_FIELDS` carries `0x4C` -- where the array *is* -- and that is only
+    half of it: every entry in the array is itself self-relative, from its own
+    slot to a root (§9.11, 0x8001FF78). The two only stay in step while the
+    array and the roots move by the same amount, which is exactly what stops
+    being true once a region between them changes length.
+
+    A cutscene given a new mesh is where that happens, and what it looks like
+    when it goes wrong is a root entry that still resolves to a plausible
+    offset -- nothing outside the file, nothing unmapped -- with something that
+    is not a root at the end of it. `mdlwrite._shift_roots` is the same repair
+    on the appending path, where it was measured: `intro_logo` came back with a
+    child count of 2,691,088 and no shot at all.
+    """
+    try:
+        count = struct.unpack_from("<i", data, 0x48)[0]
+        base = 0x4C + struct.unpack_from("<i", data, 0x4C)[0]
+    except struct.error:
+        return
+    if not (0 < count < 4096 and 0 <= base and base + 4 * count <= len(data)):
+        return
+    for index in range(count):
+        slot = base + 4 * index
+        root = slot + struct.unpack_from("<i", data, slot)[0]
+        if not 0 <= root <= len(data):
+            continue
+        at = moved(slot)
+        struct.pack_into("<i", out, at, moved(root) - at)
+
+
 MESH_COUNT = 0x54
 
 
@@ -398,9 +431,21 @@ def append_mesh(data: bytes, model: Model | None = None,
 
     The header table at 0x58 grows like any other region, which is the whole of
     why this is possible now: everything after it simply lands further on and
-    every pointer is recomputed. The new mesh's blocks are copied from
-    `template` so the slot is valid the moment it exists, and `install_meshes`
-    fills it with real geometry afterwards.
+    every pointer is recomputed. The new header **aims at `template`'s own
+    blocks** rather than at a copy of them, so no other region changes length
+    and nothing new has to be found a home inside the layout boundary;
+    `install_meshes` gives the slot blocks of its own afterwards.
+
+    Two headers over one block set is what the shipped files already do --
+    `balls_crash/crystalarena` packs five pool meshes onto one, five headers
+    over the same strips, bounds, UVs and colours. It is also the only
+    placement the layout writer will own. Copying the blocks meant finding a
+    region for them, and the one "ending at the layout boundary" is the vector
+    pool *only when the pool is not empty*: `intro_logo`'s is, so the copy went
+    into the **UV table's** region instead, and `_install_relaid` refuses a
+    region it is already rewriting. Every added mesh in the archive fell back to
+    the appending path that way, and that path leaves the scene root behind --
+    which is a cutscene losing its shot, silently, on every model with a clip.
     """
     model = model or read_model(data)
     if not model.meshes:
@@ -409,55 +454,40 @@ def append_mesh(data: bytes, model: Model | None = None,
         raise ValueError(f"mesh {template} is not one of the "
                          f"{len(model.meshes)} this model holds")
     source = model.meshes[template]
-    low = min(source.ptr_bounds, source.ptr_strips, source.ptr_uv_index,
-              source.ptr_texture, source.ptr_colour_index)
-    blocks = data[low:source.ptr_end]
 
     regions = plan(data, model)
     headers = MESH_HEADER_START
     table = next((r for r in regions if r[0] == headers), None)
     if table is None:
         raise ValueError("this model's header table is not a region of its own")
-    # The blocks go inside the layout boundary, not past the end of the file.
-    # §2.1: every mesh block sits inside the span `model+0x08` names, and
-    # `CLAUDE.md`'s other half says growing `i32@0x50` does not make bytes past
-    # the shipped resident image present at run time. Appended past everything
-    # the slot was perfectly formed and drew nothing at all.
-    #
-    # So they extend the vector pool, whose region ends exactly at `T(0x08)` --
-    # and because `moved` answers a one-past-the-end pointer with the region's
-    # new end, the boundary grows over them by itself.
-    boundary = 0x08 + struct.unpack_from("<i", data, 0x08)[0]
-    pool = next((r for r in regions if r[1] == boundary), None)
-    if pool is None:
-        raise ValueError("no region of this model ends at its layout boundary")
 
     grown = bytearray(data[table[0]:table[1]])
     grown.extend(b"\x00" * MESH_HEADER_SIZE)
-    extended = bytearray(data[pool[0]:pool[1]])
-    if len(extended) % 4:
-        extended.extend(b"\x00" * (4 - len(extended) % 4))
-    at_in_tail = len(extended)
-    extended.extend(blocks)
 
     landed: dict[int, int] = {}
-    out = bytearray(relayout(data, model,
-                             {table[0]: bytes(grown), pool[0]: bytes(extended)},
-                             landed))
+    out = bytearray(relayout(data, model, {table[0]: bytes(grown)}, landed))
     struct.pack_into("<i", out, MESH_COUNT, len(model.meshes) + 1)
 
     # The new header, written where the grown table now sits and aimed at the
-    # blocks where the extended tail now holds them.
+    # template's blocks wherever the relayout put them -- which the rebuilt
+    # model states outright, so nothing has to be mapped by hand.
+    rebuilt = read_model(bytes(out))
+    moved_source = rebuilt.meshes[template]
     header = landed[headers] + MESH_HEADER_SIZE * len(model.meshes)
-    base = landed[pool[0]] + at_in_tail
     struct.pack_into("<2h", out, header + 0x08,
                      source.face_count_header, source.format)
     struct.pack_into("<2h", out, header + 0x0C, source.unk13, source.unk14)
-    for field, was in ((0x10, source.ptr_bounds), (0x14, source.ptr_strips),
-                       (0x18, source.ptr_uv_index), (0x1C, source.ptr_texture),
-                       (0x20, source.ptr_colour_index), (0x24, source.ptr_end)):
+    for field, target in ((0x10, moved_source.ptr_bounds),
+                          (0x14, moved_source.ptr_strips),
+                          (0x18, moved_source.ptr_uv_index),
+                          (0x1C, moved_source.ptr_texture),
+                          (0x20, moved_source.ptr_colour_index),
+                          (0x24, moved_source.ptr_end),
+                          (0x28, moved_source.ptr_normals)):
+        if field == 0x28 and not source.ptr_normals:
+            continue
         at = header + field
-        struct.pack_into("<i", out, at, base + (was - low) - at)
+        struct.pack_into("<i", out, at, target - at)
 
     # The slot has to be inside the image the game loads, and for a model with
     # no clips `i32@0x50` and `T(0x44)` state that end together (§2.1).

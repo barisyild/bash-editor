@@ -952,6 +952,21 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
             model = read_model(model_data)
             clips = read_animations(model_data, model)
 
+    # §2.1's order applies to adding a slot exactly as it does to filling one:
+    # the blobs come off *first*. `append_mesh` grows the geometry up to the
+    # layout boundary and a clip blob sits immediately past it, so appending
+    # with the animation still in place writes the new blocks across it --
+    # `intro_logo`'s single blob starts at 0x10000 and the appended blocks ended
+    # at 0x10098, so the strip below cut the new slot straight off again and
+    # `install_meshes` was handed a mesh the model no longer had. A model with
+    # no clips at all cannot show this, which is why `intro_eurocom` -- 0 clips
+    # -- added a mesh and ran while every model with one refused.
+    stripped = False
+    if request.new_meshes:
+        model_data = MW.strip_animation(model_data, clips)
+        model = read_model(model_data)
+        stripped = True
+
     for payload in request.new_meshes:
         # The slot first, then the geometry into it, then the node that draws
         # it. Each step is one this module already does; what was missing was
@@ -960,13 +975,14 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         # the end of the file, so anything appended after them would be cut off
         # from the region that carries the shot when the blocks claim one of
         # their own.
+        # `clips` is the list read before the strip and stays that list: the
+        # directory at `T(0x44)` survives, so it still describes every clip, and
+        # re-reading it here would hand back blob starts the strip has cut.
         index = len(model.meshes)
         model_data = SW.append_prop(model_data, model, clips, index)
         model = read_model(model_data)
-        clips = read_animations(model_data, model)
         model_data = MOW.append_mesh(model_data, model)
         model = read_model(model_data)
-        clips = read_animations(model_data, model)
         request.meshes[index] = payload
         report.warnings.append(
             f"mesh {index} is new: the model now has {len(model.meshes)} where "
@@ -1024,7 +1040,10 @@ def import_payload(model_data: bytes, pack_data: bytes | None,
         return report
 
     # --- geometry ------------------------------------------------------
-    trimmed = MW.strip_animation(model_data, clips)
+    # Already lifted off above when a mesh was added; cutting again would take
+    # that mesh's blocks with it, since the clips still state where their blobs
+    # were before the append moved everything on.
+    trimmed = model_data if stripped else MW.strip_animation(model_data, clips)
     staged: dict[int, MW.NewMesh] = {}
     # `rebuild_all` puts every mesh through the writer even when the source did
     # not change it. Nothing in the app wants that -- it costs colour entries

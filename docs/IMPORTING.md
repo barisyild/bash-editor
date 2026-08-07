@@ -528,6 +528,38 @@ byte-identical, the model goes 44,764 → 54,312 bytes with `i32@0x54` 28 → 29
 and all 28 shipped meshes return identical over 1588 triangles. So a cutscene
 takes a new object as a level takes a new placement — both are on hardware now.
 
+**And the artist's own path reaches it.** `out/crashbash-eurocom-cortex-added2.bin`
+puts `chars/warp/cortex` into the same intro through the add-on's *Add Selected
+Mesh*, and he stands there at the scale of the logo's letters while they drop
+around him. That one disc carries a model borrowed across packs, its seven
+textures appended (19 → 26, swatch moved to 25, nothing repainted), a 29th mesh
+and the node drawing it — with the 28 shipped meshes identical under
+`payload_bag`. `read_scene` fills `ImportRequest.new_meshes` from any object in
+the collection that is marked on-stage and names no mesh of the model, and the
+core takes it from there: **the animation comes off first** (§2.1's order holds
+for adding a slot exactly as for filling one — `append_mesh` grows the geometry
+up to the layout boundary and a clip blob sits immediately past it), then
+`append_prop`, then `append_mesh`. An added mesh is also the one case where the
+**object's transform is baked into the geometry** — nothing in the file places it
+yet, so where the artist put it is the only statement there is.
+
+**A new slot is a header, not a copy of the blocks.** `append_mesh` grows the
+header table and points the newcomer at the template's own blocks, which is what
+the shipped files do anyway — `balls_crash/crystalarena` puts five pool-mesh
+headers over one block set — and `install_meshes` gives the slot blocks of its
+own straight afterwards. Copying them instead meant finding a region for the
+copy, and "the region ending at the layout boundary" is the vector pool *only
+when the pool is not empty*: `intro_logo`'s is, so the copy landed in the UV
+table's region, which the rebuild is already rewriting, and the layout writer
+refused the whole file. Every added mesh took the appending fallback that way,
+and that path moves the tail while repointing only `0x44` and `0x50` — so
+`model+0x4C`'s root array was left naming where the root used to be and the
+**cutscene lost its shot**. Nothing else saw it: the mesh count, the clip count,
+every shipped triangle and the disc's 992/992 verification all passed.
+Measured over the archive, **60 of the 64 cutscenes now take a new mesh** with
+scene, clips and every shipped mesh intact; the four refusals are the `data*`
+models, which state no prop whose node shape could be copied.
+
 The rest of the shot **plays** rather than merely travelling. *Bake Shot
 Preview* keys every actor and prop along its track, opens and closes each node's
 window, drives each actor's clip from the shot's clock rather than the clip's

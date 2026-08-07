@@ -923,6 +923,59 @@ is the file itself and holds for both.
   identical.
   So `scene.mesh_indices` bounds what the shot draws and nothing more. Before
   taking a slot, look at what is in it.
+- **A new slot is a header, not a copy of the blocks — and getting that wrong
+  cost the shot on every cutscene with a clip.** `append_mesh` used to copy the
+  template's blocks and needed somewhere to put them, so it took "the region
+  ending at the layout boundary". That is the vector pool *only when the pool is
+  not empty*: `intro_logo`'s is, so the copy landed in the **UV table's** region
+  — and `_install_relaid` refuses a region it is already rewriting. **Every**
+  added mesh in the archive therefore fell back to the appending path, which
+  moves the tail and repoints only `0x44` and `0x50`, leaving `model+0x4C`'s
+  root array naming where the root used to be. `intro_logo` came back with a
+  child count of **2,691,088** at an offset that still resolved inside the file:
+  the shot simply ceased to exist. `intro_eurocom` has **0 clips**, so its tail
+  never moved — which is the only reason the M and the first Cortex ran.
+  The header now aims at the template's own blocks, which is what the shipped
+  files do anyway (`balls_crash/crystalarena` puts five pool-mesh headers over
+  one block set), and `install_meshes` gives the slot blocks of its own. The
+  relaid path then owns the file: `intro_logo` is **106,534 bytes against the
+  141,644** the appending path wrote, 5160 over shipped. Measured over the
+  archive, **60 of 64 cutscenes take a new mesh with mesh count, clip count,
+  scene and every shipped mesh intact**; the 4 refusals are the `data*` models,
+  which state no prop to copy.
+  Two repairs went in beside it, both for pointers that cross a move:
+  `modelwrite._repoint_roots` rewrites each root array entry on the relaid path,
+  and `_rejoin_tail` now shifts every self-relative header field naming the tail
+  rather than only `0x44`.
+- **Only reading the scene back sees a lost shot.** Mesh count, clip count,
+  every triangle of every shipped mesh, the placements and the disc's own
+  992/992 verification all passed on a file whose cutscene had no nodes left.
+  A check that adds a mesh has to read `scene.read_scene` on the result and
+  compare the prop count, or it is measuring everything except the thing the
+  edit was for.
+- **A probe that stages a mesh and no clip freezes that clip, and it is the
+  probe that is wrong.** Rebuilding a mesh whose clip the request says nothing
+  about takes the resting path, so `intro_logo`'s 199-frame clip came back on
+  one pose — pool 639 → 112, every frame drawing the last one. Through the
+  add-on it is 199/199 frames identical and the pool is 639 either way, because
+  the exporter reads the clips off the shape keys and hands them over. Compare a
+  clip over its **drawn triangles at 8.8 precision** (`pose / GTE_SCALE_SMALL`,
+  as `blender/roundtrip.py` does); comparing model units rounds a frozen clip
+  and a live one closer together, not further apart.
+- **An added mesh is placed by its object transform; every other mesh is not.**
+  The importer stands each mesh at the origin and what draws it — a node's keys
+  in a cutscene, a placement record in a level — puts it where it goes, so
+  reading an object's transform would move it twice. A mesh being *added* has
+  no such record until the file is written, so the object is the only statement
+  of where it goes, and `read_mesh(place=True)` bakes it in. Without that the
+  panel's "move it to place it" is a lie: the object moves and nothing in the
+  file changes.
+- **The gesture is the destination active, the newcomer merely selected.**
+  `_target` reads the model from whatever the *active* object belongs to, so
+  *Add Selected Mesh* follows *Borrow Selected Mesh* exactly — select what is
+  coming in, shift-select any mesh of the model it joins. With the newcomer
+  active, a second imported model resolves as the destination and the edit
+  lands in the wrong file, which is not something any later check would catch.
 - **Pick a discriminator that cannot be misread.** Two eliminations in the
   session that found the key id were wrong, and both failed the same way.
   Swapping one letter of the logo for another moves nothing on screen, because
@@ -984,6 +1037,24 @@ and its pack, at its own size with only `u32@0x14` following the resident end.
 All **28 shipped meshes come back identical** over 1588 triangles.
 So both halves of a cutscene edit have now been to a console: changing what a
 node holds, and adding one.
+
+**And a whole borrowed character, authored in Blender.**
+`out/crashbash-eurocom-cortex-added2.bin` runs: `chars/warp/cortex` stands in
+the Eurocom intro at the scale of its own letters, drawn by a prop node of his
+own, and the logo drops around him. Everything about that disc came out of the
+add-on's *Add Selected Mesh* — there is no probe script behind it — and four
+things are shown at once that were separate before: a model **borrowed across
+packs into a cutscene**, its **seven textures appended** (19 → 26, the swatch
+correctly moved to 25 and nothing repainted), a **new mesh** (28 → 29) and the
+**node that draws it** (13 of 13 keys naming `0x201d`). Read back out of the
+disc, 990 of 992 entries are byte-identical and the 28 shipped meshes return
+identical under `payload_bag` — position, colours, UVs and the texture entry,
+canonical under rotation and not under reversal, so the facing survived too.
+Adding a mesh forces the whole-model rebuild (44,764 → 83,280 bytes, colours
+1162 → 1587 renumbered from entry 0), which is the layout this model was already
+confirmed on.
+So texture *appending* is now confirmed on two discs and in two packs, a level's
+and a cutscene's.
 
 **The Blender path has reached hardware.** `out/crashbash-eurocom-burst.bin`
 runs: the intro's first emitter edited in Blender and exported through the
