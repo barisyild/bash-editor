@@ -201,6 +201,10 @@ of those failures is visible in the file: the meshes, the clip and the disc all
 verified clean every time. Where something ends up is a question only the shot
 can answer, and it answers it in seconds.
 
+The disc that came out right is `out/crashbash-logo-cortex5.bin` — Cortex on the
+temple floor beside Aku Aku, placed this way and checked through the camera
+first.
+
 The other thing worth knowing is that a prop's **keys are what name the mesh**,
 a fact that cost two discs (`docs/FORMAT.md` §9.11.11): a node whose keys still
 name the template draws the template, standing exactly where the template

@@ -440,6 +440,8 @@ They are not style preferences.
   end with nowhere to put it needs. Lay it out as the winding is laid out — a
   run's first two entries end no triangle, and marking them too came back with
   246 entries where the file has 150.
+  **Confirmed on hardware**: `out/crashbash-logo-cortex5.bin` draws the feathers
+  again from the angle that culled them.
 - **A triangle's semi-transparency is in the colour index, not the colour.**
   Bits 13–15 of the `u16` are the GPU's blend: bit 15 turns it on and 13–14
   pick the ABR mode (§6.3), and 42,969 of the archive's 363,251 triangles carry
@@ -1078,7 +1080,13 @@ saying it only happened from certain perspectives, which is a sentence about
 draw-time state and therefore about a flag.
 `native_roundtrip` now carries a **two-sided** column, keyed per face rather
 than counted — a bare count cannot tell a permutation from a fix — and the whole
-corpus reproduces it: 350,876 of 350,876.
+corpus reproduces it: 350,876 of 350,876. The feathers draw again on
+`out/crashbash-logo-cortex5.bin`.
+The general lesson is not about this bit. It is that **"only from certain
+angles" is a sentence about draw-time state**, and this project's static
+comparisons are blind to all of it by construction — the blend mode, the strip
+flag and now the facing bit were each found that way, each after a disc, each
+while every measure said the file was identical.
 
 **A cutscene takes something that was not in it.**
 `out/crashbash-eurocom-addprop.bin` runs: `intro_eurocom` with a **29th mesh**
@@ -1125,6 +1133,21 @@ Read back before building: 10 of 10 shipped meshes identical, the clip 199/199
 frames drawing identically with its pose pool unchanged at 639, textures 55 →
 62 with the swatch at 61, `props` 9 → 10 and the new node's 2 of 2 keys naming
 `0x200b`. On screen Cortex is there and the intro plays.
+
+**`out/crashbash-logo-cortex5.bin` is the one that got it right, and it settles
+three things at once.** Cortex stands on the temple floor beside Aku Aku, at the
+scale of the shot's own props — so a **composed** placement works: each key is
+`template_key · placement`, and he rides the fly-in instead of being nailed to
+the root frame while the temple sweeps past, which is what the two discs before
+it did and what read as "he is not drawn". **Aku Aku's feathers are back**, so
+vertex flag bit 1 is carried and a double-sided face draws from both sides
+again. And the whole thing was placed by baking the shot in Blender and looking
+through the camera before the disc was built, which is now how a placement is
+decided.
+That fix had no console behind it until this disc: the corpus reproduces all
+350,876 faces' two-sidedness, but reproducing what shipped is not the same as
+drawing right, and a preview cannot tell — Blender culls a one-sided face
+exactly as the console does, so it agreed with the broken file throughout.
 
 **The Blender path has reached hardware.** `out/crashbash-eurocom-burst.bin`
 runs: the intro's first emitter edited in Blender and exported through the

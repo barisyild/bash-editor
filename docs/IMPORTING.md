@@ -456,7 +456,9 @@ Nothing in a payload carried the bit, so nothing could compare it; and a preview
 agrees with the broken file, because Blender culls a one-sided face exactly as
 the console does. `NewMesh.double_sided` states it per face and
 `_restore_double_sided` recovers it by corner position, exactly as the blend
-mode is handled. `tools/native_roundtrip.py` measures it per face now.
+mode is handled. `tools/native_roundtrip.py` measures it per face now, and the
+corpus reproduces every one — 350,876 of 350,876. `out/crashbash-logo-cortex5.bin`
+runs and draws the feathers again from the angle that culled them.
 
 Two others were losses until they were measured. The **blend mode** is the
 serious one: 42,969 of the archive's 363,251 triangles carry it, and a rebuild
