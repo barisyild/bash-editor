@@ -416,13 +416,25 @@ def append_mesh(data: bytes, model: Model | None = None,
     regions = plan(data, model)
     headers = MESH_HEADER_START
     table = next((r for r in regions if r[0] == headers), None)
-    tail = max(regions, key=lambda r: r[0])
-    if table is None or tail[0] <= headers:
+    if table is None:
         raise ValueError("this model's header table is not a region of its own")
+    # The blocks go inside the layout boundary, not past the end of the file.
+    # §2.1: every mesh block sits inside the span `model+0x08` names, and
+    # `CLAUDE.md`'s other half says growing `i32@0x50` does not make bytes past
+    # the shipped resident image present at run time. Appended past everything
+    # the slot was perfectly formed and drew nothing at all.
+    #
+    # So they extend the vector pool, whose region ends exactly at `T(0x08)` --
+    # and because `moved` answers a one-past-the-end pointer with the region's
+    # new end, the boundary grows over them by itself.
+    boundary = 0x08 + struct.unpack_from("<i", data, 0x08)[0]
+    pool = next((r for r in regions if r[1] == boundary), None)
+    if pool is None:
+        raise ValueError("no region of this model ends at its layout boundary")
 
     grown = bytearray(data[table[0]:table[1]])
     grown.extend(b"\x00" * MESH_HEADER_SIZE)
-    extended = bytearray(data[tail[0]:tail[1]])
+    extended = bytearray(data[pool[0]:pool[1]])
     if len(extended) % 4:
         extended.extend(b"\x00" * (4 - len(extended) % 4))
     at_in_tail = len(extended)
@@ -430,14 +442,14 @@ def append_mesh(data: bytes, model: Model | None = None,
 
     landed: dict[int, int] = {}
     out = bytearray(relayout(data, model,
-                             {table[0]: bytes(grown), tail[0]: bytes(extended)},
+                             {table[0]: bytes(grown), pool[0]: bytes(extended)},
                              landed))
     struct.pack_into("<i", out, MESH_COUNT, len(model.meshes) + 1)
 
     # The new header, written where the grown table now sits and aimed at the
     # blocks where the extended tail now holds them.
     header = landed[headers] + MESH_HEADER_SIZE * len(model.meshes)
-    base = landed[tail[0]] + at_in_tail
+    base = landed[pool[0]] + at_in_tail
     struct.pack_into("<2h", out, header + 0x08,
                      source.face_count_header, source.format)
     struct.pack_into("<2h", out, header + 0x0C, source.unk13, source.unk14)

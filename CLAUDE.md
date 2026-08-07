@@ -232,6 +232,30 @@ They are not style preferences.
   `build_clips` zeroes each key as it makes it. A model brought in to be
   borrowed rather than animated should still have its keys cleared, which
   *Borrow Selected Mesh* does.
+- **A prop node's `+0x14` does not decide what a cutscene draws, and a mesh
+  added to one is not drawn at all.** Adding to a *level* works and is on
+  hardware — §8.5's placement list is what draws there, and the 82nd record,
+  three authored objects and a borrowed penguin all run. A cutscene does not
+  go through that, and it does not go through the prop's mesh id either:
+  `intro_eurocom`'s prop 1 was re-aimed from mesh 1 (102 faces, a letter) to
+  mesh 19 (4 faces) — **one word, `0x81a4`, the file otherwise byte-identical
+  and 992/992 verified on the disc** — and the letter stayed exactly where it
+  was. So the reader's picture of §9.11 is self-consistent and the game draws
+  from something else: §9.11.8's untraced path, the same one that draws meshes
+  10 and 11.
+  Everything on the file side of adding a mesh is finished and measured:
+  `modelwrite.append_mesh` grows the header table like any other region, the
+  new blocks go **inside `model+0x08`'s boundary** (appended past it the slot
+  was perfectly formed and drew nothing, which is §2.1 and the resident rule
+  both saying the same thing), `i32@0x54` reaches 29, and the game's own
+  arithmetic `52 x 29 + 36` lands on the new header. All 28 shipped meshes come
+  back identical. What is missing is only the thing that would ask for it to be
+  drawn.
+  Two of this session's eliminations were wrong before this control was run,
+  and both failed the same way -- a discriminator that could be missed. Swapping
+  one letter for another moves nothing on screen, because each letter's
+  geometry sits at its own origin and the prop's keys place it. Pick a change
+  that cannot be misread.
 - **A mesh no scene node names is not a spare slot — the shot is not the whole
   of what draws.** `scene.mesh_indices` says `intro_eurocom` draws 26 of its 28
   meshes, and 10 and 11 look free. They are not: mesh 10 is a **13127 x 13346 x
