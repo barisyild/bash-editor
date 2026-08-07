@@ -963,18 +963,34 @@ is the file itself and holds for both.
   as `blender/roundtrip.py` does); comparing model units rounds a frozen clip
   and a live one closer together, not further apart.
 - **An added mesh's transform belongs in its node's keys, never in its
-  vertices.** A prop is placed by the key covering the tick and by nothing
-  else, so a node copied from a template puts the newcomer exactly where the
-  template stands, at its facing and its size — and geometry moved in Blender
-  to compensate gets that transform applied *on top* of it. Cortex added to
-  `intro_logo` with the transform baked in came back **up at the ceiling, on
-  his side**: prop 0's key is (−2.6, −2.6, −85.3) with a 0.85-axis quaternion
-  and scale 0.24, and the model frame permutes the axes besides, so the height
-  set in Blender arrived as depth. `build_scene.track_key` decomposes the
-  object's matrix through the same basis change a key is read with, and
-  `append_prop(placement=...)` writes it into every copied key. What still
-  travels from the template is the *timing* — tick and duration — which is the
-  shape being borrowed.
+  vertices — and it is *composed onto* the template's track, not written over
+  it.** A prop is placed by the key covering the tick and by nothing else, so a
+  node copied from a template puts the newcomer exactly where the template
+  stands, at its facing and its size; geometry moved in Blender to compensate
+  gets that transform applied *on top* of it. Cortex added to `intro_logo` with
+  the transform baked in came back **up at the ceiling, on his side**: prop 0's
+  key is (−2.6, −2.6, −85.3) with a 0.85-axis quaternion and scale 0.24, and
+  the model frame permutes the axes besides, so the height set in Blender
+  arrived as depth.
+  Overwriting each key instead reads as **the node not working at all**, which
+  cost two more discs. `intro_logo`'s template track is the whole scene flying
+  in — from that key to (−1.29, 3.87, −103.4) at scale 1.0 over 256 ticks — so
+  one static transform nailed Cortex to the root frame while the temple swept
+  past him and grew. By the tick the camera is close he was 18 units behind the
+  room's centre, off the side of everything, and the report was "he does not
+  appear", at any size.
+  So `append_prop(placement=...)` composes: each key becomes
+  `template_key · placement`, and an identity placement reproduces the old
+  behaviour exactly. What the artist states is therefore a transform **in the
+  template's own frame** — which is the frame the imported meshes already sit
+  in, so placing the newcomer beside them in Blender is placing it in the shot.
+  `build_scene.track_key` decomposes the object's matrix through the same basis
+  change a key is read with. Only the *timing* still travels verbatim.
+- **Bake the shot and look through the camera before building a disc.** Every
+  file-level check passed on all three of those builds — 10/10 shipped meshes
+  identical, the clip 199/199 frames, 992/992 verified — because none of them
+  is a question about *where*. `bake_shot` plus the camera view answers it in
+  seconds and would have caught the fly-in on the first one.
 - **The gesture is the destination active, the newcomer merely selected.**
   `_target` reads the model from whatever the *active* object belongs to, so
   *Add Selected Mesh* follows *Borrow Selected Mesh* exactly — select what is

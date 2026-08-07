@@ -182,17 +182,24 @@ and *not* under reversal, so the facing is intact too.
 
 **Move the object to place it, and the transform goes into the node's keys.**
 That is where a prop is placed from — the key covering the tick, read every tick
-— so position, rotation and scale all travel, and the geometry stays in its own
-frame. Only the *timing* comes from the template, because the node is copied
-from a prop the shot already has.
+— so position, rotation and scale all travel and the geometry stays in its own
+frame. It is **composed onto** the template's track rather than replacing it, so
+the newcomer rides whatever that prop does; what you are stating is where it
+sits *within* the template's frame, which is the frame the imported meshes are
+already displayed in. Put it beside them in the viewport and that is where it
+goes. Only the *timing* comes from the template.
 
-Getting that wrong is visible and was: with the transform baked into the
-vertices instead, the node still applied its own on top, and Cortex arrived at
-the ceiling of the intro's temple lying on his side — `intro_logo`'s prop 0 sits
-at (−2.6, −2.6, −85.3) with a 0.85-axis quaternion and scale 0.24, and the model
-frame permutes the axes besides, so the height set in Blender came back as
-depth. Placed through the keys he stands on the floor at a drawn height of 0.60,
-which is exactly what the shot's own character-sized prop measures.
+Both halves of that cost a disc. Baked into the vertices instead, the node still
+applied its own transform on top and Cortex arrived at the ceiling of the
+intro's temple lying on his side. Written over the keys instead, he stopped
+appearing at all — `intro_logo`'s template track is the whole scene flying in
+toward the camera, and one static transform left him nailed in place while the
+temple swept past and grew past him.
+
+**Bake Shot Preview and look through the camera before you build a disc.** None
+of those failures is visible in the file: the meshes, the clip and the disc all
+verified clean every time. Where something ends up is a question only the shot
+can answer, and it answers it in seconds.
 
 The other thing worth knowing is that a prop's **keys are what name the mesh**,
 a fact that cost two discs (`docs/FORMAT.md` §9.11.11): a node whose keys still

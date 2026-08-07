@@ -475,17 +475,28 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
     file's to state. What travels unchanged is the *timing* -- each key's tick
     and duration -- because that is the shape being borrowed.
 
-    **`placement` is what stops it being a copy of where the template stands.**
-    Without it the newcomer inherits the template's position, quaternion and
-    scale, and a prop is placed by its keys and nothing else: Cortex added to
-    `intro_logo` took prop 0's key verbatim -- (-2.6, -2.6, -85.3), a 0.85-axis
-    quaternion and scale 0.24 -- and drew up at the ceiling, tilted onto his
-    side, at whatever size that scale made him. Baking the artist's transform
-    into the vertices instead does not help: the node still applies its own on
-    top, and the model frame permutes the axes, so what was set as height in
-    Blender came back as depth. Given `{"position", "rotation", "scale"}` in the
-    model's own frame -- rotation as x, y, z, w -- every copied key is written
-    with it, so the prop stands where it was put, facing where it was faced.
+    **`placement` is composed onto each key, never written over it.** A prop is
+    placed by its keys and by nothing else, so the newcomer inherits the
+    template's position, quaternion and scale unless something is done about it
+    -- Cortex added to `intro_logo` took prop 0's key verbatim and drew up at
+    the ceiling, tilted onto his side. Baking the artist's transform into the
+    vertices instead does not help: the node still applies its own on top, and
+    the model frame permutes the axes, so what was set as height in Blender came
+    back as depth.
+
+    Overwriting each key is worse still, and looks like the node not working at
+    all. `intro_logo`'s template track is the whole scene **flying in**: from
+    (-2.6, -2.6, -85.3) at scale 0.238 to (-1.29, 3.87, -103.4) at scale 1.0
+    over 256 ticks. Written with one static transform, Cortex stayed nailed to
+    the root frame while the temple swept past him and grew -- by the tick the
+    camera is close he was 18 units behind the room's centre and off the side of
+    everything. Two discs read as "he is not drawn".
+
+    So the placement is a transform **in the template's own frame**: each key
+    becomes `template_key . placement`, and the newcomer rides whatever the
+    template does while sitting where it was put inside that. An identity
+    placement reproduces the old behaviour exactly. `{"position", "rotation",
+    "scale"}`, rotation as x, y, z, w.
 
     **The id has to be written into every key as well as into the node.** A prop
     does not draw what `node+0x14` names -- 0x8001EDAC reloads the id from the
@@ -535,15 +546,28 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
         struct.pack_into("<i", tail, at + PROP_KEY_ID, ident)
         if placement is None:
             continue
-        for field, offset, one in (("position", position_at,
-                                    1.0 / GTE_SCALE_SMALL),
-                                   ("rotation", rotation_at, QUATERNION_ONE),
-                                   ("scale", scale_at, QUATERNION_ONE)):
-            values = placement.get(field)
-            if values is None:
-                continue
+        # `template . placement`, read out of the key this one was copied from.
+        base_p = np.array([struct.unpack_from("<i", tail, at + position_at + 4 * i)[0]
+                           * GTE_SCALE_SMALL for i in range(3)])
+        base_q = np.array([struct.unpack_from("<i", tail, at + rotation_at + 4 * i)[0]
+                           / QUATERNION_ONE for i in range(4)])
+        base_s = np.array([struct.unpack_from("<i", tail, at + scale_at + 4 * i)[0]
+                           / QUATERNION_ONE for i in range(3)])
+        add_p = np.asarray(placement.get("position") or (0.0, 0.0, 0.0),
+                           dtype=np.float64)
+        add_q = np.asarray(placement.get("rotation") or (0.0, 0.0, 0.0, 1.0),
+                           dtype=np.float64)
+        add_s = np.asarray(placement.get("scale") or (1.0, 1.0, 1.0),
+                           dtype=np.float64)
+        position = base_p + rotation_matrix(base_q) @ (base_s * add_p)
+        rotation = _multiply(base_q, add_q)
+        scale = base_s * add_s
+        for values, offset, one in ((position, position_at,
+                                     1.0 / GTE_SCALE_SMALL),
+                                    (rotation, rotation_at, QUATERNION_ONE),
+                                    (scale, scale_at, QUATERNION_ONE)):
             for axis, value in enumerate(values):
-                _put_i32(tail, at + offset + 4 * axis, _fixed(value, one))
+                _put_i32(tail, at + offset + 4 * axis, _fixed(float(value), one))
 
     align(tail)
     root_at = len(tail)
