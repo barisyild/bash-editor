@@ -3254,9 +3254,11 @@ walks its own stride:
 8001F1FC  addiu $a1, $a1, 0x4c    ; type 3, keys from node+0x30
 ```
 
-A prop names its mesh outright. The id at node+0x14 sits in the **0x2000** namespace, which
-the dispatcher at 0x80015A48 resolves as `52 * id + 0x24` from the model base — the mesh
-header stride, 1-based — so `0x2000 | n` addresses mesh `n - 1`.
+A prop names its mesh outright. The id sits in the **0x2000** namespace, which the dispatcher
+at 0x80015A48 resolves as `52 * id + 0x24` from the model base — the mesh header stride,
+1-based — so `0x2000 | n` addresses mesh `n - 1`. It is stated twice, at `node+0x14` and again
+in **every key at +0x08**, and the copy the game draws from is the key's: see §9.11.11, which
+is where an edit has to write it.
 
 **Every key carries a scale**, three components in the rotation's own 4096 = 1.0 fixed point,
 at `key+0x3C` for an actor and `key+0x40` for a prop, and the handlers interpolate it between
@@ -3455,6 +3457,9 @@ model's mesh list:
 80019F7C  beqz $s2, 0x8001a0bc  ;   names nothing -> draws nothing
 80019F8C  andi $v0, $v0, 0x8000 ; and the visibility bit, as ever
 ```
+
+Which field of the node that id comes from is not the same for all three, and for a prop it is
+not a field of the node at all — see §9.11.11.
 
 So **a mesh no node owns is not in the shot**. `level_intro_crashplain` carries three Crash
 meshes — 0, 3 and 9, all with the same 2.4 × 2.0 × 0.9 extent — and its graph spawns one:
@@ -3916,6 +3921,60 @@ The +0x04 column is the per-tick handler this document already decodes for three
 +0x00 is the constructor the spawner calls. **The corpus agrees that six is all there is**:
 walking every root of every model finds 3333 nodes and not one whose type field falls outside
 0..5.
+
+### 9.11.11 A prop draws the id in its **key**, not the one in its node — **certain**
+
+Three node types draw, and each names its mesh somewhere else. The prop's is the one that
+surprises, because it is read again on every tick of the shot rather than once at spawn:
+
+| Type | Where the drawn id comes from | Read | Site |
+| --- | --- | --- | --- |
+| 0 prop | **`key+0x08`** of the key covering this tick | every tick | 0x8001EDAC |
+| 3 actor | `node+0x14` + `node+0x18` (§9.11.2) | at spawn | 0x8001F300 |
+| 1 emitter | `node+0x3C` | at spawn | 0x800216A4 |
+
+The prop's per-tick handler ends by copying the key's halfword into the entity slot the draw
+dispatches on, and the draw asks for exactly that slot:
+
+```
+8001EDAC  lhu   $v0, 8($s5)      ; s5 = the key whose window holds this tick
+8001EDB0  j     0x8001edcc
+8001EDB4  sh    $v0, 0x74($s6)   ;   -> entity+0x7C   (s6 = entity + 8)
+
+80019F44  lhu   $a2, 0x74($s0)   ; and 0x80019F1C draws whatever that names
+80019F7C  beqz  $s2, 0x8001a0bc  ;   zero -> nothing is drawn
+```
+
+`node+0x14` is not read on this path at all. The constructor at 0x80021A1C writes **zero** into
+the id slot (`8001EDB4`'s target, `sh $zero, 0x74($a3)`), so until the first tick a prop names
+nothing; the handler fills it from the key and refills it from each following key.
+
+**The corpus cannot tell the two fields apart.** `key+0x08 == node+0x14` in **11,382 of 11,382**
+prop keys across the archive, and no prop's keys disagree among themselves, so no shipped shot
+changes a prop's mesh part-way through. The field is a signed i32: 11,345 keys hold a 0x2000
+id and the other 37 hold −1, in four models that park a prop on nothing.
+
+An **edit** tells them apart at once, and two discs paid for the lesson:
+
+* `out/crashbash-eurocom-control2.bin` re-aimed `intro_eurocom`'s prop 1 from mesh 1 (a
+  102-face letter) to mesh 19 (4 faces) by writing `node+0x14` — one word, the file otherwise
+  byte-identical, 992/992 verified — and **the letter did not move**. That was read as "a prop's
+  mesh id is not what a cutscene draws from", which was half right: it is not what *that field*
+  draws from.
+* A node copied from another prop keeps the template's keys, so it keeps the template's id.
+  Adding a node that way produces a second copy of the template standing exactly where the
+  template already stands — perfectly formed, and invisible. That is what "the cutscene draws
+  nothing new" was.
+
+So `scenewrite.append_prop` writes the id into `node+0x14` **and** into every key it copies,
+and `scene.read_scene` reads a prop's mesh from key 0 rather than from the node. Reading it
+the game's way changes nothing about the shipped archive — 1209 props and 177 actors either
+way — and everything about what a written file means.
+
+The two key records are also different shapes, which is why this hid: an actor's key has its
+**position** at +0x08 (§9.11 table, stride 0x4C) where a prop's has the id (stride 0x50). The
+halfword above the prop's id, `key+0x0A`, is 0 in all 11,345 and 0xFFFF in the 37 — the sign of
+the i32, nothing of its own.
 
 ## 9.12 The 20-byte rows two cutscenes put before the clip table
 
@@ -4414,6 +4473,66 @@ triangle that is degenerate in the static pool is pulled apart by some frame —
 them in a single frame. A reader may drop degenerate triangles for display, but it must not
 drop them from the *arrays*, and a viewer that culls them once against the static pose will
 punch holes in the animation.
+
+## 11.5 The two draw paths: a level's placements against a cutscene's nodes
+
+Everything above describes what a mesh *is*. This section is about what asks for one to be
+drawn, because the archive holds two entirely separate answers and an edit that works on one
+does nothing on the other. Both funnel into the same by-id renderer at 0x80019A60, and they
+share nothing above it.
+
+**The level path — §8.5's placement list.** A sub-object's record array is walked into runtime
+objects and each object draws by the id its record carries:
+
+```
+8001DE28  lw   $v0, 0x18($v1)   ; model+0x18, the sub-object table
+8001DE90  ctx+0x14 = record + [record+0x20] + 0x20   ; §8.5's 160-byte records
+8001DE9C  ctx+0x18 = [record+0x1C]                   ; how many
+8001D6B4                          ; -> one 0xA8-byte object per record,
+                                  ;    source +0x88 -> object +0x74
+8001DD90  lhu  $a0, 0x74($s1)   ; and the draw reads that id
+8001DD98  jal  0x80019a60
+```
+
+**The cutscene path — §9.11's node graph.** The spawner walks a root's children, dispatches
+each through the 16-byte row its type word indexes (§9.11.9), and the per-tick handler fills
+the entity's id slot from wherever that type keeps it (§9.11.11):
+
+```
+8001FFFC  lw   $v0, ($a0)       ; the child's type
+80020004  sll  $v0, $v0, 4      ;   -> its row in 0x80058B00
+8001EDB4  sh   $v0, 0x74($s6)   ; prop:    entity+0x7C from key+0x08, every tick
+8001F310  sh   $v0, 0x74($s6)   ; actor:   from node+0x14 + node+0x18, at spawn
+800216B0  sh   $v0, 0x74($v1)   ; emitter: from node+0x3C, at spawn
+80019F44  lhu  $a2, 0x74($s0)   ; and 0x80019F1C draws that
+```
+
+**Neither path can stand in for the other, and the corpus says which models have which.**
+Counting the sub-object record array against the spawnable node graph over all 399 models:
+
+| Group | placements | nodes | models |
+| --- | --- | --- | --- |
+| cutscene | **no** | yes | **64** |
+| warp rooms, demo hubs | yes | yes | 7 |
+| arena | yes / no | yes / no | 43 + 43 + 21 + 19 |
+| chars, fonts, loading | no | no | 146 |
+
+**All 64 cutscenes declare no sub-objects at all**, and 0x8001DE18 reaches the placement array
+only by indexing `T(0x18)+4+4*i` — with a count of zero there is no entry to dereference, so
+that path cannot run in a cutscene under any circumstance. Symmetrically, a mesh a level draws
+through §8.5 needs no node, and 91 % of an arena's meshes have none.
+
+What follows for an editor:
+
+* **To add something to a level**, add a placement record (§8.5) — measured, and on hardware in
+  `out/crashbash-82nd-record.bin` and `out/crashbash-three-objects.bin`. Putting geometry in a
+  mesh slot no record names draws nothing, however correct the mesh is.
+* **To add something to a cutscene**, add a node (§9.11) — and for a prop, write the id into
+  every key (§9.11.11), not only into `node+0x14`.
+* **A mesh that neither path names may still be drawn.** `intro_eurocom`'s meshes 10 and 11 are
+  its backdrop and no node owns them; §9.11.8 is the open question of what asks for those, and
+  it is a third path, not either of these two. Before taking a slot that "nothing names", look
+  at what is in it.
 
 ---
 

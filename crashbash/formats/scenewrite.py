@@ -413,6 +413,7 @@ ROOT_CHILD_COUNT = 0x00
 ROOT_CHILDREN = SC.ROOT_CHILDREN     # 0x1C, the self-relative child pointers
 NODE_COMMAND_ID = 0x14               # 0x2000 | (mesh index + 1), for a prop
 PROP_KEYS = SC.PROP_KEYS             # 0x24, where a prop's key list begins
+PROP_KEY_ID = 0x08                   # and every key repeats the id (§9.11.11)
 
 
 def prop_span(model_data: bytes, node: int) -> int:
@@ -447,6 +448,13 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
     file's to state. Only the mesh id changes; the keys come across as they are
     and the artist moves them afterwards.
 
+    **The id has to be written into every key as well as into the node.** A prop
+    does not draw what `node+0x14` names -- 0x8001EDAC reloads the id from the
+    key covering the current tick, every tick (§9.11.11) -- and the two agree in
+    11382 of 11382 shipped keys, so copying the keys unchanged makes the new node
+    a second copy of the template rather than a new prop. That cost a disc: the
+    node was perfectly formed and drew the template's mesh on top of itself.
+
     Everything is appended to the end of the shot's own region and the root is
     re-emitted there with one more child, so nothing in front of it moves --
     which is what lets `modelwrite.relayout` carry every offset across
@@ -480,8 +488,12 @@ def append_prop(model_data: bytes, model, clips, mesh_index: int,
     align(tail)
     node_at = len(tail)
     tail.extend(model_data[node:node + span])
-    struct.pack_into("<i", tail, node_at + NODE_COMMAND_ID,
-                     SC.MESH_NAMESPACE | (mesh_index + 1))
+    ident = SC.MESH_NAMESPACE | (mesh_index + 1)
+    struct.pack_into("<i", tail, node_at + NODE_COMMAND_ID, ident)
+    for key in range((span - PROP_KEYS) // PROP_STRIDE):
+        struct.pack_into("<i", tail,
+                         node_at + PROP_KEYS + PROP_STRIDE * key + PROP_KEY_ID,
+                         ident)
 
     align(tail)
     root_at = len(tail)

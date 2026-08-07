@@ -9,9 +9,10 @@ kinds, told apart by the type word at node+0x00:
              quaternion at +0x20 and a scale at +0x3C. Its id is the one at
              node+0x14 *plus* its first played frame, and that sum lands in the
              0x4000 vertex animation namespace.
-    type 0   a prop: one mesh, named by the 0x2000 id at node+0x14, with a
-             transform track at node+0x24, stride 0x50, position at +0x0C,
-             quaternion at +0x24 and scale at +0x40
+    type 0   a prop: one mesh, named by the 0x2000 id **each of its keys**
+             carries at +0x08, with a transform track at node+0x24, stride
+             0x50, position at +0x0C, quaternion at +0x24 and scale at +0x40.
+             node+0x14 states the same id and is not what draws.
     type 5   a trigger: fires once when the clock reaches its window start and
              spawns another root -- a scene of its own, with its own clock,
              placed at the trigger's transform
@@ -41,6 +42,24 @@ The prop id is a mesh id in the 0x2000 namespace, which the dispatcher at
 0x80015A48 resolves as `52 * id + 0x24` from the model base -- the mesh header
 stride, 1-based -- so id 0x2000 | n addresses mesh n - 1.
 
+**And a prop reads that id out of its key, not out of its node.** The per-tick
+handler finds the key covering the tick and copies the key's own +0x08 into the
+entity slot the draw dispatches on, every tick:
+
+    8001EDAC  lhu   $v0, 8($s5)      ; s5 = the key covering this tick
+    8001EDB4  sh    $v0, 0x74($s6)   ;   -> entity+0x7C, what the draw names
+    80019F44  lhu   $a2, 0x74($s0)   ; and the draw asks for exactly that
+
+The two agree in **11382 of 11382** shipped prop keys and no prop changes mesh
+across its own track, so nothing in the archive distinguishes them -- but an
+edit does. Writing node+0x14 alone moves nothing on screen, which is what
+`out/crashbash-eurocom-control2.bin` showed, and a node copied with its keys
+draws the mesh it was copied from.
+
+An actor is the other way round: its id is node+0x14 + node+0x18 (above), read
+once, and its key has position at +0x08 where a prop's has the id. The two key
+records are different shapes, not one shape at two strides.
+
 **A node's window is its visibility.** Outside it the handler clears bit 15 of
 the entity's flag word (0x8001EDC8) or zeroes the word outright (0x8001F4CC),
 and the draw path tests that bit (0x80021258) before drawing. So a mesh with a
@@ -66,6 +85,11 @@ PLACEMENT_KEYS = 0x30
 PLACEMENT_STRIDE = 0x4C
 PROP_KEYS = 0x24
 PROP_STRIDE = 0x50
+# A prop key's own copy of the id its node names. The handler reloads it every
+# tick from the key covering that tick, so this -- not node+0x14 -- is what the
+# shot draws. An actor key has its position here instead; the two key layouts
+# are different records.
+PROP_KEY_ID = 0x08
 
 NODE_TYPE = 0x00
 NODE_TYPE_ACTOR = 3
@@ -1000,8 +1024,10 @@ def _read_root(data: bytes, model, clips, index: int, offset: int,
             continue
 
         if kind == NODE_TYPE_PROP:
-            mesh_index = (command & 0xFFF) - 1
-            if (command & 0x7000) != MESH_NAMESPACE:
+            # The id the game draws is the KEY's, not the node's (§9.11.11).
+            drawn = _i32(data, node + PROP_KEYS + PROP_KEY_ID)
+            mesh_index = (drawn & 0xFFF) - 1
+            if (drawn & 0x7000) != MESH_NAMESPACE:
                 continue
             if not 0 <= mesh_index < len(model.meshes):
                 continue

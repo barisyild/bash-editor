@@ -75,29 +75,6 @@ They are not style preferences.
   inserted length. Appending instead breaks both: a warp room has no clips to
   strip, so the only thing between `T(0x44)` and EOF is §8.6's block, and the
   new geometry lands inside it. `warp_room1` built that way would not load.
-- **The seven §8.6 carriers renumber their tables like anything else — as long
-  as their door previews are renumbered with them.** That is settled on
-  hardware: `out/crashbash-warp-full-rebuild.bin` rebuilds `warp_room1` in
-  full, every entry renumbered from index 0, and opens a door preview clean.
-  §2.1's ledger read a real effect and named the wrong cause: repointing
-  `T(0x24)` scrambles every textured surface in these rooms *because §8.6's
-  preview sub-blocks are meshes of this model and index those tables*, and a
-  preview is streamed in when a door opens, which is why the room is perfect
-  until then. `mdlwrite.preview_meshes` finds them, `preview_runs` gathers what
-  they name, and their triples join the same packing pass as the model's own
-  faces. The block may move too, on the sector grid, with §8.1's rows following
-  it — each row states a sub-block's start and end as **plain file offsets**,
-  streamed by `0x800163E0` / polled by `0x80016450` / released by `0x8001636C`.
-  `pin_tables` remains only for a caller that asks for it, and what it still
-  emits is the **graft layout**: the file byte-identical through its old EOF
-  except the rebuilt mesh's header and `0x08`/`0x50`, new blocks after the §8.6
-  block under a grown sector-aligned `0x50`, colours mapped to the nearest
-  existing entry, and every textured triangle needing its exact UV triple
-  already in the table. That last one is why a pinned rebuild refuses a
-  reshape: re-striping re-orders a triangle's corners, so its triple is no
-  longer in a table that cannot grow (`warp_room1`'s boxing mesh 89 lost 16 of
-  its 91 faces' triples), while a plain scale survives because it leaves the
-  corner order alone.
 - **Nothing past the shipped resident size is there at run time, and growing
   `0x50` does not change that.** `warp_room1`'s placement array was copied byte
   for byte past its old EOF with `0x50` grown to cover it and `+0x20` repointed
@@ -108,110 +85,6 @@ They are not style preferences.
   nothing ever read the bytes they appended — the graft layout is proven not to
   crash, and has never been shown to deliver data. A level edit must fit inside
   the resident image the file already has.
-- **An object-pool mesh's blocks may not leave the pool.** The pool is one
-  packed run: the next object mesh's header sits exactly four bytes past the
-  previous mesh's `ptr_end` in **1802 of 1898** consecutive pairs. Rebuilding
-  one the way a numbered mesh is rebuilt — blocks appended past the file's end,
-  header repointed — leaves a hole in that run, and `warp_room1` built that way
-  **boots to a black screen**, where the same graft on a numbered mesh boots and
-  draws. `_write_in_place` puts the blocks back inside the span the mesh already
-  owns and keeps its shipped `ptr_end` whatever the rebuild costs, so the run is
-  undisturbed; when the rebuild does not fit, it refuses rather than build that
-  disc. Fitting is not a given — this writer's striping is looser than the
-  authoring tool's, so even a reshape with the same triangle count can want more
-  room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
-  owned).
-  **The relaid layout removes the fit constraint, and `out/crashbash-oxide-tall-pool.bin`
-  runs.** It leaves no hole: the mesh's region grows where it stands, the pool
-  meshes after it slide on, `_repoint_objects` moves every object record with
-  them, and unchanged neighbours keep their exact spacing (1745/1745 pairs
-  measured). All **1964 pool meshes across the 70 level models rebuild**, none
-  refused, where `_write_in_place` refused the ones that did not fit — the glTF
-  round trip went from 49,326 level triangles to **98,960**, and 32 of its 63
-  level refusals disappeared. The disc carries `boss_oxide/arena`'s pool mesh
-  `0x500C` scaled 1.8× taller in Blender and rebuilt here: its rebuild wants
-  **2788 bytes against the 2444 it owns**, which is exactly what the old writer
-  refused, and 19 of that arena's 26 pool meshes are in the same position. On
-  screen it draws taller in all six of its placements, the room is otherwise
-  itself, and the borrowed penguin still wears its own art.
-- **A shot's emitter names its mesh by *id*, and its position is in the
-  parent's frame.** The reader reports a resolved index and a world position;
-  writing either straight back is wrong. `mesh_index` has to go back as
-  `0x2000 | (index + 1)` — writing the index instead made eight emitters vanish
-  from a shot patched with nothing changed — and a sub-scene's emitter position
-  has to have the parent frame taken off again, exactly as a track's keys do.
-- **The placement list is live data, and it is how a level's set is changed.**
-  Both fields answer to the file: taking `warp_room1`'s count from 81 to 80 —
-  one byte — draws the room with its last object gone, and repointing the array
-  at a copy inside the resident region draws exactly the records that copy
-  holds. Rewriting a record in place **adds an object to the set** — spending
-  the second of `warp_room1`'s two `0x5047` records on the green panel put a
-  second panel in the room, between the POLAR PANIC and POGO PAINTER doors, with
-  the first still at its own. Eleven bytes, nothing moved, the file the same
-  size. Five objects are placed more than once in that room, ten records in all,
-  and `placewrite.spare_records` is what names them.
-- **Growing the list is not blocked; *relocating* it is.** That distinction was
-  missed for a long time and the two were written down as one. Relocating has
-  nowhere to go — the resident region's largest run of zeros is 1325 bytes
-  against the 12,960 an 81-record array needs, and past the shipped resident
-  size nothing is loaded, which is why the array copied beyond the old EOF with
-  `0x50` grown drew nothing. But the array does not have to move. The four
-  blocks that follow it can **slide one record further on**, into the padding
-  the resident region already ends with: `warp_room1`'s `+0x14` block states a
-  count of 0, so it uses 8 of its 544 bytes and the last 536 are zero.
-  `append_placement` slides that span, stretches the sub-object's four pointers
-  by 160, and writes record 82 where the span began. The file keeps its length,
-  `i32@0x50` and `T(0x44)` keep their values, and both invariants the corpus
-  states survive: `+0x0C`'s target is still the array's end (73/73) because
-  array and block each grew by one record, and `+0x14`'s block still runs to
-  `T(0x44)` (73/73). Read back, the room holds 82 placements with all 81
-  originals byte-identical and nothing removed.
-  **`out/crashbash-82nd-record.bin` runs**, so nothing outside the span points
-  into it — which no static check could have settled, since the scan that looks
-  finds 714 four-byte words resolving there and cannot tell a pointer from a
-  vertex that lands there by chance. **`out/crashbash-three-objects.bin` runs
-  too**, and it is the one that matters: its three records were authored in
-  Blender by duplicating placements, and they spend `warp_room1`'s padding down
-  to zero. So the slide is good to the last byte the level has, not just for the
-  first record, and the room draws all 84 with its own 81 untouched.
-  **Duplicating a placement in Blender is the gesture, and it needed a fix to
-  work.** Blender copies custom properties with the object, so the copy claims
-  the same `crashbash_placement` as the original; read literally that is two
-  objects for one record, and the second overwrote the first — the obvious edit
-  moved nothing and took the original's move with it. `_claims` now gives a
-  record to one holder and makes every other claimant a new record, choosing the
-  holder as the claimant still at rest, which is the original whenever the copy
-  is the one that was dragged.
-  `spare_capacity` says how much room a level has, and it is the padding at the
-  end of its resident region divided by 160: **53 records across 8 models** —
-  all five warp rooms, both demo hubs, and Oxide's chase level at 1746 spare
-  bytes. `warp_room1` takes 3. The other 65 levels take none; an arena typically
-  ends its resident region with 6 or 18 bytes of alignment. So a level's set can
-  grow, but only into what its own file already left empty.
-- **A model from another pack can be put into a level, and the pool mesh it
-  replaces is the whole budget.** `arena/crate_snow`'s penguin now stands in
-  `warp_room1` and the disc runs. Three things had to be true at once, and each
-  is a rule of its own. The geometry has to fit **the span the pool mesh already
-  owns** (§8.3): 0x501C is the decorative arm, 444 triangles in 6592 bytes, and
-  a 116-triangle body went in with its `ptr_end` unmoved and all five block
-  pointers inside. The art cannot come with it — the penguin's slots mean other
-  pictures in the warp pack — so **fold each face's texel into its vertex colour
-  and make every face a swatch face** (§6.2) on a palette the level already has;
-  the hardware's `texel * colour / 128` then draws the baked colour, once the
-  cell's own value is divided back out of it. And a §8.6 carrier's **UV table is
-  pinned**, so every triangle needs a triple already in it: the room's own mesh 1
-  puts all 662 of its swatch faces on one triple, and pointing all 116 penguin
-  faces at that one satisfies the lookup. Nothing new is needed below the
-  resident end — the colour and UV tables never moved, and the penguin's indices
-  land at 139..4380 of the shipped 4516.
-  All three are the add-on's *Borrow Selected Mesh* now, and `pinned_swatch_cell`
-  is the core's answer to "which cell will this model take": it reads the UV
-  table's own three-in-a-row runs and picks the one nearest neutral among them,
-  where `neutral_swatch_cell` picks the nearest neutral full stop and a pinned
-  model refuses it. **Write that cell through the importer's own V flip** — a
-  texel row and Blender's V run opposite ways, and setting it unflipped put
-  every face on a cell the table does not hold, all 116 refused by the check
-  doing exactly its job.
 - **Judge a replacement's winding against the model it came from, not the mesh
   it replaces.** The exporter warned that the penguin encloses −2.052 where the
   arm encloses +0.090, which reads as inside out. It is not: every shipped
@@ -232,54 +105,6 @@ They are not style preferences.
   `build_clips` zeroes each key as it makes it. A model brought in to be
   borrowed rather than animated should still have its keys cleared, which
   *Borrow Selected Mesh* does.
-- **A prop node's `+0x14` does not decide what a cutscene draws, and a mesh
-  added to one is not drawn at all.** Adding to a *level* works and is on
-  hardware — §8.5's placement list is what draws there, and the 82nd record,
-  three authored objects and a borrowed penguin all run. A cutscene does not
-  go through that, and it does not go through the prop's mesh id either:
-  `intro_eurocom`'s prop 1 was re-aimed from mesh 1 (102 faces, a letter) to
-  mesh 19 (4 faces) — **one word, `0x81a4`, the file otherwise byte-identical
-  and 992/992 verified on the disc** — and the letter stayed exactly where it
-  was. So the reader's picture of §9.11 is self-consistent and the game draws
-  from something else: §9.11.8's untraced path, the same one that draws meshes
-  10 and 11.
-  Everything on the file side of adding a mesh is finished and measured:
-  `modelwrite.append_mesh` grows the header table like any other region, the
-  new blocks go **inside `model+0x08`'s boundary** (appended past it the slot
-  was perfectly formed and drew nothing, which is §2.1 and the resident rule
-  both saying the same thing), `i32@0x54` reaches 29, and the game's own
-  arithmetic `52 x 29 + 36` lands on the new header. All 28 shipped meshes come
-  back identical. What is missing is only the thing that would ask for it to be
-  drawn.
-  Two of this session's eliminations were wrong before this control was run,
-  and both failed the same way -- a discriminator that could be missed. Swapping
-  one letter for another moves nothing on screen, because each letter's
-  geometry sits at its own origin and the prop's keys place it. Pick a change
-  that cannot be misread.
-- **A mesh no scene node names is not a spare slot — the shot is not the whole
-  of what draws.** `scene.mesh_indices` says `intro_eurocom` draws 26 of its 28
-  meshes, and 10 and 11 look free. They are not: mesh 10 is a **13127 x 13346 x
-  13115 dome**, 424 swatch faces of dark blue, and mesh 11 is an 11775-unit grey
-  shell. They are the backdrop, and §9.11.8's untraced path is what draws them.
-  Borrowing a model into mesh 10 took the sky away: the intro came back with
-  the *previous* screen showing through it and the letters drawing over
-  whatever was left in the framebuffer. Four discs were needed to find that,
-  because the file is right in every way this project can check — the other 27
-  meshes come back with 1164 of 1164 triangles and 958 of 958 swatch faces
-  identical.
-  So `scene.mesh_indices` bounds what the shot draws and nothing more. Before
-  taking a slot, look at what is in it.
-- **A mesh in the file is not a mesh on screen.** A level draws what its
-  placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
-  counts 160-byte records and `+0x20` points at them, each record naming an
-  object id the object table binds to a mesh. In `warp_room1` **none of the 42
-  meshes in `model.meshes` is named by any object record or any of the 81
-  placements** — the room the player walks in is object-pool meshes, whose
-  headers start at `0x111f8`, immediately past the boundary, and which the
-  reader numbers 42 upward. Geometry added to a plain mesh there is written
-  correctly, verifies clean and never appears. Check reachability before
-  editing a level mesh; a model whose meshes draw without any placement (the
-  menu) is the other case, not the general one.
 - **Import needs the model's sibling `.tex`.** Without it no material resolves
   to a slot and every mesh is rebuilt untextured — silently, until it is on
   screen, where it reads as a texture bug in the game. The importer now refuses
@@ -325,71 +150,12 @@ They are not style preferences.
   now counts the blocks, and a block inside the span a rebuild overwrites is
   copied into that mesh's own blob rather than looked up — 271 of 271 rebuilds
   of a §8.4 carrier keep it.
-- **An object record's `+4` is the one field in this format that is not
-  self-relative.** `0x8001DD20` adds it to the load-time base named through
-  `+8`, so it is a plain offset from the start of that file, and reference 0 is
-  this model — those are the object-pool meshes. Move the pool and every record
-  has to move with it. **Nothing warns when this is missed**: the pool is a
-  packed run of similar headers, so a stale offset still reads *a* mesh or falls
-  short of the pool and `_read_objects` drops the entry without a word. Growing
-  a table ahead of the pool was costing every level in the archive its meshes
-  while the check reported 15 failures, because a comparison that skips a mesh
-  the reader returned `None` for calls that model clean. **Count the meshes
-  before comparing them.**
-- **The §8.6 sub-blocks are meshes of this model, and that is the whole of the
-  outside consumer.** §8.6 already records their signature — 0x34 bytes,
-  `i32@+0x00 == 0`, `i32@+0x04 == 0`, `u16@+0x0A == 4`, `i32@+0x14 == 32`, four
-  ascending offsets — and that is a **mesh header** field for field:
-  `MESH_HEADER_SIZE` is 0x34 and `0x14 + 32` puts the strip list immediately
-  after it. Read as meshes they index the model's shared tables and they use
-  them to the last triple: `warp_room1`'s five sub-blocks are 1156 triangles
-  whose highest indices are **colour 4513 of 4516 and UV 2767 of 2770**;
-  `demo_hub1`'s three are 541 triangles at 2228 of 2231 and 855 of 858.
-  So nothing outside the *file* holds an index, and **no executable edit is
-  needed or would help** — the indices are in the model, in a block this
-  project can already parse. Renumbering a carrier's tables is safe exactly
-  when these meshes are renumbered with everything else, and the reason the
-  corruption waits for a door to be opened is that this is when they are
-  streamed in and drawn.
-- **A §8.6 carrier takes a full table rebuild, and the disc that proves it is
-  `out/crashbash-warp-full-rebuild.bin`.** The previews were never an obstacle
-  once they were understood: they are meshes of this model, so they are
-  renumbered with everything else, and then the block is free to move and the
-  room to grow. `warp_room1` rebuilt entirely — every mesh through this writer,
-  both tables built from nothing but the meshes and the previews, **renumbered
-  from entry 0** (4516 → 4546 colours, 2770 → 2795 UVs, the shipped numbering
-  not kept even as a prefix) — loads, draws, and **opens a door preview clean**.
-  All seven carriers rebuild that way. No pinning, no snapping, nothing
-  stranded.
-  **What the corruption actually was: renumbering under previews that still
-  held the old numbering.** Two discs showed it and neither was evidence about
-  the block, because both renumbered. The tell was *when* it showed — the room
-  perfect until a door opened, then every textured surface in the level in
-  garbage, the player character included, and that model is a different file.
-  §2.1's "repointing `T(0x24)` alone scrambles every textured surface" was
-  reading this consumer without knowing it.
-  **And one bug hid behind it.** With the previews renumbered but the block
-  moving, the room came back with *no previews at all*: `moved()` collapses any
-  offset inside a replaced region onto that region's start, so four of
-  `warp_room1`'s five §8.1 descriptor rows were written zero-length and the
-  loader read nothing for them. A replacement that keeps its length has moved
-  nothing inside itself — §8.6's block is renumbered in place — so its interior
-  maps straight across.
-- **Pinning is now only what a caller asks for, and what it costs is the
-  colours.** Nothing needs it: the seven carriers rebuild in full once §8.6's
-  preview meshes are renumbered alongside. A pinned rebuild maps
-  each face onto an existing *triple* of consecutive entries, not onto three
-  nearest colours, and `boss_oxide/arena`'s 5562 entries do not happen to hold
-  the penguin's: measured corner by corner, worst **91 of 255** and **23 % of
-  corners off by more than 32**, which drew as a black penguin with a grey
-  chest. The same edit unpinned is **0 of 255** on all 348 corners. So pinning
-  is for an edit whose colours the model already has — a reshape, a move — and
-  a borrowed model wants the tables rewritten and the 32 KB.
-  **Compare a rebuilt mesh corner by corner, matched on position.** Face order
+- **Compare a rebuilt mesh corner by corner, matched on position.** Face order
   changes with re-striping and corner order changes with it, so the first two
-  readings of this said "worst 255 of 255" for *both* builds and hid which one
-  was wrong. Matching each corner by its position and taking the best colour
-  that corner carries in the source is what separated them.
+  readings of the pinning measurement below said "worst 255 of 255" for *both*
+  builds and hid which one was wrong. Matching each corner by its position and
+  taking the best colour that corner carries in the source is what separated
+  them.
 - **Install several meshes in one call, and rebuild only what was edited.**
   `install_mesh` appends the colour table, the UV table *and* the vector pool
   on every call, and each earlier copy is then unreachable. Nine meshes through
@@ -874,6 +640,287 @@ They are not style preferences.
   348 strips; a 431-strip mesh crashed the game.
 - **Blender scenes must be at 30 fps before importing an export.** Blender
   resamples onto its scene grid and defaults to 24.
+
+## Two draw paths, and an edit belongs to exactly one
+
+Nothing above says what asks for a mesh to be drawn, and the archive holds two
+separate answers that share only the by-id renderer at the bottom. Getting the
+wrong one costs discs: a file can be perfect and draw nothing.
+
+| | a level | a cutscene |
+| --- | --- | --- |
+| what draws | §8.5's placement list | §9.11's node graph |
+| reached through | `model+0x18`'s sub-object → 160-byte records | `model+0x4C`'s root → typed children |
+| the id it draws | record `+0x88` → object `+0x74` | entity `+0x7C`, filled per node type |
+| built by | `0x8001D6B4`, drawn by `0x8001DD50` | `0x8001FE80`, drawn by `0x80019F1C` |
+| adding something | a placement record | a node |
+
+**All 64 cutscenes declare no sub-objects at all**, so the level path cannot run
+in one under any circumstance — `0x8001DE18` reaches the array by indexing
+`T(0x18)+4+4*i`, and with a count of zero there is nothing to dereference.
+Symmetrically a level's geometry needs no node: 91 % of an arena's meshes have
+none. Both are measured over the whole archive (399 models): cutscenes are 64
+models with nodes and no placements; the warp rooms and demo hubs have both;
+arenas split four ways; characters, fonts and loading screens have neither.
+
+The two sections that follow own the rules of each side. Everything above them
+is the file itself and holds for both.
+
+## Editing a level
+
+- **A mesh in the file is not a mesh on screen.** A level draws what its
+  placement list (§8.5) names: `model+0x18` reaches a sub-object whose `+0x1C`
+  counts 160-byte records and `+0x20` points at them, each record naming an
+  object id the object table binds to a mesh. In `warp_room1` **none of the 42
+  meshes in `model.meshes` is named by any object record or any of the 81
+  placements** — the room the player walks in is object-pool meshes, whose
+  headers start at `0x111f8`, immediately past the boundary, and which the
+  reader numbers 42 upward. Geometry added to a plain mesh there is written
+  correctly, verifies clean and never appears. Check reachability before
+  editing a level mesh; a model whose meshes draw without any placement (the
+  menu) is the other case, not the general one.
+- **The placement list is live data, and it is how a level's set is changed.**
+  Both fields answer to the file: taking `warp_room1`'s count from 81 to 80 —
+  one byte — draws the room with its last object gone, and repointing the array
+  at a copy inside the resident region draws exactly the records that copy
+  holds. Rewriting a record in place **adds an object to the set** — spending
+  the second of `warp_room1`'s two `0x5047` records on the green panel put a
+  second panel in the room, between the POLAR PANIC and POGO PAINTER doors, with
+  the first still at its own. Eleven bytes, nothing moved, the file the same
+  size. Five objects are placed more than once in that room, ten records in all,
+  and `placewrite.spare_records` is what names them.
+- **Growing the list is not blocked; *relocating* it is.** That distinction was
+  missed for a long time and the two were written down as one. Relocating has
+  nowhere to go — the resident region's largest run of zeros is 1325 bytes
+  against the 12,960 an 81-record array needs, and past the shipped resident
+  size nothing is loaded, which is why the array copied beyond the old EOF with
+  `0x50` grown drew nothing. But the array does not have to move. The four
+  blocks that follow it can **slide one record further on**, into the padding
+  the resident region already ends with: `warp_room1`'s `+0x14` block states a
+  count of 0, so it uses 8 of its 544 bytes and the last 536 are zero.
+  `append_placement` slides that span, stretches the sub-object's four pointers
+  by 160, and writes record 82 where the span began. The file keeps its length,
+  `i32@0x50` and `T(0x44)` keep their values, and both invariants the corpus
+  states survive: `+0x0C`'s target is still the array's end (73/73) because
+  array and block each grew by one record, and `+0x14`'s block still runs to
+  `T(0x44)` (73/73). Read back, the room holds 82 placements with all 81
+  originals byte-identical and nothing removed.
+  **`out/crashbash-82nd-record.bin` runs**, so nothing outside the span points
+  into it — which no static check could have settled, since the scan that looks
+  finds 714 four-byte words resolving there and cannot tell a pointer from a
+  vertex that lands there by chance. **`out/crashbash-three-objects.bin` runs
+  too**, and it is the one that matters: its three records were authored in
+  Blender by duplicating placements, and they spend `warp_room1`'s padding down
+  to zero. So the slide is good to the last byte the level has, not just for the
+  first record, and the room draws all 84 with its own 81 untouched.
+  **Duplicating a placement in Blender is the gesture, and it needed a fix to
+  work.** Blender copies custom properties with the object, so the copy claims
+  the same `crashbash_placement` as the original; read literally that is two
+  objects for one record, and the second overwrote the first — the obvious edit
+  moved nothing and took the original's move with it. `_claims` now gives a
+  record to one holder and makes every other claimant a new record, choosing the
+  holder as the claimant still at rest, which is the original whenever the copy
+  is the one that was dragged.
+  `spare_capacity` says how much room a level has, and it is the padding at the
+  end of its resident region divided by 160: **53 records across 8 models** —
+  all five warp rooms, both demo hubs, and Oxide's chase level at 1746 spare
+  bytes. `warp_room1` takes 3. The other 65 levels take none; an arena typically
+  ends its resident region with 6 or 18 bytes of alignment. So a level's set can
+  grow, but only into what its own file already left empty.
+- **An object record's `+4` is the one field in this format that is not
+  self-relative.** `0x8001DD20` adds it to the load-time base named through
+  `+8`, so it is a plain offset from the start of that file, and reference 0 is
+  this model — those are the object-pool meshes. Move the pool and every record
+  has to move with it. **Nothing warns when this is missed**: the pool is a
+  packed run of similar headers, so a stale offset still reads *a* mesh or falls
+  short of the pool and `_read_objects` drops the entry without a word. Growing
+  a table ahead of the pool was costing every level in the archive its meshes
+  while the check reported 15 failures, because a comparison that skips a mesh
+  the reader returned `None` for calls that model clean. **Count the meshes
+  before comparing them.**
+- **An object-pool mesh's blocks may not leave the pool.** The pool is one
+  packed run: the next object mesh's header sits exactly four bytes past the
+  previous mesh's `ptr_end` in **1802 of 1898** consecutive pairs. Rebuilding
+  one the way a numbered mesh is rebuilt — blocks appended past the file's end,
+  header repointed — leaves a hole in that run, and `warp_room1` built that way
+  **boots to a black screen**, where the same graft on a numbered mesh boots and
+  draws. `_write_in_place` puts the blocks back inside the span the mesh already
+  owns and keeps its shipped `ptr_end` whatever the rebuild costs, so the run is
+  undisturbed; when the rebuild does not fit, it refuses rather than build that
+  disc. Fitting is not a given — this writer's striping is looser than the
+  authoring tool's, so even a reshape with the same triangle count can want more
+  room than the mesh has (`warp_room1`'s mesh 111: 844 bytes wanted against 788
+  owned).
+  **The relaid layout removes the fit constraint, and `out/crashbash-oxide-tall-pool.bin`
+  runs.** It leaves no hole: the mesh's region grows where it stands, the pool
+  meshes after it slide on, `_repoint_objects` moves every object record with
+  them, and unchanged neighbours keep their exact spacing (1745/1745 pairs
+  measured). All **1964 pool meshes across the 70 level models rebuild**, none
+  refused, where `_write_in_place` refused the ones that did not fit — the glTF
+  round trip went from 49,326 level triangles to **98,960**, and 32 of its 63
+  level refusals disappeared. The disc carries `boss_oxide/arena`'s pool mesh
+  `0x500C` scaled 1.8× taller in Blender and rebuilt here: its rebuild wants
+  **2788 bytes against the 2444 it owns**, which is exactly what the old writer
+  refused, and 19 of that arena's 26 pool meshes are in the same position. On
+  screen it draws taller in all six of its placements, the room is otherwise
+  itself, and the borrowed penguin still wears its own art.
+- **A model from another pack can be put into a level, and the pool mesh it
+  replaces is the whole budget.** `arena/crate_snow`'s penguin now stands in
+  `warp_room1` and the disc runs. Three things had to be true at once, and each
+  is a rule of its own. The geometry has to fit **the span the pool mesh already
+  owns** (§8.3): 0x501C is the decorative arm, 444 triangles in 6592 bytes, and
+  a 116-triangle body went in with its `ptr_end` unmoved and all five block
+  pointers inside. The art cannot come with it — the penguin's slots mean other
+  pictures in the warp pack — so **fold each face's texel into its vertex colour
+  and make every face a swatch face** (§6.2) on a palette the level already has;
+  the hardware's `texel * colour / 128` then draws the baked colour, once the
+  cell's own value is divided back out of it. And a §8.6 carrier's **UV table is
+  pinned**, so every triangle needs a triple already in it: the room's own mesh 1
+  puts all 662 of its swatch faces on one triple, and pointing all 116 penguin
+  faces at that one satisfies the lookup. Nothing new is needed below the
+  resident end — the colour and UV tables never moved, and the penguin's indices
+  land at 139..4380 of the shipped 4516.
+  All three are the add-on's *Borrow Selected Mesh* now, and `pinned_swatch_cell`
+  is the core's answer to "which cell will this model take": it reads the UV
+  table's own three-in-a-row runs and picks the one nearest neutral among them,
+  where `neutral_swatch_cell` picks the nearest neutral full stop and a pinned
+  model refuses it. **Write that cell through the importer's own V flip** — a
+  texel row and Blender's V run opposite ways, and setting it unflipped put
+  every face on a cell the table does not hold, all 116 refused by the check
+  doing exactly its job.
+- **The seven §8.6 carriers renumber their tables like anything else — as long
+  as their door previews are renumbered with them.** That is settled on
+  hardware: `out/crashbash-warp-full-rebuild.bin` rebuilds `warp_room1` in
+  full, every entry renumbered from index 0, and opens a door preview clean.
+  §2.1's ledger read a real effect and named the wrong cause: repointing
+  `T(0x24)` scrambles every textured surface in these rooms *because §8.6's
+  preview sub-blocks are meshes of this model and index those tables*, and a
+  preview is streamed in when a door opens, which is why the room is perfect
+  until then. `mdlwrite.preview_meshes` finds them, `preview_runs` gathers what
+  they name, and their triples join the same packing pass as the model's own
+  faces. The block may move too, on the sector grid, with §8.1's rows following
+  it — each row states a sub-block's start and end as **plain file offsets**,
+  streamed by `0x800163E0` / polled by `0x80016450` / released by `0x8001636C`.
+  `pin_tables` remains only for a caller that asks for it, and what it still
+  emits is the **graft layout**: the file byte-identical through its old EOF
+  except the rebuilt mesh's header and `0x08`/`0x50`, new blocks after the §8.6
+  block under a grown sector-aligned `0x50`, colours mapped to the nearest
+  existing entry, and every textured triangle needing its exact UV triple
+  already in the table. That last one is why a pinned rebuild refuses a
+  reshape: re-striping re-orders a triangle's corners, so its triple is no
+  longer in a table that cannot grow (`warp_room1`'s boxing mesh 89 lost 16 of
+  its 91 faces' triples), while a plain scale survives because it leaves the
+  corner order alone.
+- **The §8.6 sub-blocks are meshes of this model, and that is the whole of the
+  outside consumer.** §8.6 already records their signature — 0x34 bytes,
+  `i32@+0x00 == 0`, `i32@+0x04 == 0`, `u16@+0x0A == 4`, `i32@+0x14 == 32`, four
+  ascending offsets — and that is a **mesh header** field for field:
+  `MESH_HEADER_SIZE` is 0x34 and `0x14 + 32` puts the strip list immediately
+  after it. Read as meshes they index the model's shared tables and they use
+  them to the last triple: `warp_room1`'s five sub-blocks are 1156 triangles
+  whose highest indices are **colour 4513 of 4516 and UV 2767 of 2770**;
+  `demo_hub1`'s three are 541 triangles at 2228 of 2231 and 855 of 858.
+  So nothing outside the *file* holds an index, and **no executable edit is
+  needed or would help** — the indices are in the model, in a block this
+  project can already parse. Renumbering a carrier's tables is safe exactly
+  when these meshes are renumbered with everything else, and the reason the
+  corruption waits for a door to be opened is that this is when they are
+  streamed in and drawn.
+- **A §8.6 carrier takes a full table rebuild, and the disc that proves it is
+  `out/crashbash-warp-full-rebuild.bin`.** The previews were never an obstacle
+  once they were understood: they are meshes of this model, so they are
+  renumbered with everything else, and then the block is free to move and the
+  room to grow. `warp_room1` rebuilt entirely — every mesh through this writer,
+  both tables built from nothing but the meshes and the previews, **renumbered
+  from entry 0** (4516 → 4546 colours, 2770 → 2795 UVs, the shipped numbering
+  not kept even as a prefix) — loads, draws, and **opens a door preview clean**.
+  All seven carriers rebuild that way. No pinning, no snapping, nothing
+  stranded.
+  **What the corruption actually was: renumbering under previews that still
+  held the old numbering.** Two discs showed it and neither was evidence about
+  the block, because both renumbered. The tell was *when* it showed — the room
+  perfect until a door opened, then every textured surface in the level in
+  garbage, the player character included, and that model is a different file.
+  §2.1's "repointing `T(0x24)` alone scrambles every textured surface" was
+  reading this consumer without knowing it.
+  **And one bug hid behind it.** With the previews renumbered but the block
+  moving, the room came back with *no previews at all*: `moved()` collapses any
+  offset inside a replaced region onto that region's start, so four of
+  `warp_room1`'s five §8.1 descriptor rows were written zero-length and the
+  loader read nothing for them. A replacement that keeps its length has moved
+  nothing inside itself — §8.6's block is renumbered in place — so its interior
+  maps straight across.
+- **Pinning is now only what a caller asks for, and what it costs is the
+  colours.** Nothing needs it: the seven carriers rebuild in full once §8.6's
+  preview meshes are renumbered alongside. A pinned rebuild maps
+  each face onto an existing *triple* of consecutive entries, not onto three
+  nearest colours, and `boss_oxide/arena`'s 5562 entries do not happen to hold
+  the penguin's: measured corner by corner, worst **91 of 255** and **23 % of
+  corners off by more than 32**, which drew as a black penguin with a grey
+  chest. The same edit unpinned is **0 of 255** on all 348 corners. So pinning
+  is for an edit whose colours the model already has — a reshape, a move — and
+  a borrowed model wants the tables rewritten and the 32 KB.
+
+## Editing a cutscene
+
+- **A prop draws the id in its *keys*, and that is the whole of why adding to a
+  cutscene did not work.** The per-tick handler reloads it every tick from the
+  key covering that tick, and `node+0x14` is not on the path at all:
+
+  ```
+  8001EDAC  lhu   $v0, 8($s5)      ; s5 = the key covering this tick
+  8001EDB4  sh    $v0, 0x74($s6)   ;   -> entity+0x7C
+  80019F44  lhu   $a2, 0x74($s0)   ; and the draw asks for exactly that
+  ```
+
+  The two agree in **11,382 of 11,382** shipped prop keys and no prop changes
+  mesh across its own track, so the corpus cannot tell them apart — only an edit
+  can. `out/crashbash-eurocom-control2.bin` wrote `node+0x14` alone, one word,
+  992/992 verified, and **the letter did not move**; a node copied from another
+  prop keeps the template's keys and so draws the template's mesh, standing
+  exactly where the template already stands. That is what "Cortex is not there"
+  was, and it read as *nothing was added*. `scenewrite.append_prop` writes the id
+  into every key it copies, and `scene.read_scene` reads a prop's mesh from key
+  0. Reading it the game's way changes nothing about the archive — 1209 props
+  and 177 actors either way.
+  Each drawing node type keeps the id somewhere else: **prop `key+0x08`** every
+  tick, **actor `node+0x14` + `node+0x18`** at spawn (0x8001F300), **emitter
+  `node+0x3C`** at spawn (0x800216A4). An actor's key has its *position* at
+  +0x08 where a prop's has the id — the two key records are different shapes.
+- **A shot's emitter names its mesh by *id*, and its position is in the
+  parent's frame.** The reader reports a resolved index and a world position;
+  writing either straight back is wrong. `mesh_index` has to go back as
+  `0x2000 | (index + 1)` — writing the index instead made eight emitters vanish
+  from a shot patched with nothing changed — and a sub-scene's emitter position
+  has to have the parent frame taken off again, exactly as a track's keys do.
+- **Adding a mesh is finished on the file side, and measured.**
+  `modelwrite.append_mesh` grows the header table like any other region, the new
+  blocks go **inside `model+0x08`'s boundary** — appended past it the slot was
+  perfectly formed and drew nothing, which is §2.1 and the resident rule both
+  saying the same thing — `i32@0x54` reaches 29, and the game's own arithmetic
+  `52 × 29 + 36` lands on the new header. All 28 shipped meshes of
+  `intro_eurocom` come back identical. `modelimport` orders it `append_prop`
+  then `append_mesh`, so the node lands in front of the new blocks and the shot's
+  region stays one piece.
+- **A mesh no scene node names is not a spare slot — the shot is not the whole
+  of what draws.** `scene.mesh_indices` says `intro_eurocom` draws 26 of its 28
+  meshes, and 10 and 11 look free. They are not: mesh 10 is a **13127 x 13346 x
+  13115 dome**, 424 swatch faces of dark blue, and mesh 11 is an 11775-unit grey
+  shell. They are the backdrop, and §9.11.8's untraced path is what draws them.
+  Borrowing a model into mesh 10 took the sky away: the intro came back with
+  the *previous* screen showing through it and the letters drawing over
+  whatever was left in the framebuffer. Four discs were needed to find that,
+  because the file is right in every way this project can check — the other 27
+  meshes come back with 1164 of 1164 triangles and 958 of 958 swatch faces
+  identical.
+  So `scene.mesh_indices` bounds what the shot draws and nothing more. Before
+  taking a slot, look at what is in it.
+- **Pick a discriminator that cannot be misread.** Two eliminations in the
+  session that found the key id were wrong, and both failed the same way.
+  Swapping one letter of the logo for another moves nothing on screen, because
+  each letter's geometry sits at its own origin and the prop's keys place it;
+  a duplicate of a letter is invisible inside the letter it duplicates. What
+  settled it was a mesh three times the size of anything else in the shot.
 
 ## Verification
 
