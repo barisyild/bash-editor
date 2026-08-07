@@ -282,6 +282,31 @@ def _patch_track(data: bytearray, track: dict, what: str,
         report.keys += 1
 
 
+def _patch_prop_mesh(data: bytearray, prop: dict, report: Patched) -> None:
+    """The mesh a prop draws — into the node and into every one of its keys.
+
+    The id is stated twice and the game reads the second one: 0x8001EDAC pulls
+    it out of the key covering the current tick, so a node whose keys still name
+    the old mesh keeps drawing the old mesh (§9.11.11). Writing both is what
+    makes re-aiming a prop mean anything, and it keeps the two agreeing the way
+    all 11382 shipped keys do.
+    """
+    track = prop.get("track") or {}
+    node = track.get("node")
+    if node is None or prop.get("mesh") is None:
+        return
+    node = int(node)
+    ident = SC.MESH_NAMESPACE | (int(prop["mesh"]) + 1)
+    if not _fits(data, node + NODE_COMMAND_ID, 4):
+        report.skipped.append(f"prop at 0x{node:X} is outside the file")
+        return
+    _put_i32(data, node + NODE_COMMAND_ID, ident)
+    for key in track.get("keys") or []:
+        at = int(key["at"])
+        if _fits(data, at + PROP_KEY_ID, 4):
+            _put_i32(data, at + PROP_KEY_ID, ident)
+
+
 def _patch_camera(data: bytearray, camera: dict, report: Patched) -> None:
     """A camera node's keys: tick, duration, and the two points it looks along."""
     node = int(camera["node"])
@@ -398,6 +423,7 @@ def patch_scene(model_data: bytes, extras: dict) -> tuple[bytes, Patched]:
         _patch_track(data, actor["track"], "actor", report)
     for prop in extras.get("props") or []:
         _patch_track(data, prop["track"], "prop", report)
+        _patch_prop_mesh(data, prop, report)
     for camera in extras.get("cameras") or []:
         _patch_camera(data, camera, report)
     for emitter in extras.get("emitters") or []:
