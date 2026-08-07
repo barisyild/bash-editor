@@ -1045,6 +1045,18 @@ no static render can show draw-time flags. For those the emulator is the only
 honest renderer, and the user runs it — so state plainly what has and has not
 been checked on screen.
 
+**Something that disappears from one angle is single-sided geometry, and the
+shipped model answers it in a minute.** `intro_logo`'s Aku Aku came back off the
+console with no feathers and a black slab where his mask is, on a build whose
+every measure was clean; the tell was the user noticing it only happened from
+certain perspectives. Imported straight from the archive and viewed in Blender
+with **backface culling on** — which is what the console does — the shipped mesh
+shows four feathers from the front and exactly that black slab from the back.
+The feathers are flat cards with one face each. Nothing was wrong. Check this
+before suspecting the writer: a rebuild that matches on position, UVs, texture
+entry, blend and strip flag under §11.3's reversal-sensitive key cannot have
+changed what a face is facing.
+
 **A cutscene takes something that was not in it.**
 `out/crashbash-eurocom-addprop.bin` runs: `intro_eurocom` with a **29th mesh**
 and a **19th prop** that draws it, and on screen the intro raises a letter three
