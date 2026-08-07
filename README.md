@@ -187,14 +187,25 @@ selecting one fills in its id and translation, and *Apply to entry* rewrites tha
 record and stages the file for the next build. Nothing moves and the file keeps
 its size — a record is 160 bytes rewritten where it lies.
 
-The list cannot be made longer. Its array is boxed in by four more arrays that
-begin where it ends, the resident region holds no run of zeros big enough to
-relocate 81 records into, and nothing past the shipped resident size is there at
-run time — the same array copied beyond the old end of file, with `0x50` grown to
-cover it, drew nothing at all. So a room's only spare capacity is a record whose
-object is placed elsewhere too; those are marked **spare**, and `warp_room1` has
-ten. Spending one of them put a second green panel in that room while the first
-kept its own door.
+The list **can** be made longer, though it cannot be moved, and the two were
+written down as one thing for a long time. Relocating has nowhere to go: the
+resident region holds no run of zeros big enough for 81 records, and nothing past
+the shipped resident size is there at run time — the same array copied beyond the
+old end of file, with `0x50` grown to cover it, drew nothing at all. But the array
+does not have to move. The four blocks that begin where it ends can slide one
+record further on, into the padding the resident region already ends with, and the
+new record is written where that span began. The file keeps its length and every
+original record keeps its bytes.
+
+What bounds it is that padding: **53 records across 8 models**, which is all five
+warp rooms, both demo hubs and Oxide's chase level. `warp_room1` takes three; the
+other 65 levels take none, ending their resident region with 6 or 18 bytes of
+alignment. Both have run on hardware — the room with an 82nd record, and the room
+with three more objects authored in Blender by duplicating placements, which spends
+that padding down to the last byte. A room with no capacity left still has its
+**spare** records, a record whose object is placed elsewhere too; `warp_room1` has
+ten, and spending one put a second green panel in that room while the first kept
+its own door.
 
 ### Meshes the game never draws
 
@@ -282,29 +293,40 @@ default 24 fps the clips come back audibly off-beat and measurably off-pose. At
 30 fps the full round trip — export, Blender save, import — reproduces every pose
 exactly, verified against Blender 5.2.
 
-**Warp rooms and hubs import too, on a path of their own.** Those seven files pin two
-things the rest do not: their shared colour and UV tables cannot be repointed — moving
-the colour pointer crashes the room, moving the UV pointer alone scrambles every
-textured surface — and their §8.6 block cannot change file offset, because each door's
-object record indexes a table of *file* offsets that the game streams the block from.
-Fourteen hardware probes fix those limits; why the tables are pinned is still unknown
-and `docs/FORMAT.md` §14 carries the search. The importer does not need to be told any
-of this: a carrier announces itself in its own header, and the pinned **graft layout**
-engages automatically — the file stays byte-identical through its old end except the
-rebuilt mesh's header and two fields, new geometry lands after the §8.6 block, and new
-colours map to the nearest entry already in the palette. Adding a prop to a warp room
-is a normal Blender edit; it has been done and run on hardware, previews intact.
+**Warp rooms and hubs import like anything else, and what made them look special took
+the longest to find.** Those seven files carry a §8.6 block the game streams a door's
+preview from, and two
+builds that renumbered their shared tables came back with every textured surface in the
+level in garbage — but only once a door was opened, the room perfect until then. That
+timing was the whole answer: the preview sub-blocks **are meshes of this model**, they
+index the same two tables, and renumbering the tables under them left them holding the
+old numbering. Renumber them alongside and the limit disappears. `warp_room1` now
+rebuilds entirely — every mesh through this writer, both tables built from nothing but
+its meshes and its previews and renumbered from entry 0 — and it loads, draws, and opens
+a door preview clean. So does the same room exported straight out of Blender.
+Nothing needs pinning; `pin_tables` remains for a caller that asks for it, and what it
+costs is the colours, since a pinned edit maps each face onto a triple the model already
+has. Adding a prop to a warp room is a normal Blender edit and has run on hardware.
 
-**The import reads the shot back too.** Rebuilding the object graph at
-`T(0x1C)..T(0x4C)` is still out of reach — the writers have never touched it and the
-record kinds past the nodes are unread (`docs/FORMAT.md` §8.3), so adding a node or
-changing how many keys one has means writing a region nobody has decoded. But
-*changing what an existing record holds* is a different thing entirely: no count
-moves, no size changes, no offset shifts, and the undecoded bytes are never even
-read. That is what the offsets in `extras` are for, and it is what the importer now
-does — it patches each field where it already sits, before any mesh rebuild moves a
-boundary. Moving a camera, sliding a prop or repositioning a level object is the
-reachable half; adding or deleting one is not.
+**The import reads the shot back too.** *Changing what an existing record holds* is
+the cheap half: no count moves, no size changes, no offset shifts, and the undecoded
+bytes are never even read. That is what the offsets in `extras` are for, and it is
+what the importer does — it patches each field where it already sits, before any mesh
+rebuild moves a boundary. Moving a camera, sliding a prop or repositioning a level
+object all go through it.
+
+**Adding one works too, and both draw paths have been to a console.** A level draws
+what its placement list names and a cutscene draws what its node graph names
+(`docs/FORMAT.md` §11.5); the two share nothing above the renderer, and an edit
+belongs to exactly one of them. On the level side `append_placement` slides the four
+blocks that follow the array into the padding a room already ends with —
+`warp_room1` has room for three more objects, 53 across the eight levels that have
+any — and the room draws them. On the cutscene side `scenewrite.append_prop` adds a
+node and `modelwrite.append_mesh` gives it a mesh to name, and the intro raises a
+letter three times the size of the logo. What that one cost two discs to learn is
+that a prop reloads the drawn id from **its keys** every tick, so writing the node's
+own field does nothing at all. Changing how many *keys* a node has is still out of
+reach.
 
 The test is the one this project trusts: read the shot, write it straight back, and
 compare against the game's own bytes. Across the 205 models that carry a placement
@@ -505,18 +527,26 @@ custom geometry, custom textures, custom animation — as proven by putting Spyr
 the menu, with the failure that taught each rule. What is still missing, and why:
 [docs/FORMAT.md](docs/FORMAT.md) §14 lists every open question.
 
-**Geometry.** Writable in principle today — the strip list, the vertex pool, the
-per-triangle UV/texture/colour arrays and the shared tables are all confirmed, so a
-mesh can be rebuilt from scratch. The catch is that a strip list is a fixed partition
-of the vertex pool: changing a triangle count means re-striping the mesh, not patching
-a field.
+**Geometry.** Written and confirmed. The strip list, the vertex pool, the
+per-triangle UV/texture/colour arrays and the shared tables are all decoded, and a
+model can be laid out again from its own regions with both tables rebuilt from
+nothing and renumbered from entry 0 — **378 of 378 models** come back with every
+triangle identical, and a cutscene, two arenas, the menu and a hub room have run on
+hardware that way. The catch is that a strip list is a fixed partition of the vertex
+pool: changing a triangle count means re-striping the mesh, not patching a field, and
+re-striping is what an edit costs in bytes.
 
-**Textures.** Reading is solid, writing is not. How a pack is placed in VRAM is still
-unknown: pack header `0x14` and texture record `+0x04..+0x07`, `+0x0E`, `+0x10` are
-unidentified, so a repacked pack could decode correctly here and still land wrong on
-the console. Replacing the pixels of an existing texture is safe; adding one or changing
-its size is not. Flipbook frames are as safe as the texture itself, being the same
-size by construction.
+**Textures.** Reading is solid and writing has caught up. VRAM placement is not in
+the file at all — the loader allocates a rect off the free list the texture's size
+class names — so a pack can be made *longer*: `append_texture` adds a picture and its
+palette, every existing slot number still means what it meant, and a warp room built
+that way loads with 176 textures where it shipped 170. Two rules come with it. The
+record goes **before the last one**, because the last is where an untextured face is
+sent, and the source's own colours are taken verbatim rather than re-quantised.
+Pack header `0x14` is the companion model's resident size and must move when that
+does; texture record `+0x04..+0x07`, `+0x0E` and `+0x10` are still unidentified and
+are copied through. Repainting an existing texture is safe but has not been to a
+console.
 
 **Animation.** The clip format is fully decoded, including the shared position pool and
 the blend weights, so clips can be rewritten. What the per-frame auxiliary block holds

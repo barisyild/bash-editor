@@ -517,12 +517,16 @@ What cannot be done through `patch_scene` is add one: it resizes nothing, so on
 that path the 23 emitters the game has are the 23 it can have. A **prop** is a
 different matter — `scenewrite.append_prop` re-emits the root with one more
 child and appends the node, and `modelwrite.append_mesh` gives it a mesh slot to
-name. Both are measured on the file (28 shipped meshes of `intro_eurocom` come
-back identical, `i32@0x54` reaches 29, 992/992 verified on a built disc), and
-what took two discs to learn is that **a prop draws the id in its keys, not the
-one at `node+0x14`** — see CLAUDE.md's *Editing a cutscene*. Whether the added
-node draws is on a disc awaiting the console; an added *placement* in a level
-has run.
+name. What took two discs to learn is that **a prop draws the id in its keys,
+not the one at `node+0x14`** (FORMAT §9.11.11), so the id goes into every key
+the new node carries.
+
+**That has run.** `out/crashbash-eurocom-addprop.bin` gives `intro_eurocom` a
+29th mesh and a 19th prop that draws it, and the intro raises a letter three
+times the size of the logo. Read back out of the disc, 990 of 992 entries are
+byte-identical, the model goes 44,764 → 54,312 bytes with `i32@0x54` 28 → 29,
+and all 28 shipped meshes return identical over 1588 triangles. So a cutscene
+takes a new object as a level takes a new placement — both are on hardware now.
 
 The rest of the shot **plays** rather than merely travelling. *Bake Shot
 Preview* keys every actor and prop along its track, opens and closes each node's

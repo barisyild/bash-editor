@@ -880,9 +880,11 @@ is the file itself and holds for both.
   prop keeps the template's keys and so draws the template's mesh, standing
   exactly where the template already stands. That is what "Cortex is not there"
   was, and it read as *nothing was added*. `scenewrite.append_prop` writes the id
-  into every key it copies, and `scene.read_scene` reads a prop's mesh from key
-  0. Reading it the game's way changes nothing about the archive — 1209 props
-  and 177 actors either way.
+  into every key it copies, `patch_scene` writes it the same way, and
+  `scene.read_scene` reads a prop's mesh from key 0. Reading it the game's way
+  changes nothing about the archive — 1209 props and 177 actors either way — and
+  it is what made the next disc draw: the same edit that had produced nothing
+  now raises a letter over the intro.
   Each drawing node type keeps the id somewhere else: **prop `key+0x08`** every
   tick, **actor `node+0x14` + `node+0x18`** at spawn (0x8001F300), **emitter
   `node+0x3C`** at spawn (0x800216A4). An actor's key has its *position* at
@@ -893,15 +895,21 @@ is the file itself and holds for both.
   `0x2000 | (index + 1)` — writing the index instead made eight emitters vanish
   from a shot patched with nothing changed — and a sub-scene's emitter position
   has to have the parent frame taken off again, exactly as a track's keys do.
-- **Adding a mesh is finished on the file side, and measured.**
-  `modelwrite.append_mesh` grows the header table like any other region, the new
-  blocks go **inside `model+0x08`'s boundary** — appended past it the slot was
-  perfectly formed and drew nothing, which is §2.1 and the resident rule both
-  saying the same thing — `i32@0x54` reaches 29, and the game's own arithmetic
-  `52 × 29 + 36` lands on the new header. All 28 shipped meshes of
-  `intro_eurocom` come back identical. `modelimport` orders it `append_prop`
-  then `append_mesh`, so the node lands in front of the new blocks and the shot's
-  region stays one piece.
+- **Adding a mesh and a node that draws it works, and the disc is
+  `out/crashbash-eurocom-addprop.bin`.** `modelwrite.append_mesh` grows the
+  header table like any other region, the new blocks go **inside `model+0x08`'s
+  boundary** — appended past it the slot was perfectly formed and drew nothing,
+  which is §2.1 and the resident rule both saying the same thing — `i32@0x54`
+  reaches 29, and the game's own arithmetic `52 × 29 + 36` lands on the new
+  header. `modelimport` orders it `append_prop` then `append_mesh`, so the node
+  lands in front of the new blocks and the shot's region stays one piece.
+  On screen the intro raises a **29th letter three times the size of the logo**,
+  and everything else is where it was. Read back out of the disc: 990 of 992
+  entries byte-identical, `intro_eurocom.mdl` 44,764 → 54,312 bytes and its pack
+  the same 42,576 with only `u32@0x14` moved, since `i32@0x50` went 0xaedc →
+  0xd428. All **28 shipped meshes identical** over 1588 triangles, the added
+  mesh 67 triangles at 3× the M's extent, props 18 → 19, and the new node's
+  **13 of 13 keys naming `0x201d`**.
 - **A mesh no scene node names is not a spare slot — the shot is not the whole
   of what draws.** `scene.mesh_indices` says `intro_eurocom` draws 26 of its 28
   meshes, and 10 and 11 look free. They are not: mesh 10 is a **13127 x 13346 x
@@ -962,6 +970,20 @@ Distrust previews. A flat-shaded preview cannot show sub-triangle texture, and
 no static render can show draw-time flags. For those the emulator is the only
 honest renderer, and the user runs it — so state plainly what has and has not
 been checked on screen.
+
+**A cutscene takes something that was not in it.**
+`out/crashbash-eurocom-addprop.bin` runs: `intro_eurocom` with a **29th mesh**
+and a **19th prop** that draws it, and on screen the intro raises a letter three
+times the size of the logo while everything else stays where it was. That is
+`modelwrite.append_mesh` and `scenewrite.append_prop` shown together, and with
+them §9.11.11 — the id was written into all 13 of the new node's keys, and the
+identical edit that wrote `node+0x14` alone had moved nothing. Read back out of
+the disc, **990 of 992 entries are byte-identical**; the two that differ are the
+model (44,764 → 54,312 bytes, `i32@0x54` 28 → 29, `i32@0x50` 0xaedc → 0xd428)
+and its pack, at its own size with only `u32@0x14` following the resident end.
+All **28 shipped meshes come back identical** over 1588 triangles.
+So both halves of a cutscene edit have now been to a console: changing what a
+node holds, and adding one.
 
 **The Blender path has reached hardware.** `out/crashbash-eurocom-burst.bin`
 runs: the intro's first emitter edited in Blender and exported through the

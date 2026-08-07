@@ -3967,9 +3967,17 @@ An **edit** tells them apart at once, and two discs paid for the lesson:
   nothing new" was.
 
 So `scenewrite.append_prop` writes the id into `node+0x14` **and** into every key it copies,
-and `scene.read_scene` reads a prop's mesh from key 0 rather than from the node. Reading it
-the game's way changes nothing about the shipped archive — 1209 props and 177 actors either
-way — and everything about what a written file means.
+`patch_scene` writes both the same way when a prop is re-aimed, and `scene.read_scene` reads a
+prop's mesh from key 0 rather than from the node. Reading it the game's way changes nothing
+about the shipped archive — 1209 props and 177 actors either way — and everything about what a
+written file means.
+
+**Confirmed on hardware.** `out/crashbash-eurocom-addprop.bin` is the same edit as the failing
+one above with the id written where the game reads it: `intro_eurocom` gains a 29th mesh and a
+19th prop whose **13 of 13 keys name `0x201d`**, and the intro raises a letter three times the
+size of the logo. Read back out of the disc, 990 of 992 entries are byte-identical, the model
+goes 44,764 → 54,312 bytes with `i32@0x54` 28 → 29, and all 28 shipped meshes return identical
+over 1588 triangles.
 
 The two key records are also different shapes, which is why this hid: an actor's key has its
 **position** at +0x08 (§9.11 table, stride 0x4C) where a prop's has the id (stride 0x50). The
@@ -4031,7 +4039,7 @@ Every pack in the corpus satisfies `u32@0x00 == 8` and `u32@0x04 == entry.size`.
 | 0x0A | i16 | `palette_count` | | **confirmed** |
 | 0x0C | u32 ptr | `ptr_textures` | **Self-relative**: `0x0C + value` == the first texture record, i.e. the end of the palette table, in **400/400**. | **confirmed** |
 | 0x10 | u32 ptr | `ptr_palettes` | **Self-relative**: `0x10 + value == 0x20` in **400/400**. | **confirmed** |
-| 0x14 | u32 | — | Multiple of 4 in 400/400, range 120..228,744, 272 distinct values. It is **not** a pointer (`0x14 + value` is outside the file for 198/400), not the pixel byte total, not the VRAM-unit total, not the pixel+palette total, and it differs between structurally identical packs (22980 / 25096 / 22760 for `uka` data / data2 / data3). | ?unknown? |
+| 0x14 | u32 | `model_resident` | **The companion model's `i32@0x50`**, the same number in **400/400** pairs. That is why it is not a pointer into this file (`0x14 + value` is outside the pack for 198/400), not the pixel byte total, not the VRAM-unit total, and why it differs between structurally identical packs (22980 / 25096 / 22760 for `uka` data / data2 / data3) — it describes the *model*, not the pack. §10.4's `0x8002A62C` carries it into the texture context at `+0x24`. A build that moves the model's `0x50` must move this too: leaving it stale while data sits past the number it states gave a screen of VRAM garbage, and correcting this field alone made the same build load. | **confirmed** |
 | 0x18 | u32 | `ptr_animation` | **Absolute** offset of the animation block (§10.5), 0 when the pack has none — 314/400 have none. In the 86 that do, the value equals the end of the palette+texture walk in **86/86**. Note it is absolute, unlike 0x0C and 0x10. | **confirmed** |
 | 0x1C | u32 | — | 0 in 400/400. | **confirmed** (zero) / ?unknown? (purpose) |
 
@@ -4153,8 +4161,11 @@ sizes the two descriptor arrays straight out of the pack header:
 
 Two things fall out immediately. **The 56- and 12-byte strides §6.2 derived from the
 accessors are confirmed by the allocation itself**, and **`pack+0x14` has a reader** — the
-field §14 lists as taking 272 distinct values and matching no landmark is carried into the
-context at +0x24. What is done with it there is still ?unknown?, but "no reader" was wrong.
+field is carried into the context at +0x24. It matched no landmark inside its own pack for
+a long time because it does not describe the pack: it is the **companion model's
+`i32@0x50`**, the same number in 400/400 pairs (§10.1). What the context does with it
+afterwards is still ?unknown?, but the field's meaning is not, and a build that moves the
+model's resident end has to move this with it.
 
 `0x8002926C` then walks both tables. The palettes first, each descriptor 12 bytes:
 
@@ -5093,10 +5104,12 @@ are not only undocumented format; they are also where a reader is quietly skippi
   bucket. The selector at `0x8005A640` that chooses between a texture's variants is the one
   loose end — zero in the shipped image and stored nowhere on the disc, the EXE and all 15
   overlays only ever read it.
-* **Header 0x14** — multiple of 4 in 400/400, range 120..228,744, 272 distinct values. Not a
-  pointer, not any pixel/palette/record total tested, and it differs between structurally
-  identical packs. It is no longer unread, though: `0x8002A62C` carries it into the texture
-  context at +0x24 (§10.4). What reads it there is the open half.
+* ~~**Header 0x14**~~ — **closed**, see §10.1. Every test in this entry looked for a landmark
+  inside the pack, and the field does not describe the pack: it is the **companion model's
+  `i32@0x50`**, the same number in **400/400** pairs. That is why it is not a pointer here, not
+  any pixel/palette/record total, and why it differs between structurally identical packs whose
+  models differ. `0x8002A62C` carries it into the texture context at +0x24 (§10.4); what the
+  context does with it there is the half still open.
 * ~~**Header 0x18**~~ — **stale, and closed elsewhere in this document.** §10.1 reads it as
   `ptr_animation`, an absolute offset to the animation block, and the 86 non-zero values are
   the end of the palette-plus-texture walk in **86/86**. This entry predates that.
